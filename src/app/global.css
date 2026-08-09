@@ -4,6 +4,66 @@
 
 @theme {
   --font-sans: var(--font-geist-sans);
+
+  /* Springs sampled from Apple's damping-ratio + response pairs into linear().
+     Generated: x(t) = 1 - e^(-ζωt)(cos ω_d t + ζω/ω_d · sin ω_d t), ω = 2π/response. */
+  --ease-spring-smooth: linear(
+    0, 0.067, 0.2056, 0.3589, 0.5005, 0.6203, 0.7167, 0.7917, 0.8485, 0.8909, 0.922, 0.9446, 0.9609,
+    0.9725, 0.9808, 0.9866, 0.9907, 0.9935, 0.9955, 0.9969, 0.9979, 0.9985, 0.999, 0.9993, 1
+  );
+  --ease-spring-snappy: linear(
+    0, 0.0695, 0.2122, 0.3686, 0.5118, 0.6319, 0.7276, 0.8014, 0.8568, 0.8977, 0.9275, 0.949,
+    0.9643, 0.9751, 0.9828, 0.9881, 0.9918, 0.9944, 0.9961, 0.9974, 0.9982, 0.9988, 0.9992, 0.9994,
+    1
+  );
+  --ease-spring-drawer: linear(
+    0, 0.0645, 0.2076, 0.3755, 0.5368, 0.6759, 0.787, 0.8705, 0.9296, 0.9689, 0.9933, 1.007, 1.0133,
+    1.0152, 1.0143, 1.0122, 1.0097, 1.0072, 1.0051, 1.0034, 1.0021, 1.0011, 1.0005, 1.0001, 1
+  );
+  --ease-spring-smooth-reverse: linear(
+    0, 0.0007, 0.001, 0.0015, 0.0021, 0.0031, 0.0045, 0.0065, 0.0093, 0.0134, 0.0192, 0.0275,
+    0.0391, 0.0554, 0.078, 0.1091, 0.1515, 0.2083, 0.2833, 0.3797, 0.4995, 0.6411, 0.7944, 0.933, 1
+  );
+
+  --duration-spring-smooth: 642ms;
+  --duration-spring-snappy: 492ms;
+  --duration-spring-drawer: 458ms;
+
+  /* Tracking tightens as size grows; leading loosens as size shrinks. */
+  --text-display: clamp(2.5rem, 7vw, 4.25rem);
+  --text-display--line-height: 1.03;
+  --text-display--letter-spacing: -0.032em;
+  --text-display--font-weight: 600;
+
+  --text-headline: 1.1875rem;
+  --text-headline--line-height: 1.4;
+  --text-headline--letter-spacing: -0.013em;
+  --text-headline--font-weight: 600;
+
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.62;
+  --text-body--letter-spacing: -0.002em;
+
+  --text-caption: 0.8125rem;
+  --text-caption--line-height: 1.5;
+  --text-caption--letter-spacing: 0.008em;
+
+  /* Overlays inherit spring motion; exits mirror the entry curve. */
+  --animate-fd-dialog-in: fd-dialog-in var(--duration-spring-snappy) var(--ease-spring-smooth);
+  --animate-fd-dialog-out: fd-dialog-out 220ms var(--ease-spring-smooth-reverse);
+  --animate-fd-popover-in: fd-popover-in var(--duration-spring-snappy) var(--ease-spring-smooth);
+  --animate-fd-popover-out: fd-popover-out 180ms var(--ease-spring-smooth-reverse);
+  --animate-fd-sidebar-in: fd-sidebar-in var(--duration-spring-drawer) var(--ease-spring-drawer);
+  --animate-fd-sidebar-out: fd-sidebar-out 240ms var(--ease-spring-smooth-reverse);
+
+  --animate-reveal: reveal var(--duration-spring-smooth) var(--ease-spring-smooth) both;
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+      transform: translateY(0.875rem);
+    }
+  }
 }
 
 html {
@@ -13,4 +73,62 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+#nd-page h1,
+#nd-page h2 {
+  letter-spacing: -0.022em;
+  text-wrap: balance;
+}
+
+#nd-page p {
+  text-wrap: pretty;
+}
+
+@utility reveal-on-view {
+  animation: var(--animate-reveal);
+  animation-timeline: view();
+  animation-range: entry 0% cover 22%;
+}
+
+/* Feedback lands on pointer-down and springs back on release. */
+@utility pressable {
+  transition:
+    transform var(--duration-spring-snappy) var(--ease-spring-smooth),
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out;
+
+  &:active {
+    transform: scale(0.978);
+    transition-duration: 90ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --animate-reveal: reveal 200ms ease both;
+    --animate-fd-dialog-in: fd-fade-in 160ms ease;
+    --animate-fd-dialog-out: fd-fade-out 160ms ease;
+    --animate-fd-sidebar-in: fd-fade-in 160ms ease;
+    --animate-fd-sidebar-out: fd-fade-out 160ms ease;
+  }
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+    }
+  }
+
+  .reveal-on-view {
+    animation-timeline: auto;
+  }
+
+  .pressable {
+    transition: background-color 150ms ease-out;
+  }
+
+  .pressable:active {
+    transform: none;
+  }
 }
