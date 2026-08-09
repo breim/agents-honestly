@@ -80,13 +80,11 @@
   --material-opacity: 72%;
   --material-blur: 20px;
   --material-edge: rgb(255 255 255 / 0.7);
-  --material-shadow: 0 1px 1px rgb(0 0 0 / 0.03), 0 12px 32px -14px rgb(0 0 0 / 0.16);
 }
 
 .dark {
   --material-opacity: 68%;
   --material-edge: rgb(255 255 255 / 0.08);
-  --material-shadow: 0 1px 1px rgb(0 0 0 / 0.3), 0 12px 32px -14px rgb(0 0 0 / 0.7);
 }
 
 html {
