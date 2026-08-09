@@ -1,0 +1,108 @@
+---
+title: The Context Window
+description: The window is a budget, not a memory. Anatomy of a request, growth curves, and the three ways context kills agents.
+---
+
+
+The single most common misconception about agents is that the context window is memory. It looks like memory: you put things in, the model refers back to them, the conversation appears to have continuity.
+
+It is not memory. It is a fixed-size budget that you re-spend, in full, on every single request. The model remembers nothing between calls. What creates the illusion of continuity is that *you* resend the entire history each time, and pay for it each time.
+
+Internalize that sentence and most agent architecture decisions become obvious.
+
+## Anatomy of a request
+
+Here is where a mid-conversation Atlas request actually goes, inside a 200,000-token window.
+
+<Figure caption="One request, mid-conversation. The claimants compete: every token spent on retrieved documents is a token unavailable for history.">
+	<ContextBudget
+		window={200000}
+		reserveOutput={8000}
+		segments={[
+			{ label: 'System prompt', tokens: 1200, note: 'policy, tone, escalation rules' },
+			{ label: 'Tool definitions', tokens: 4800, note: '11 tools' },
+			{ label: 'Conversation history', tokens: 26000, note: '9 turns, 4 tool results' },
+			{ label: 'Retrieved documents', tokens: 12000, note: '3 help-centre chunks' },
+			{ label: 'Tool result, this turn', tokens: 2000, note: 'one order record' },
+			{ label: 'User message', tokens: 40 },
+		]}
+	/>
+</Figure>
+
+Three observations that will come up repeatedly.
+
+**Output comes out of the same budget.** The window covers input *and* generated tokens together. A model that reasons before answering spends window on that reasoning too. If you size a token limit tightly around the answer you expect and the model thinks first, the answer gets truncated mid-sentence. Reserve room deliberately.
+
+**The claimants are in competition.** Retrieval, history, and tool results all draw from one pool. "Retrieve more chunks for better grounding" is not free; it is a decision to remember less of the conversation.
+
+**Most of it is your choice.** The user contributed 40 tokens. Everything else is architecture, and architecture can be measured, budgeted, and changed.
+
+## The growth curve
+
+Nothing here has moved yet. It is turn nine of a conversation that will run to forty.
+
+Each turn appends the user's message and the assistant's reply to a history you resend in full. So the input you pay for grows **linearly with turn number**, and the running total grows **quadratically**.
+
+<Figure caption="Bars: input tokens sent on each turn, full transcript. Line: the same conversation with a rolling summary capping history. The gap is the entire economics of long-running agents.">
+	<TurnGrowth turns={40} system={6000} perTurn={2500} cap={128000} summaryCap={20000} />
+</Figure>
+
+Read the bars first. Turn 1 sends 6,000 tokens. Turn 40 sends over 100,000: the same conversation, seventeen times the cost per message, and closing on the ceiling. A user who notices the agent getting slower and more expensive as the conversation goes on is not imagining it.
+
+Now read the line. Capping history with a rolling summary cuts the total spend for the whole conversation by more than half, and flattens the curve so turn 40 costs roughly what turn 9 did. That is not a micro-optimization. It is the difference between an agent you can afford to run and one you can't.
+
+<Aside type="tip" title="The multiplier nobody budgets for">
+A turn on this chart is one iteration of the loop, a model call and the tool results it produced, not one exchange with the user. That distinction is the multiplier. A single customer question that takes four tool calls to answer is five bars here, not one, so a conversation that *feels* like ten questions is already out past turn forty and paying what turn forty costs.
+</Aside>
+
+## Three ways context kills agents
+
+Running out of room is the failure everyone anticipates. It is the least dangerous of the three, because it announces itself.
+
+### 1. Overflow: the honest failure
+
+You exceed the window and the request fails, or the provider compacts history and something you needed is gone. You get an error or an obviously confused response. Annoying, visible, fixable.
+
+The fix is a policy decided *before* you hit the wall: summarize, truncate oldest-first, or move history into retrievable storage. Choosing under pressure means choosing badly. See [Rolling Summary](/docs/patterns/context/rolling-summary) and [Context Compaction](/docs/patterns/context/context-compaction).
+
+### 2. Dilution: the quiet failure
+
+This is the one that will actually hurt you.
+
+Long contexts degrade attention unevenly. Information at the beginning and end of a long prompt is used reliably; information buried in the middle is used less reliably, and the effect grows with length. A fact the model quoted correctly at 8,000 tokens can be overlooked at 80,000, with no error, no warning, and a confident answer that happens to be wrong.
+
+This is why "the model has a million-token window" is not the same claim as "you can put a million tokens in it." Capacity is not attention. An agent whose accuracy silently decays as conversations lengthen is exhibiting dilution, and no amount of window will fix it. Only putting less, and more relevant, material in front of the model does.
+
+Practically: keep the instructions that must be obeyed near the edges, put retrieved material close to the question it serves, and treat every token you add as competing for attention with every token already there.
+
+### 3. Poisoning: the compounding failure
+
+An agent writes something wrong into its own history. A hallucinated order ID, a misread tool result, a bad intermediate conclusion. It is now part of the context for every subsequent turn, and the model treats its own prior output as established fact.
+
+Poisoning compounds in a way the other two don't. Overflow is a wall; dilution is a slope; poisoning is a feedback loop. An agent thirty turns into a poisoned conversation is confidently reasoning from a premise that was never true, and the transcript reads as perfectly coherent.
+
+The defenses are structural, not prompt-level: keep verified state in a typed object rather than in the transcript ([Structured Scratchpad](/docs/patterns/context/structured-scratchpad)), give noisy subtasks their own throwaway window ([Sub-Agent Context Isolation](/docs/patterns/context/subagent-isolation)), and make tool results the source of truth over anything the model said about them.
+
+## The levers
+
+Everything you can do about context falls into four moves. The catalog in Part XXI covers each in detail; this is the map.
+
+| Move | What it means | Best for |
+| --- | --- | --- |
+| **Send less** | Truncate tool output, drop dead turns, trim tool schemas | Immediate, mechanical wins |
+| **Compress** | Summarize old turns; rewrite the transcript at checkpoints | Long conversations |
+| **Externalize** | Move state to a store the agent queries through a tool | Anything larger than the window |
+| **Isolate** | Give a subtask its own context; return only the conclusion | Noisy, high-volume subtasks |
+
+There is a fifth thing that is not a lever but sits alongside all of them: **prompt caching**. It does not reduce how many tokens you send, it reduces what they cost, by roughly an order of magnitude for the cached portion. It has one hard constraint that dictates how you must order your prompt, and it is the subject of the [next chapter](/docs/foundations/prompt-caching).
+
+---
+
+## Takeaways
+
+- The window is a per-request budget, not memory. Continuity is an illusion you pay for on every call.
+- Output shares the budget with input. Reserve room for it explicitly.
+- Input per turn grows linearly with turn number; total spend grows quadratically. Long conversations are the dominant cost in most agents.
+- Overflow is loud, dilution is quiet, poisoning compounds. Design for all three; only the first one will tell you it happened.
+- Capacity is not attention. A larger window is permission to send more, not a reason to.
+- Four levers: send less, compress, externalize, isolate. Caching is orthogonal; it changes price, not volume.
