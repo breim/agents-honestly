@@ -57,6 +57,7 @@
   --animate-fd-sidebar-out: fd-sidebar-out 240ms var(--ease-spring-smooth-reverse);
 
   --animate-reveal: reveal var(--duration-spring-smooth) var(--ease-spring-smooth) both;
+  --animate-scroll-edge: scroll-edge linear both;
 
   @keyframes reveal {
     from {
@@ -64,6 +65,28 @@
       transform: translateY(0.875rem);
     }
   }
+
+  @keyframes scroll-edge {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+:root {
+  --material-opacity: 72%;
+  --material-blur: 20px;
+  --material-edge: rgb(255 255 255 / 0.7);
+  --material-shadow: 0 1px 1px rgb(0 0 0 / 0.03), 0 12px 32px -14px rgb(0 0 0 / 0.16);
+}
+
+.dark {
+  --material-opacity: 68%;
+  --material-edge: rgb(255 255 255 / 0.08);
+  --material-shadow: 0 1px 1px rgb(0 0 0 / 0.3), 0 12px 32px -14px rgb(0 0 0 / 0.7);
 }
 
 html {
@@ -73,6 +96,48 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Chrome is a floating material layer: content scrolls under it, and a bright
+   top edge reads as light catching the surface. */
+#nd-nav > *,
+#nd-subnav[data-transparent='false'] {
+  background-color: color-mix(
+    in oklab,
+    var(--color-fd-background) var(--material-opacity),
+    transparent
+  );
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  border-bottom-color: transparent;
+  box-shadow: inset 0 1px 0 0 var(--material-edge);
+}
+
+/* A scroll edge fade where chrome overlaps content, instead of a hard divider. */
+#nd-nav::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 2rem;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.4) 45%, transparent);
+  animation: var(--animate-scroll-edge);
+  animation-timeline: scroll();
+  animation-range: 0 3rem;
+}
+
+#nd-sidebar {
+  background-color: color-mix(in oklab, var(--color-fd-card) 80%, transparent);
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+}
+
+/* Vibrancy: secondary text over a translucent surface needs more weight and a
+   touch more tracking than it would on a solid one. */
+#nd-sidebar .text-fd-muted-foreground,
+#nd-toc .text-fd-muted-foreground {
+  font-weight: 450;
+  letter-spacing: 0.006em;
 }
 
 #nd-page h1,
@@ -120,6 +185,10 @@ html > body[data-scroll-locked] {
     }
   }
 
+  #nd-nav::after {
+    animation: none;
+  }
+
   .reveal-on-view {
     animation-timeline: auto;
   }
@@ -130,5 +199,37 @@ html > body[data-scroll-locked] {
 
   .pressable:active {
     transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  #nd-nav > *,
+  #nd-subnav[data-transparent='false'],
+  #nd-sidebar {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+  }
+
+  #nd-nav::after {
+    display: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  #nd-nav > *,
+  #nd-subnav[data-transparent='false'] {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+    border-bottom-color: var(--color-fd-foreground);
+  }
+
+  #nd-sidebar {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+    border-inline-end-color: var(--color-fd-foreground);
+  }
+
+  #nd-nav::after {
+    display: none;
   }
 }
