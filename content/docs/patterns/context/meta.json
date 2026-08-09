@@ -1,0 +1,13 @@
+{
+  "title": "Context Patterns",
+  "pages": [
+    "rolling-summary",
+    "structured-scratchpad",
+    "context-compaction",
+    "selective-history",
+    "tool-result-truncation",
+    "subagent-isolation",
+    "stable-prefix",
+    "retrieval-on-demand"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "title": "Part IV · Data & Retrieval Engineering",
+  "pages": [
+    "where-does-the-answer-live",
+    "embeddings",
+    "vector-search",
+    "ann-indexes",
+    "chunking",
+    "metadata-and-authorization",
+    "lexical-search",
+    "hybrid-and-reranking",
+    "sql-is-still-the-answer",
+    "ingestion-pipeline",
+    "multimodal-document-intelligence",
+    "retrieval-evals"
+  ]
+}

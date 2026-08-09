@@ -1,0 +1,14 @@
+{
+  "title": "Part XIV · Evals",
+  "pages": [
+    "eval-discipline",
+    "testing-pyramid",
+    "datasets",
+    "scoring",
+    "trajectory-evals",
+    "cost-and-latency-evals",
+    "ci-for-agents",
+    "online-evals",
+    "learning-from-production-feedback"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "title": "Durability Patterns",
+  "pages": [
+    "agent-as-entity-workflow",
+    "tool-as-activity",
+    "continue-as-new-memory",
+    "saga-for-tools",
+    "approval-gate",
+    "sla-timer",
+    "signal-with-start",
+    "update-request-response",
+    "resumable-activity",
+    "heartbeat-long-tools"
+  ]
+}

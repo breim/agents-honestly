@@ -1,0 +1,11 @@
+{
+  "title": "Security Patterns",
+  "pages": [
+    "identity-propagation",
+    "tool-permission-boundary",
+    "untrusted-content-marking",
+    "egress-allowlist",
+    "dual-control",
+    "output-guardrail"
+  ]
+}

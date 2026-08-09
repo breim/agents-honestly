@@ -1,0 +1,10 @@
+{
+  "title": "Cost Patterns",
+  "pages": [
+    "model-cascade",
+    "cache-first-prefix",
+    "batch-api-offload",
+    "token-budget-enforcement",
+    "early-exit"
+  ]
+}

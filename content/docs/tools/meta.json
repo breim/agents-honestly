@@ -1,0 +1,15 @@
+{
+  "title": "Part VIII · Tool Engineering",
+  "pages": [
+    "tools-are-apis-for-models",
+    "schema-and-granularity",
+    "read-and-write-tools",
+    "idempotency",
+    "errors-as-instructions",
+    "result-design",
+    "tool-discovery",
+    "enterprise-integrations",
+    "computer-using-agents",
+    "coding-agents-and-workspaces"
+  ]
+}

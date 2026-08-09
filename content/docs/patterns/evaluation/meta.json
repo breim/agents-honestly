@@ -1,0 +1,11 @@
+{
+  "title": "Evaluation Patterns",
+  "pages": [
+    "golden-set",
+    "trajectory-assertion",
+    "judge-with-rubric",
+    "shadow-run",
+    "canary-eval",
+    "online-guardrail"
+  ]
+}

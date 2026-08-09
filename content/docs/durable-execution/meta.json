@@ -1,0 +1,10 @@
+{
+  "title": "Part X · Durable Execution",
+  "pages": [
+    "everything-that-breaks",
+    "why-durable-execution",
+    "temporal-in-forty-minutes",
+    "determinism-and-retries",
+    "signals-and-children"
+  ]
+}

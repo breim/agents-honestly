@@ -1,0 +1,14 @@
+{
+  "title": "Part I · The Model as an Interface",
+  "pages": [
+    "what-is-an-agent",
+    "tokens",
+    "context-window",
+    "prompt-caching",
+    "structured-output",
+    "nondeterminism",
+    "choosing-and-adapting-models",
+    "when-not-to-build-an-agent",
+    "process-discovery-and-value"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "title": "Part VI · Workflows Before Agents",
+  "pages": [
+    "the-determinism-test",
+    "composition-patterns",
+    "routing-and-orchestration",
+    "evaluator-optimizer"
+  ]
+}
