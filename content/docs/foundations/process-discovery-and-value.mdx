@@ -1,0 +1,213 @@
+---
+title: "Before the Agent: Process Discovery and Value"
+description: "Map the work, its handoffs, baseline, error cost, and exit criteria before turning a business request into an agent specification."
+---
+
+
+The request arrives as a solution: *we need an agent for customer support.*
+
+That sentence has skipped the work. It does not say which tickets, who handles them now, what information they need, where they wait, what an error costs, or whether the company wants faster replies or fewer support hours. Starting implementation from it is how a team ships a convincing demo and discovers that nobody can define success.
+
+The first artifact is a process map, not a prompt.
+
+## Observe the work before naming the system
+
+Interviewing a manager gives you the documented process. Following five real cases gives you the process people actually use.
+
+For each case, record:
+
+| Field | Question |
+| --- | --- |
+| Trigger | What caused work to begin? |
+| Inputs | Which records, messages, and documents were available? |
+| Decisions | Where did a person use judgment? |
+| Rules | Which decisions were fixed policy or arithmetic? |
+| Systems | Which APIs, screens, spreadsheets, and inboxes were touched? |
+| Waits | Where did work stop for another person or event? |
+| Effects | What changed in the outside world? |
+| Exceptions | Which cases left the normal path? |
+| Outcome | What did the customer or business receive? |
+
+Do this with timestamps. A process that takes three days may contain eight minutes of work and two long waits. Automating the eight minutes cannot produce a same-day outcome if the approval still arrives on Thursday.
+
+<Figure caption="The unit of discovery is one business case from trigger to outcome, including every wait and handoff." frame={false}>
+
+```text
+ticket arrives
+      |
+      v
+classify  45 s
+      |
+      v
+look up order  2 min
+      |
+      v
+wait for warehouse photo  19 h
+      |
+      v
+apply damage policy  3 min
+      |
+      v
+manager approval  5 h
+      |
+      v
+issue credit and reply  2 min
+
+active work: 7 min 45 s
+elapsed time: about 24 h
+```
+
+</Figure>
+
+## Build the baseline you will compare against
+
+"Faster" and "cheaper" are not acceptance criteria. Measure the current process before changing it.
+
+At minimum, capture by case type:
+
+- volume and arrival distribution;
+- completion and abandonment rate;
+- active handling time;
+- elapsed time;
+- rework and reopen rate;
+- escalation rate and destination;
+- financial or customer cost of an error;
+- loaded human cost;
+- queue age and staffing pattern.
+
+Use a distribution, not one average. A median handling time of six minutes can hide a tail where disputed credits take two hours. That tail is likely where the agent will escalate and where the business case can fail.
+
+The [NIST AI RMF Map function](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) explicitly asks teams to document business value, intended use, expected benefits, expected monetary and non-monetary costs, scope, human oversight, and relevant benchmarks. That is product discovery expressed as risk management.
+
+## Classify each step
+
+Take the process map and assign every step to one of five treatments.
+
+| Treatment | Use when | Example |
+| --- | --- | --- |
+| Delete | The step exists only because the old process was awkward | Copy an ID between two forms |
+| Ordinary software | Inputs and rule determine the result | Compute a refund ceiling |
+| Model call | One bounded judgment or transformation is needed | Classify ticket intent |
+| Agent | The next action depends on evidence discovered during the run | Investigate a disputed delivery |
+| Human | Authority, accountability, or unresolved judgment stays with a person | Approve a contract exception |
+
+This prevents a common category error: automating the current sequence exactly. The correct design may remove three steps, join two systems, and use one model call. Reproducing every click with an agent preserves the process's defects and adds nondeterminism.
+
+<FrameworkCheck decision="Atlas uses ordinary software for known rules, one model call for bounded classification, an agent for evidence-driven investigation, and a human for policy exceptions.">
+<FrameworkOption name="plain">
+
+**Functions and workflows.** Default for rules, transformations, routing from known fields, and processes whose next step is already known.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+**LangGraph.** Use when an investigation has several legitimate run shapes and the path must be inspectable or resumable.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal.** Own waits, callbacks, retries, effects, and cases that must survive long enough to reach a business outcome.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Price success by completed outcome
+
+Cost per model call rewards systems that stop early, including systems that escalate everything. Cost per resolved case includes the whole system.
+
+```text
+cost per completed outcome =
+  inference
+  + retrieval and infrastructure
+  + human review
+  + human escalation
+  + rework
+  + expected error cost
+```
+
+Expected error cost matters even when the error rate is small:
+
+```text
+expected error cost = probability of error x impact of error
+```
+
+A route that saves four minutes and occasionally sends the wrong contract may have negative value despite excellent resolution and latency numbers. Put the impact in the arithmetic before the pilot.
+
+Compare at least three versions:
+
+1. current process;
+2. improved process with ordinary software;
+3. improved process with the proposed AI step.
+
+The second row is the one teams omit. Without it, the agent receives credit for an API integration, a better queue, and a removed approval that would have helped without a model.
+
+## Write the authority contract before the capability list
+
+Capability asks what the system can do. Authority asks what it may decide and what effect it may cause.
+
+For every route, write:
+
+```yaml
+route: damaged_shipment
+may_read:
+  - ticket account
+  - order and shipment records for that account
+may_propose:
+  - replacement
+  - credit up to policy ceiling
+may_execute:
+  - credit up to 1000 minor units
+must_escalate:
+  - policy exception
+  - disputed identity
+  - evidence conflict
+must_never:
+  - choose a recipient supplied by retrieved text
+  - close an unresolved ticket
+```
+
+This becomes the input to tool design, authorization, risk tiers, trajectory evals, and the go-live review. Writing it after the tools means the implementation has already chosen the authority.
+
+## Define stop conditions for the project
+
+An experiment needs a way to lose. Before building, name the evidence that ends or narrows the project.
+
+Examples:
+
+- factual accuracy stays below the threshold after retrieval reaches its target;
+- review time removes the handling-time saving;
+- the useful cases are too rare to repay integration and operations;
+- the required data cannot be accessed with acceptable permissions;
+- the error impact forces human review on every case;
+- users route around the system because escalation packages are poor;
+- a deterministic workflow meets the target with lower cost and risk.
+
+These are not retrospective excuses. They are exit criteria approved with the budget. A team that cannot stop the project will keep improving the demo until the calendar makes the decision for them.
+
+## Atlas, concretely
+
+Meridian samples sixty support cases across policy questions, order status, damaged shipments, and contract disputes. The baseline shows that policy lookup and status checks consume most volume, while disputes consume most human time and carry the highest error cost.
+
+The first release handles policy and status. Damage claims get a bounded credit route. Contract disputes remain human-owned. Meridian measures cost per resolved ticket, elapsed time, reopen rate, reviewer minutes, and expected credit error, all sliced by route.
+
+The project stops expanding autonomy if reviewer minutes do not fall after eight weeks or if any route misses its factual threshold for two release cycles. That condition makes "not yet" an engineering result rather than a political failure.
+
+## References
+
+- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/), especially Map 1 through Map 5 for context, business value, scope, costs, oversight, and impacts.
+- [NIST AI RMF Playbook](https://airc.nist.gov/airmf-resources/playbook/), suggested actions for applying Govern, Map, Measure, and Manage.
+- [NIST descriptions of AI actor tasks](https://airc.nist.gov/airmf-resources/airmf/appendices/app-a-descriptions-of-ai-actor-tasks/), covering domain, product, human-factors, governance, legal, privacy, and affected-community roles.
+
+---
+
+Part I ends here. Next: [Meet the Problem](/docs/first-agent/the-problem), where this discovery work becomes Atlas's first acceptance contract.
+
+## Takeaways
+
+- Follow real cases from trigger to outcome. The documented process omits workarounds, waits, and judgment.
+- Measure the baseline by case type before changing it. Use distributions and include rework, review, and error cost.
+- Classify each step as delete, ordinary software, bounded model call, agent, or human work.
+- Compare the agent with an improved non-AI process, not only with the current process.
+- Price completed outcomes, including review, escalation, rework, and expected error cost.
+- Write authority and forbidden actions before listing capabilities.
+- Approve exit criteria with the budget. A pilot must be allowed to prove that the agent is the wrong design.
