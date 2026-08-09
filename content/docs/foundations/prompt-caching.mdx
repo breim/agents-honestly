@@ -1,0 +1,199 @@
+---
+title: "Prompt Caching and Prefix Stability"
+description: "How caching actually works, why one changed byte at the front costs you the whole cache, and how to design prompts around it."
+---
+
+
+The [previous chapter](/docs/foundations/context-window) ended with four levers for context, and a note that caching sits beside them rather than among them. Send less, compress, externalize, isolate. Those change *how many* tokens you send. Caching changes what those tokens **cost**, by roughly an order of magnitude, and changes nothing else.
+
+That makes it the cheapest win in the book and the one most often left on the floor, because it has a single hard constraint that dictates the order of your prompt. Get the ordering right and caching mostly works by itself. Get it wrong and no amount of configuration will save it, and worse, nothing will tell you.
+
+## It is a prefix match, not a lookup
+
+The whole feature follows from one sentence:
+
+> **The cache key is the exact bytes of the prompt up to the marked point. Any change anywhere in that prefix invalidates everything after it.**
+
+This is not a cache in the sense of "look up this document by ID." It is a prefix match against the literal token sequence. There is no fuzzy matching, no per-block caching, no reordering. One flipped character at position 40 discards the work for positions 40 onward.
+
+And the positions are not up to you. The provider renders your request in a fixed order:
+
+<Figure caption="Render order is fixed. Anything you change is followed by everything you didn't." frame={false}>
+
+```
+   ┌──────────┬──────────────┬────────────────────────────┐
+   │  tools   │    system    │          messages          │
+   └──────────┴──────────────┴────────────────────────────┘
+    position 0 ───────────────────────────────────▶ position N
+
+    change a tool definition  ─────▶  ████████████████████  all of it
+    change the system prompt  ─────────────▶  ████████████  from there on
+    append a turn             ───────────────────────▶  ██  just the tail
+```
+
+</Figure>
+
+**Tool definitions render first.** They sit at position zero, in front of everything. Adding a tool, removing one, or serializing your schemas in a different key order invalidates the entire request: system prompt, every turn of history, all of it. This is the single most expensive mistake available, and it is one line of code away in any codebase that builds its tool list per user.
+
+## The economics
+
+Caching is not free. A cache **write** costs a premium over normal input; a cache **read** costs a fraction of it.
+
+<Aside type="note" title="Illustrative multipliers">
+Relative to the normal input rate: reads run about **0.1×**, writes about **1.25×** for a short-lived entry and **2×** for a long-lived one. These are Anthropic's current ratios and are the right shape to reason with; check your provider before putting them in a spreadsheet.
+</Aside>
+
+Which gives you a break-even you can compute:
+
+| Entry | Write | Each read | Breaks even at |
+| --- | ---: | ---: | --- |
+| Short TTL (~5 min) | 1.25× | 0.1× | **2 requests** (1.35× vs 2×) |
+| Long TTL (~1 hour) | 2× | 0.1× | **3 requests** (2.2× vs 3×) |
+
+Two consequences. **Caching a prompt that is only used once is strictly worse than not caching it.** You pay the write premium and never read. And the longer TTL is not simply better: it survives gaps in bursty traffic, but the doubled write means it needs more reads to pay for itself. Continuous traffic should use the short one, because each request re-warms the entry for the next.
+
+For an agent this compounds the same way [everything else does](/docs/foundations/tokens): the loop resends its whole history on every iteration, so the cached prefix is read once per model call, not once per user turn. A four-call turn reads the cache four times. The break-even arrives inside a single turn.
+
+## Placing the breakpoint
+
+You mark the end of the cacheable prefix with `cache_control` on a content block.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="cache.ts"
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 1024,
+  tools: TOOL_DEFINITIONS,          // rendered first — must be stable
+  system: [
+    {
+      type: 'text',
+      text: SYSTEM_PROMPT,          // frozen: no dates, no user names
+      cache_control: { type: 'ephemeral' },
+    },
+  ],
+  messages,                         // volatile: everything that changes
+});
+
+console.log(response.usage.cache_read_input_tokens);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="cache.py"
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    tools=TOOL_DEFINITIONS,           # rendered first — must be stable
+    system=[
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,    # frozen: no dates, no user names
+            "cache_control": {"type": "ephemeral"},
+        }
+    ],
+    messages=messages,                # volatile: everything that changes
+)
+
+print(response.usage.cache_read_input_tokens)
+```
+
+</Tab>
+</Tabs>
+
+Because system renders after tools, a marker on the last system block caches **both**, one breakpoint covering the entire fixed portion of the request. That is the default placement and it is right most of the time.
+
+Three constraints worth knowing before you place a second one:
+
+**You get a small number of breakpoints**, four on current Anthropic models. They are a budget, so spend them on genuine stability boundaries: the end of the tools-plus-system prefix, the end of a shared document set, the end of the most recent turn.
+
+**There is a minimum cacheable length, and it is model-specific.** Below it, nothing caches: no error, no warning, just a write count of zero. Current minimums range from about 512 to 4,096 tokens depending on the model, and *they are not ordered by generation*: a newer model can have a lower minimum than an older one, so a prompt that caches fine on one model silently won't on another in the same family. Look yours up rather than assuming.
+
+**For multi-turn conversations, move the marker.** Put it on the last content block of the most recent turn, each request. Earlier breakpoints stay valid as read points, so hits accumulate as the conversation grows and each turn extends the cached prefix by one turn.
+
+<Aside type="tip" title="Shared prefix, varying suffix">
+A common shape: a large fixed preamble of retrieved documents and few-shot examples, followed by a different question each time. Mark the end of the **shared** portion, not the end of the whole prompt. Marking the end writes a distinct entry per request and never reads one, which costs more than not caching at all.
+</Aside>
+
+## The silent invalidators
+
+Everything above is easy. This section is where caching actually fails, and it fails without saying so: the request succeeds, the answer is fine, and you pay full price forever.
+
+Every one of these is a real pattern from real code, and every one lives in the prefix:
+
+| Pattern | Why it kills the cache |
+| --- | --- |
+| `datetime.now()` in the system prompt | The prefix is different on every single request |
+| A request ID or UUID near the front | Same; every request is unique by construction |
+| `json.dumps(schema)` without sorted keys | Serialization order varies; the bytes differ |
+| Interpolating the user's name or ID into the system prompt | A per-user prefix, so nothing is shared across users |
+| `if flag: system += "..."` | Every combination of flags is a separate prefix |
+| `tools=build_tools_for(user)` | Tools render at position 0, so nothing caches across users, ever |
+| Switching models mid-conversation | Caches are model-scoped. The new model starts cold |
+
+The fix is always the same shape: **make it deterministic, move it after the breakpoint, or delete it.** A timestamp the agent genuinely needs belongs in the latest user turn, where it invalidates nothing before it. A per-user fact belongs in the conversation, not the system prompt.
+
+Notice what the last two rows imply. If your system supports "modes" by swapping the tool list, or routes to a cheaper model for sub-tasks, you have built a system that cannot cache. The escape hatches exist, but you have to design for them: dynamic [tool discovery](/docs/tools/tool-discovery) that *appends* schemas rather than replacing them; a mid-conversation system message that sits after the cached history rather than editing the prompt in front of it; giving a sub-task to a [separate sub-agent](/docs/patterns/context/subagent-isolation) instead of switching the main loop's model.
+
+## Verify, or you don't know
+
+Because the failure is silent, an unverified cache is an assumed cache. The response tells you exactly what happened:
+
+| Field | What it means |
+| --- | --- |
+| `cache_creation_input_tokens` | Written this request; you paid the write premium |
+| `cache_read_input_tokens` | Served from cache; you paid roughly a tenth |
+| `input_tokens` | **The uncached remainder only** |
+
+That last row catches people. `input_tokens` is not the size of your prompt; it is the part of it that neither hit nor wrote the cache. Total prompt size is the sum of all three. An agent that ran for an hour and reports 4,000 input tokens is not efficient. It is reading most of its prompt from cache, and the number you want is the sum.
+
+The diagnostic is one line: if `cache_read_input_tokens` is zero across repeated requests that should share a prefix, an invalidator is at work. Dump the rendered prompt bytes from two consecutive requests and diff them. The culprit is always visible and is almost always in the table above.
+
+## Two failures specific to agents
+
+Ordinary chat applications never hit these. Agent loops hit both.
+
+**The lookback window.** A breakpoint searches backward a bounded number of content blocks, about twenty, to find a matching entry. A single agent turn that fires eight parallel tool calls appends sixteen blocks, and two such turns put the previous breakpoint out of reach. The cache is there; the next request simply can't see it. Long turns need an intermediate breakpoint every dozen or so blocks.
+
+**The fan-out race.** An entry becomes readable only once the first response *begins streaming*. Fire ten identical-prefix requests concurrently and all ten pay full price, because none can read what the other nine are still writing. Send one, wait for its first token rather than its last, then release the other nine.
+
+Both share a lesson worth generalizing: caching was designed for a conversation, and an agent is not a conversation. It is a burst of near-identical requests around a prefix that barely changes. That is the best possible case for caching and the easiest one to break.
+
+## The discipline
+
+Everything in this chapter reduces to one ordering rule, applied when you build the prompt rather than after the bill arrives:
+
+```
+   stable ─────────────────────────────────────────▶ volatile
+
+   tool schemas   frozen system   retrieved docs   history   this turn
+   (sorted,       prompt (no      (per session)              (per request)
+    fixed set)     interpolation)
+                                 ▲
+                                 └── breakpoint moves right as stability allows
+```
+
+Sort what you serialize. Freeze the system prompt. Push anything per-request as far right as it will go. Then mark the boundary and check `cache_read_input_tokens` to confirm you were right.
+
+Do that and the discipline pays for itself twice: once in money, and once because a prompt built stable-to-volatile is a prompt whose structure you can reason about at all.
+
+## References
+
+- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), cache breakpoints, minimum cacheable prefix lengths, TTL behavior, and what invalidates a prefix.
+
+---
+
+Next: [Structured Output](/docs/foundations/structured-output), getting data out of the model without a regex and a prayer.
+
+## Takeaways
+
+- Caching is a prefix match on exact bytes. One changed byte invalidates everything after it.
+- The render order is tools → system → messages. Tool definitions sit at position zero, so changing the tool set costs the entire cache.
+- Reads cost roughly a tenth of normal input; writes cost a premium. Break-even is two requests on a short TTL, three on a long one, so caching a one-shot prompt is worse than not caching it.
+- One breakpoint on the last system block covers tools and system together. That is the right default.
+- There is a model-specific minimum length below which nothing caches, silently, and it is not ordered by model generation.
+- The killers are invisible: a timestamp, a UUID, unsorted JSON, a per-user tool list, a mid-conversation model switch. All of them fail without an error.
+- `input_tokens` is the uncached remainder, not the prompt size. Verify with `cache_read_input_tokens` or you are assuming.
+- Agent-specific traps: a bounded lookback window that long tool-heavy turns overshoot, and concurrent fan-out where every request misses because none has finished writing.
