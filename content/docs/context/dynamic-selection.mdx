@@ -1,0 +1,194 @@
+---
+title: "Dynamic Context Selection"
+description: "Choosing what the model sees per request instead of shipping everything every time."
+---
+
+
+You have a [budget](/docs/context/context-as-budget) and a [frozen system prompt](/docs/context/system-prompt). This chapter is about the variable part, and about the default policy for filling it, which almost every agent inherits without choosing:
+
+**Ship the union of everything any request might need.**
+
+Every tool, in case this ticket needs it. Every instruction, in case this ticket triggers it. Top-20 chunks, in case the answer is in number 19. It feels like the safe default, because the alternative is the possibility of omitting something. It is not safe, and the last chapter explained why: the extra material is not neutral padding, it is drawn from precisely the distribution most likely to be confused with the right answer.
+
+## Pointers, not payloads
+
+The inversion that fixes this is easy to state and takes real work to implement.
+
+> Keep the window **almost empty of payloads and full of pointers.** The model knows what exists; it loads the heavy thing only when it turns out to need it.
+
+Instead of eleven full tool schemas, a searchable index of eleven tools. Instead of twenty document chunks, a list of what's available with enough metadata to choose. Instead of every policy section, the table of contents.
+
+This is the same move as lazy loading, virtual memory, and pagination. The pattern is old and the reason it applies here is new. In ordinary systems you fetch on demand to save time and memory. Here you fetch on demand to save **attention**, which is a resource that degrades continuously rather than running out at a boundary.
+
+The industry default has been inverting toward this: just-in-time loading as the baseline for long-running agents, with preloading a deliberate exception you justify. That is roughly the opposite of how most existing agents are built.
+
+## Four things you can select
+
+| What | Selected by | Typical win |
+| --- | --- | --- |
+| **Tools** | Ticket category, or the model searching a catalogue | Large; schemas are billed on every step of every run |
+| **Instructions** | Task type; loaded like a skill when relevant | Large; most task-specific guidance applies to a minority of runs |
+| **Documents** | Retrieval, ranked and filtered | Largest, and [all of Part IV](/docs/retrieval/where-does-the-answer-live) |
+| **Examples** | Similarity to the current input | Moderate; few-shot examples strongly shape output style |
+
+History is the fifth, and it's different enough to get [its own chapter](/docs/context/compaction): you don't select history so much as continuously decide what survives.
+
+Atlas makes the first two decisions from the classification we already built in [v0](/docs/first-agent/one-call), which is a nice property: the router we shipped as a stopgap turns out to be the selection mechanism:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="select.ts"
+const PROFILES = {
+  policy_question: {
+    tools: ['search_policies', 'get_order', 'escalate_to_human'],
+    instructions: ['citation_rules'],
+    namespace: 'policy',
+  },
+  order_status: {
+    tools: ['get_order', 'get_shipment', 'query_warehouse', 'escalate_to_human'],
+    instructions: [],
+    namespace: null,
+  },
+  action_required: {
+    tools: ['get_order', 'issue_credit', 'search_policies', 'escalate_to_human'],
+    instructions: ['refund_authority', 'citation_rules'],
+    namespace: 'policy',
+  },
+} as const;
+
+const profile = PROFILES[triage.category];
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="select.py"
+PROFILES = {
+    "policy_question": {
+        "tools": ["search_policies", "get_order", "escalate_to_human"],
+        "instructions": ["citation_rules"],
+        "namespace": "policy",
+    },
+    "order_status": {
+        "tools": ["get_order", "get_shipment", "query_warehouse", "escalate_to_human"],
+        "instructions": [],
+        "namespace": None,
+    },
+    "action_required": {
+        "tools": ["get_order", "issue_credit", "search_policies", "escalate_to_human"],
+        "instructions": ["refund_authority", "citation_rules"],
+        "namespace": "policy",
+    },
+}
+
+profile = PROFILES[triage.category]
+```
+
+</Tab>
+</Tabs>
+
+Note that `issue_credit` is only present for `action_required`. Selection is not only an efficiency mechanism. **A tool that isn't loaded cannot be called**, which makes the profile a blast-radius control as well as a budget one.
+
+## Selection fights caching
+
+Here is the tension nobody warns you about, and it will bite the first time you measure.
+
+Everything above varies per request. [Caching](/docs/foundations/prompt-caching) requires the prefix *not* to vary, and tools render at position zero. So a naive dynamic tool set means **every request is a cache miss**. You saved 3,000 tokens of schema and started paying full price for the other 40,000.
+
+<Figure caption="Where you vary determines what you can cache. The same content in two places has an order-of-magnitude different cost." frame={false}>
+
+```
+   ✗  select then send
+      ┌─────────────────┬──────────┬───────────┐
+      │ tools (varies!) │ system   │ messages  │
+      └─────────────────┴──────────┴───────────┘
+        ▲ position 0 changes → nothing behind it caches
+
+   ✓  stable base, append the variable part
+      ┌───────────────┬──────────┬─────────────┬──────────────┐
+      │ base tools    │ system   │ history     │ + additions  │
+      └───────────────┴──────────┴─────────────┴──────────────┘
+                                 ▲ breakpoint    ▲ varies here
+```
+
+</Figure>
+
+Three ways out, in order of how much machinery they need.
+
+**Select per conversation, not per request.** A ticket's profile is decided once at triage and held for the whole run. You lose nothing, because the category doesn't change mid-ticket, and the prefix is stable for every step after the first. This is the cheapest fix and covers most cases.
+
+**Append rather than swap.** Modern APIs support declaring tools up front as deferred and *surfacing* them mid-conversation, so the addition lands after the cached prefix instead of rewriting position zero. Same for operator instructions arriving as system-role messages. The principle generalizes: **an addition at the end is cheap; a substitution at the front is not.**
+
+**Accept the miss where the win is bigger.** If dynamic selection removes 30,000 tokens of documents, losing a 5,000-token cached prefix is a good trade. Compute it; don't assume it.
+
+## Four strategies, cheapest first
+
+**Static profiles.** A lookup table, as above. No model call, no latency, fully testable, and the behaviour is inspectable in code review. Underrated, and correct whenever the categories are stable.
+
+**Rule-based enrichment.** The ticket mentions an order ID → load order tools. Mentions a part number → load the catalogue namespace. Deterministic, cheap, and composes with profiles.
+
+**Retrieval-based.** Embed the request, pull the top-ranked items. This is the right answer for documents and the wrong answer for tools, where the candidate set is small and the descriptions are yours to write.
+
+**Model-selected.** Give the model a searchable index and let it pull what it needs: for tools, a search tool over the catalogue; for documents, a retrieval tool it calls when it decides to. The model does the selecting, which handles cases you didn't anticipate.
+
+The last one is the most powerful and the most expensive, and it is worth being honest about why.
+
+<Aside type="caution" title="JIT is not free; it buys attention with latency">
+Runtime exploration costs round trips. An agent that discovers it needs the returns policy at step three has spent two steps not knowing, and each discovery step is a full request-response cycle with the whole history resent.
+
+It also demands good pointers. "Search the catalogue" only works if names, descriptions, and metadata are genuinely informative, because the model is navigating by them. Teams adopt model-selected loading, skip the work of making the index navigable, and conclude that JIT doesn't work.
+
+Precomputed beats explored when you *know* what's needed. Reserve exploration for when you genuinely don't.
+</Aside>
+
+## Selecting wrong is silent
+
+The failure mode deserves its own section because of how it presents.
+
+If your selector omits the document that had the answer, the model does not receive an error. It receives a context that doesn't contain the answer and, being a model, produces the best answer available from what it has. You get a fluent, confident response built on the second-best source, and nothing in the transcript says "the right one was filtered out at step zero."
+
+This makes selection a **recall problem**, and it sits in direct tension with the previous chapter's finding that near-miss distractors are expensive. Both are true, and the resolution is that they are different stages:
+
+```
+   ┌───────────────┐        ┌───────────────┐        ┌──────────┐
+   │  SELECT       │        │  RERANK       │        │  PROMPT  │
+   │  optimize     │  ───▶  │  optimize     │  ───▶  │          │
+   │  recall       │        │  precision    │        │  5 items │
+   │  ~100 items   │        │  cut to 5     │        │          │
+   └───────────────┘        └───────────────┘        └──────────┘
+     cheap, wide              expensive, narrow        what costs
+                                                        attention
+```
+
+Cast wide where it's cheap, cut hard before anything reaches the prompt. A wide net costs milliseconds and pennies; a wide *prompt* costs accuracy. Getting these backwards, a narrow selector feeding an uncut prompt, is the common configuration and the worst one.
+
+## Measure offered versus used
+
+Selection is a component, and like any component it needs its own metrics rather than being judged only by end-to-end quality.
+
+Log, per run: what was offered, and what was actually used. Then two ratios tell you almost everything.
+
+| Signal | Reading |
+| --- | --- |
+| Tools offered but never called, across many runs | Dead weight in every prefix. Remove from the profile. |
+| A tool called that the profile didn't include | Your categories are wrong, or the classifier is. Both are fixable. |
+| Documents retrieved but not cited | Your `k` is too high, or the reranker isn't earning its place. |
+| Escalations citing "I don't have access to…" | Selection is failing, and the model is telling you. Read these first. |
+
+That last row is the highest-value log line in this chapter. An agent that says it lacked something is reporting a selection bug in plain language, and it will be sitting in your escalation queue already labelled.
+
+---
+
+Next: [Memory: Short-Term, Long-Term, and Neither](/docs/context/memory), on thread state, durable user facts, and the knowledge base: three different things that people put in one vector store.
+
+## Takeaways
+
+- The inherited default is shipping the union of everything any request might need. It's expensive twice: tokens, and distractors drawn from the worst distribution.
+- Invert it: keep the window full of pointers and nearly empty of payloads. Load the heavy thing when it turns out to be needed.
+- You can select tools, instructions, documents, and examples. A tool that isn't loaded cannot be called, so selection is also a blast-radius control.
+- Dynamic selection fights prefix caching, and tools sit at position zero. Select per conversation rather than per request, append instead of substituting, or verify the trade is worth the miss.
+- Prefer static profiles where categories are stable. They cost nothing, test cleanly, and are visible in review.
+- Just-in-time loading buys attention with latency, and it only works if your pointers are genuinely navigable.
+- Omitting the right item is silent, because the model answers from what it has. Optimize the selector for recall and the final cut for precision; never the reverse.
+- Log offered versus used. Escalations that mention missing access are selection bugs, pre-labelled.
