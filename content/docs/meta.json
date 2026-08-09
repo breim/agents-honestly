@@ -1,12 +1,7 @@
 {
   "pages": [
     "index",
-    "---Start Here---",
-    "preface",
-    "the-map",
-    "how-to-read",
-    "core-path",
-    "setup",
+    "(start-here)",
     "foundations",
     "first-agent",
     "context",

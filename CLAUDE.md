@@ -128,6 +128,7 @@ Without a `meta.json`, Fumadocs orders pages alphabetically and titles a group b
 - When porting a chapter, do not touch `meta.json` and do not reorder anything. The entry exists already.
 - A chapter showing up in the wrong position, or a group titled with a bare capitalized folder name, means a `meta.json` entry is missing or misspelled. Fix the entry, not the filename — filenames must keep matching the book's slugs so cross-chapter links resolve.
 - Group titles and chapter order come from `book-structure.mjs` in the source book. When that file changes, mirror the change into the affected `meta.json` rather than editing one to taste.
+- A sidebar group needs a real directory; a `---Label---` separator only prints a heading. Where the book groups chapters that sit at its root, the directory is parenthesised — `(start-here)` — because Fumadocs strips parenthesised segments when building slugs. The group appears in the sidebar and `/docs/preface` stays `/docs/preface`.
 
 ---
 
