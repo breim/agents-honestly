@@ -1,7 +1,7 @@
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import type { MDXComponents } from 'mdx/types';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
-import { Aside, Figure } from '@/components/book';
+import { Aside, Figure, TokenStrip } from '@/components/book';
 
 export function getMDXComponents(components?: MDXComponents) {
   return {
@@ -10,6 +10,7 @@ export function getMDXComponents(components?: MDXComponents) {
     Figure,
     Tab,
     Tabs,
+    TokenStrip,
     ...components,
   } satisfies MDXComponents;
 }

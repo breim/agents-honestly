@@ -26,6 +26,54 @@ export function Aside({
   );
 }
 
+const chipHues = [210, 160, 45, 350, 280];
+
+export function TokenStrip({
+  tokens,
+  stats = true,
+  markSpaces = false,
+}: {
+  tokens: string[];
+  stats?: boolean;
+  markSpaces?: boolean;
+}) {
+  const chars = tokens.join('').length;
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5">
+        {tokens.map((token, i) => {
+          const hue = chipHues[i % chipHues.length];
+
+          return (
+            <span
+              key={i}
+              className="inline-flex items-baseline gap-1.5 rounded border px-1.5 py-1"
+              style={{
+                borderColor: `hsl(${hue} 70% 50% / 0.55)`,
+                background: `hsl(${hue} 70% 50% / 0.15)`,
+              }}
+            >
+              <span className="font-mono text-sm whitespace-pre">
+                {markSpaces ? token.replaceAll(' ', '␣') : token}
+              </span>
+              <span className="text-[0.65rem]" style={{ color: `hsl(${hue} 70% 45%)` }}>
+                {i + 1}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+      {stats && (
+        <p className="mt-3.5 text-sm text-fd-muted-foreground">
+          <strong>{tokens.length}</strong> tokens · <strong>{chars}</strong> characters ·{' '}
+          {(chars / tokens.length).toFixed(2)} chars per token
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function Figure({
   caption,
   frame = true,
