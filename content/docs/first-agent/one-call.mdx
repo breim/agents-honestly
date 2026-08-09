@@ -1,0 +1,256 @@
+---
+title: "One Call, Then Structure"
+description: "A raw completion, then a typed one. The smallest useful thing, and its limits."
+---
+
+
+We have a problem statement, twenty tickets with known answers, and no code. The temptation now is to build the thing: the loop, the tools, the retrieval. We're going to do the opposite and build the smallest thing that could possibly be useful, because it takes twenty minutes and it tells us something we cannot learn any other way: **which of the twenty tickets need more than a single model call.**
+
+That is not a warm-up exercise. It is the [leftmost rung](/docs/foundations/when-not-to-build-an-agent), evaluated honestly, before we pay for a higher one.
+
+## One call
+
+Take ticket #8812, *"Can we return the RB-400 relays? Box was opened but nothing installed."* Ask the model about it and nothing else: no tools, no retrieval, no loop.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="triage.ts"
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic();
+
+const SYSTEM = `You are a support triage assistant at Meridian Supply,
+an industrial parts distributor. You handle B2B customer tickets.`;
+
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 1024,
+  system: SYSTEM,
+  messages: [{ role: 'user', content: ticket.body }],
+});
+
+const text = response.content.find((b) => b.type === 'text')?.text;
+console.log(text);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="triage.py"
+from anthropic import Anthropic
+
+client = Anthropic()
+
+SYSTEM = """You are a support triage assistant at Meridian Supply,
+an industrial parts distributor. You handle B2B customer tickets."""
+
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    system=SYSTEM,
+    messages=[{"role": "user", "content": ticket.body}],
+)
+
+text = next(b.text for b in response.content if b.type == "text")
+print(text)
+```
+
+</Tab>
+</Tabs>
+
+That is the entire surface area of the API. Everything else in this book is an elaboration of those fifteen lines.
+
+And what comes back is genuinely good writing:
+
+> This is a returns inquiry regarding opened electrical components. Based on standard industry practice, most distributors accept returns of unused items within 30 days provided the original packaging is intact and the components have not been installed. Since the customer states nothing was installed, this likely qualifies. I'd recommend confirming the purchase date and requesting photos of the packaging before authorizing the return.
+
+Read it twice, because it fails in two completely different ways and almost everyone conflates them.
+
+## Failure one: it's prose
+
+Your program needs to route this ticket. It cannot route a paragraph. There is no field to switch on, no enum, no boolean, just English that happens to contain the information.
+
+The historical response was to ask for JSON in the prompt and parse the result. We know from [Structured Output](/docs/foundations/structured-output) that this is now a solved problem, and the solution is a schema rather than a parser.
+
+## Failure two: it made the policy up
+
+"Based on standard industry practice, most distributors accept returns within 30 days."
+
+Meridian's actual return window for opened electrical components is in a document in their corpus, and it is not thirty days. The model does not have that document. It was asked a question it could not answer, and rather than saying so, it produced the *shape* of an answer: fluent, plausible, sourced to an authority ("standard industry practice") that does not exist.
+
+<Aside type="caution" title="These need different fixes, and that's the point">
+Failure one is about **shape** and is fixed by constraining the output. Failure two is about **grounding** and is fixed by giving the model access to the truth. Structured output does nothing for the second. You can get a beautifully typed hallucination, and it will look more trustworthy than the paragraph did.
+
+Teams that only fix the first ship confident wrong answers in strongly-typed wrappers. Watch for it.
+</Aside>
+
+## Then structure
+
+Fix the shape problem first, since it's the cheap one. Rather than asking for an answer, ask for a **classification**, a decision the model can genuinely make from the ticket text alone.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="triage.ts"
+const TRIAGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    reasoning: { type: 'string' },
+    category: {
+      type: 'string',
+      enum: ['policy_question', 'order_status', 'action_required', 'human_only'],
+    },
+    urgency: { type: 'string', enum: ['low', 'normal', 'high'] },
+    entities: {
+      type: 'object',
+      properties: {
+        order_ids: { type: 'array', items: { type: 'string' } },
+        part_numbers: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['order_ids', 'part_numbers'],
+      additionalProperties: false,
+    },
+    answerable_from_ticket_alone: { type: 'boolean' },
+  },
+  required: ['reasoning', 'category', 'urgency', 'entities',
+             'answerable_from_ticket_alone'],
+  additionalProperties: false,
+} as const;
+
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 1024,
+  system: SYSTEM,
+  output_config: { format: { type: 'json_schema', schema: TRIAGE_SCHEMA } },
+  messages: [{ role: 'user', content: ticket.body }],
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="triage.py"
+TRIAGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {"type": "string"},
+        "category": {
+            "type": "string",
+            "enum": ["policy_question", "order_status", "action_required", "human_only"],
+        },
+        "urgency": {"type": "string", "enum": ["low", "normal", "high"]},
+        "entities": {
+            "type": "object",
+            "properties": {
+                "order_ids": {"type": "array", "items": {"type": "string"}},
+                "part_numbers": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["order_ids", "part_numbers"],
+            "additionalProperties": False,
+        },
+        "answerable_from_ticket_alone": {"type": "boolean"},
+    },
+    "required": ["reasoning", "category", "urgency", "entities",
+                 "answerable_from_ticket_alone"],
+    "additionalProperties": False,
+}
+
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    system=SYSTEM,
+    output_config={"format": {"type": "json_schema", "schema": TRIAGE_SCHEMA}},
+    messages=[{"role": "user", "content": ticket.body}],
+)
+```
+
+</Tab>
+</Tabs>
+
+Four things in that schema are deliberate, and each is a decision you'll make again on every schema you write.
+
+**`reasoning` comes first.** Field order is generation order: the model produces its justification before its verdict rather than after. This is the single highest-value line in the schema and it costs a few dozen tokens.
+
+**`category` is an enum, not a string.** Your router branches on this. An enum makes `"Policy Question"` structurally impossible rather than a bug you'll hit in week three.
+
+**`entities` extracts rather than answers.** Pulling `4921` out of the ticket text is something the model can do reliably from the input alone. It is also exactly what the next chapter needs in order to look anything up.
+
+**`answerable_from_ticket_alone` is the interesting one.** We are asking the model to tell us whether this call was sufficient. It's a self-report, so treat it as a signal rather than a guarantee. But it turns out to be a good one, and it is how v0 stops lying.
+
+Now #8812 comes back as a value:
+
+```json
+{
+  "reasoning": "Customer asks about returning opened electrical components. The
+                answer depends on Meridian's returns policy for that category,
+                which is not stated in the ticket.",
+  "category": "policy_question",
+  "urgency": "normal",
+  "entities": { "order_ids": [], "part_numbers": ["RB-400"] },
+  "answerable_from_ticket_alone": false
+}
+```
+
+No invented thirty-day window. Asked a question it *can* answer, namely what kind of ticket this is, it answers correctly and declines to overreach.
+
+## This is not an agent
+
+Worth naming, because it is easy to feel like we've started building one. We haven't.
+
+There is no loop, no tool, no decision about what happens next. The model is a **classifier with a probabilistic body**, sitting inside a function you wrote, and control flow is entirely yours:
+
+```
+   ticket ──▶ classify(ticket) ──▶ switch (category) ──▶ queue
+                    │
+              one model call
+              structured output
+              no autonomy
+```
+
+By the taxonomy from Part I this is a *router*, and routers are workflows. That matters practically: it can be unit-tested per case, it costs one predictable call, it cannot take an action, and its blast radius is zero because it has no tools. All of the operational burden we catalogued last chapter is still optional here: tracing, evals, approval gates, durability.
+
+## Score it against the twenty
+
+Here is the payoff for writing the ticket set before the code.
+
+Run all twenty through the classifier [several times each](/docs/foundations/nondeterminism), since one run tells you nothing, and compare against the outcomes you wrote down. Suppose it lands roughly like this:
+
+| | Result |
+| --- | --- |
+| Category correct | 19 / 20, stable across runs |
+| Entities extracted correctly | 18 / 20 (two tickets reference orders obliquely) |
+| **Tickets fully resolved** | **0 / 20** |
+| Tickets correctly routed | 19 / 20 |
+| `answerable_from_ticket_alone` agreed with reality | 20 / 20 |
+
+That table is the whole lesson. The classifier is *excellent at its job* and resolves nothing, because none of the twenty tickets can be answered from the ticket text alone. Every one needs a document, a row, or an action.
+
+And this is real value shipped: routing 900 tickets a week accurately, with entities pre-extracted, for one cheap call each. It is also a hard ceiling, and we now know exactly where it is instead of guessing.
+
+<Aside type="tip" title="What v0 is allowed to say">
+Since `answerable_from_ticket_alone` is right every time, v0 has an honest deployment: classify, route, extract, and when it's `false`, say so and hand off. An agent that reliably knows what it doesn't know is worth more than one that guesses well, and it is a far better baseline to measure the next version against.
+</Aside>
+
+## The wall
+
+To answer #8812 the model needs Meridian's returns policy for opened electrical components. To answer #8817 it needs a `SUM` over the warehouse. To handle #8823 it needs to verify an order exists and then move money.
+
+None of those is a prompting problem, and this is the load-bearing observation of the chapter. There is no phrasing, no system prompt, no amount of examples that puts a document the model has never seen into its context. The gap is not skill. **It is a missing capability**, and capabilities arrive exactly one way: by giving the model something it can ask you to run, and running it.
+
+That is the next chapter, and it is where the agent actually starts.
+
+---
+
+Next: [One Tool, Then Many](/docs/first-agent/first-tools), function calling from scratch: the schema, the request, the result, the second request.
+
+## Takeaways
+
+- The smallest useful version is one call with no loop. Build it first, not as a warm-up, but to find out empirically which cases need more.
+- A raw completion fails two ways at once: it returns prose your program can't consume, and it invents facts it doesn't have. These have different fixes and are routinely conflated.
+- Structured output fixes shape only. A typed hallucination looks more trustworthy than a prose one, which makes it worse.
+- Ask the model for decisions it can actually make from the input, like classification, extraction, and routing, not answers requiring data it was never given.
+- In a schema: reasoning first, enums for anything you branch on, extraction separate from answering, and a field for "was this enough?"
+- One call plus a switch is a router, not an agent. It has no blast radius and needs none of the operational machinery.
+- Scoring v0 against the ticket set turns "we need an agent" from an assumption into a measurement, and 19/20 correct classification with 0/20 resolved is a useful, honest result.
+- The ceiling is a missing capability, not a prompting failure. No wording puts an unseen document into the context.
