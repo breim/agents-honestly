@@ -1,0 +1,165 @@
+---
+title: "Meet the Problem"
+description: "Meridian Supply needs Atlas. What it has to do, and what \"done\" means before any code exists."
+---
+
+
+Part I was about the material. This part is about a job.
+
+Everything from here on is built for one company and one agent, because the decisions that matter in this field are not visible in the abstract. "Should this be a graph traversal or a SQL query" has no general answer; it has an answer for a specific question asked by a specific person about specific data. So we need that specificity, and we need it before writing a line of code.
+
+## Meridian Supply
+
+Meridian is an industrial parts distributor. Around 400 people, roughly 60,000 active SKUs, customers who are businesses rather than consumers, and revenue that arrives through negotiated contracts rather than a checkout page. Nothing about them is exotic, which is the point: they are the median enterprise that wants an agent.
+
+Their support team handles about 900 tickets a week across eleven people. The work splits roughly in three:
+
+- **Policy and product questions.** "Can we return opened electrical components," "what's the lead time on this line," "does our contract cover expedited freight." The answer exists in writing. Someone has to find it.
+- **Account and order status.** "Where is order 4921," "how much did we ship to Iberia in Q2," "why is this invoice different from the quote." The answer exists in a database. Someone has to query it.
+- **Things that need a decision.** A damaged shipment, a refund request, a customer threatening to leave. The answer requires judgment, and often an action with consequences.
+
+The first two categories are most of the volume and almost none of the value. That is the business case for Atlas, and it is worth stating plainly: **Meridian does not want an autonomous support organization. They want the eleven people to spend their week on the third category.**
+
+That sentence is a scope decision disguised as a motivation, and we will hold them to it.
+
+## The four systems, and what's wrong with each
+
+Atlas has to reach into four places. Each has a property that will cause a specific problem later, and it is worth meeting them now rather than in the chapter where they bite.
+
+<Figure caption="Four systems, four different retrieval problems. Treating them uniformly is the most expensive mistake available." frame={false}>
+
+```
+   ┌──────────────────┐   ┌──────────────────┐
+   │  POLICY CORPUS   │   │   WAREHOUSE      │
+   │  ~1,200 docs     │   │   Postgres, 40M  │
+   │  versioned, and  │   │   rows: orders,  │
+   │  some contradict │   │   shipments,     │
+   │  each other      │   │   line items     │
+   └────────┬─────────┘   └────────┬─────────┘
+            │ semantic             │ aggregation
+            │                      │
+            ▼        ┌──────┐      ▼
+                     │ATLAS │
+            ▲        └──────┘      ▲
+            │ relationships        │ side effects
+   ┌────────┴─────────┐   ┌────────┴─────────┐
+   │      CRM         │   │  ERP / PAYMENTS  │
+   │  accounts,       │   │  refunds, credit │
+   │  contracts,      │   │  notes, customer │
+   │  contacts, renew │   │  email           │
+   └──────────────────┘   └──────────────────┘
+```
+
+</Figure>
+
+**The policy corpus is not consistent.** Twelve hundred documents accumulated over nine years, with superseded versions still present and at least one pair that flatly disagree about return windows. A retrieval system that confidently surfaces the wrong one is worse than no retrieval, because it launders a stale document into an authoritative-sounding answer.
+
+**The warehouse is not a corpus.** "How much did we ship to Iberia in Q2" is an aggregation over forty million rows. No amount of embedding will answer it, and a vector index over row text is a slow, expensive, wrong way to do a `SUM`. This is the single most common architectural error in this field and it gets [its own chapter](/docs/retrieval/where-does-the-answer-live).
+
+**The CRM is about relationships.** "Why is the Acme account at risk" is not a lookup. It is three hops: this account, its open tickets and their sentiment, its contract renewal date, its recent order volume against last year. The answer is the shape of the connections.
+
+**The ERP has consequences.** A refund is real money leaving. It can succeed and time out ambiguously, it can succeed and then the follow-up email can fail, and it can be issued twice. Everything about this system is a durability problem wearing a business hat.
+
+## Four tickets
+
+Concrete enough to test against. These four shapes are what "in scope" will mean.
+
+> **#8812:** "Can we return the RB-400 relays? Box was opened but nothing installed."
+> Policy question. The answer is in a document, the document has a version, and the reply must cite it. Getting the *right* document matters more than writing a good sentence.
+
+> **#8817:** "Need the total tonnage we shipped to Iberia in Q2 vs Q1."
+> Not retrieval. A query, with a date range, a region mapping, and a unit. The failure mode is a confident wrong number, which is worse than an error.
+
+> **#8823:** "Pallet arrived crushed, three units unusable. Order 4921. Please credit us."
+> An action. Requires: verifying the order exists, checking the damage policy, computing an amount, deciding whether that amount is within Atlas's authority, and either issuing a credit or handing it to a person, exactly once, even if something crashes halfway.
+
+> **#8830:** "Following up again. Third time asking about the Q2 discrepancy."
+> Not a question at all. A signal. Whatever else Atlas does, it must recognize when a ticket needs a human and get out of the way.
+
+## The tension
+
+The two halves of Atlas pull in opposite directions, and that is the engineering interest of the whole project.
+
+**Answering wants breadth.** More sources, more retrieved context, more tools, more autonomy to go look. Every constraint you add makes it worse at finding things.
+
+**Acting wants narrowness.** Fewer capabilities, tighter limits, explicit approval, no ability to touch anything it wasn't asked to touch. Every capability you add widens the blast radius.
+
+Most agent demos only do the first half, which is why they demo well and ship badly. Meridian needs both in one system, and the resolution is one of the things this book is actually about: different authority for different actions, gated by [risk](/docs/human-in-the-loop/approval-gates) rather than by capability.
+
+## "Done" before code
+
+Here is where most projects go wrong, and it is not a technical failure.
+
+From [the last chapter](/docs/foundations/nondeterminism): you cannot write `expect(reply).toBe(...)`. So the usual acceptance-criteria habit, a list of behaviors someone will eyeball at the end, produces a system nobody can say is finished. The discipline that replaces it inverts the order: **write the criteria and the harness that measures them first, then build until it passes.**
+
+That means the acceptance spec is not prose. It has four parts, and they are different kinds of thing.
+
+### Invariants: enforced, never measured
+
+Properties that must hold on every run, without exception. These do not belong in a test suite; they belong in the harness, as code the agent cannot route around.
+
+| Invariant | Where it lives |
+| --- | --- |
+| Never surfaces one customer's data to another | Metadata filter on every retrieval, not a prompt instruction |
+| Never issues credit above the policy limit unassisted | Authority check in the tool, before the call |
+| Never claims a policy without citing a real, current document | Citation validated against the corpus |
+| Every external side effect is idempotent and logged | Idempotency key per action |
+| Always terminates | Step cap, spend cap, wall-clock cap |
+
+A prompt that says "never exceed the limit" is not an invariant. It is a request.
+
+### Rates: measured against a threshold you chose on purpose
+
+| Metric | Target | Why this number |
+| --- | --- | --- |
+| In-scope tickets resolved without a human | ≥ 60% | Below this, the eleven people don't get their week back |
+| Answer factually correct, when it answers | ≥ 95% | The cost of a wrong answer is a lost customer, not a retry |
+| Escalates when it should (recall on the escalate class) | ≥ 98% | Missing an escalation is the expensive error; a false escalation is free |
+| Cites the correct document version | ≥ 90% | Wrong-but-plausible citations are the corpus problem, made visible |
+
+<Aside type="note" title="Illustrative thresholds">
+These numbers are made up, and yours will be too, the first time. What matters is that they exist before the build, that each has a stated reason, and that the reasons are asymmetric where the costs are asymmetric. Notice that escalation recall is held higher than answer accuracy: it is cheaper to hand a person a ticket they didn't need than to confidently mishandle one they did.
+</Aside>
+
+### Budgets: the constraints that make it a product
+
+Median first response under 30 seconds, 95th percentile under 90. Cost per resolved ticket well under the human-minutes it replaces, with a hard per-ticket ceiling so no single pathological run can spend unbounded money. These are not optimizations to do later; a system that is correct and takes four minutes has failed.
+
+### The escalation contract
+
+What Atlas hands over, and in what state. A human receiving an escalated ticket gets the original message, everything Atlas retrieved, every tool it called and what came back, and a stated reason for stopping. **An escalation that arrives as "I couldn't handle this" is a failure even though it followed the rule.** It costs the human the whole investigation over again.
+
+Notice that this is a design requirement, discoverable now, that would otherwise be found in production by an annoyed support lead.
+
+## What Atlas is not
+
+Naming the exclusions is half the specification, and the half that gets skipped.
+
+Not doing in v0: outbound proactive contact, anything touching pricing or contract terms, anything for a customer who is in an active dispute, multi-language, voice, or writing to the CRM. Each is defensible later; each would double the surface now.
+
+And the exclusion that matters most: **Atlas does not close a ticket it did not resolve.** There is no "handled" state that means "responded to." Either the customer's problem is solved or a person owns it. Systems that blur this produce excellent dashboards and furious customers.
+
+## The dataset comes first
+
+One last thing before any code, and it is the concrete deliverable of this chapter.
+
+Take twenty real tickets, including the four above and, deliberately, several Atlas should *fail* to handle. Write down, for each, the correct outcome: the answer, the source it should come from, the action it should take, or the fact that it should escalate. That set is not documentation. It is the executable definition of done, and it is what every chapter in Part XIV will build on.
+
+The reason to do it now is not process hygiene. It is that **you cannot write the test set for a problem you don't understand yet**, so the attempt is the fastest available check on whether you do. If you can't say what the right answer is for twenty tickets, the agent won't be able to either, and no amount of prompt engineering downstream will recover a problem that was never specified.
+
+Only then do we write code. In the next chapter, exactly one API call.
+
+---
+
+Next: [One Call, Then Structure](/docs/first-agent/one-call), a raw completion and then a typed one. The smallest useful thing, and its limits.
+
+## Takeaways
+
+- Specificity is not decoration. Almost every architectural question in this field only has an answer relative to a concrete system and a concrete question.
+- Meridian's four systems each demand a different retrieval strategy: semantic for documents, SQL for aggregation, graph for relationships, live API for state. Treating them uniformly is the expensive default.
+- The two halves of the job conflict: answering wants breadth and autonomy, acting wants narrowness and gates. Building only the first half is why demos ship badly.
+- Acceptance criteria for a probabilistic system have four parts: invariants that are enforced, rates measured against deliberate thresholds, latency and cost budgets, and an escalation contract.
+- Asymmetric costs deserve asymmetric thresholds. Missing an escalation should be held to a higher bar than answering correctly.
+- A prompt instruction is not an invariant. If it must always hold, it belongs in code the model cannot route around.
+- Write the exclusions down. "Never closes a ticket it did not resolve" is worth more than most features.
+- Build the twenty-ticket set before the agent. Failing to write it is the cheapest possible signal that the problem isn't understood yet.
