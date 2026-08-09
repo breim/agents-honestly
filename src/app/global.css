@@ -35,6 +35,11 @@
   --text-display--letter-spacing: -0.032em;
   --text-display--font-weight: 600;
 
+  --text-title: clamp(1.625rem, 3.4vw, 2.125rem);
+  --text-title--line-height: 1.18;
+  --text-title--letter-spacing: -0.023em;
+  --text-title--font-weight: 600;
+
   --text-headline: 1.1875rem;
   --text-headline--line-height: 1.4;
   --text-headline--letter-spacing: -0.013em;

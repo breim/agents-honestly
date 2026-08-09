@@ -1,119 +1,112 @@
 import type { Metadata } from 'next';
+import type { ReactNode } from 'react';
 import Link from 'next/link';
+import { ArrowRight } from 'lucide-react';
 import { appName, appTagline, docsRoute, githubUrl } from '@/lib/shared';
 import { BayerWash } from '@/components/bayer-wash';
+import {
+  answerRoutes,
+  arc,
+  atlasForces,
+  catalogCategories,
+  catalogShape,
+  counts,
+  exclusions,
+  openingQuestions,
+  productionAgent,
+  startHere,
+  stateLadder,
+  tutorialAgent,
+} from '@/lib/landing-content';
 
 export const metadata: Metadata = {
   title: appName,
   description: appTagline,
 };
 
-const tutorialAgent = [
-  'lives inside a single process',
-  'runs for a few seconds',
-  'serves one cooperative user',
-  'spends a budget nobody measures',
-  'reads data nobody guards',
-];
+const primaryAction =
+  'pressable inline-flex h-11 items-center rounded-full bg-fd-primary px-6 text-sm font-medium text-fd-primary-foreground hover:bg-fd-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring';
+const secondaryAction =
+  'pressable inline-flex h-11 items-center rounded-full border bg-fd-card px-6 text-sm font-medium hover:border-fd-foreground/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring';
+const panel = 'rounded-2xl border bg-fd-card';
 
-const productionAgent = [
-  'lives across deploys',
-  'gets interrupted, and waits days for a human',
-  'runs a thousand times in parallel against a provider that throttles you',
-  'reads documents an attacker may have written',
-  'spends real money on every retry',
-];
-
-const atlasForces = [
-  ['Answer "what is our policy on…"', 'Retrieval, chunking, grounding, citations'],
-  ['Answer "how much did we sell in Spain in Q2"', 'That this is SQL, not retrieval'],
-  ['Never show one tenant another tenant’s documents', 'Metadata filtering as an authorization boundary'],
-  ['Ignore instructions hidden inside a document', 'That retrieved text is untrusted input'],
-  ['Issue a refund, then email the customer', 'Compensating a side effect when step two fails'],
-  ['Wait days for a customer to reply', 'State that outlives every process and deploy'],
-];
-
-const arc = [
-  ['I–II', 'The model, and the loop', 'You can build an agent with no framework and explain every line'],
-  ['III–V', 'Context, retrieval, knowledge', 'You know where an answer lives before you go looking for it'],
-  ['VI–IX', 'Workflows, graphs, tools, MCP', 'You can decide what should be an agent and choose the right remote boundary'],
-  ['X–XII', 'Durable execution, humans', 'It survives crashes, deploys, and a three-day wait for approval'],
-  ['XIII', 'Interface', 'People can use it across ability, language and voice, and trust what they see'],
-  ['XIV–XVII', 'Evals, tracing, reliability, security', 'You can prove it works and defend it when it is attacked'],
-  ['XVIII–XX', 'Production, governance, multi-agent', 'You can run it, introduce it into real work, and know when to stop'],
-];
-
-const counts = [
-  ['23', 'parts'],
-  ['214', 'chapters'],
-  ['66', 'catalog entries'],
-  ['49', 'on the core path'],
-];
-
-const exclusions = [
-  ['Not a framework manual.', 'Those docs exist and are better. This covers what they assume you already know.'],
-  ['Not prompt engineering.', 'Only the parts that generalize. The rest belongs in a blog post with a date on it.'],
-  ['Not machine learning.', 'Nothing here trains a model. Evals borrow the measurement discipline, not the gradients.'],
-];
-
-const sectionHeading = 'text-3xl tracking-tight font-semibold text-balance sm:text-4xl';
-const sectionLabel = 'text-caption font-medium text-fd-muted-foreground';
+function Section({
+  label,
+  heading,
+  lead,
+  children,
+}: {
+  label: string;
+  heading: string;
+  lead: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="mx-auto w-full max-w-3xl px-6 py-16 sm:py-20">
+      <div className="reveal-on-view">
+        <p className="text-caption font-medium text-fd-muted-foreground">{label}</p>
+        <h2 className="mt-3 text-title text-balance">{heading}</h2>
+        <p className="mt-4 text-body text-fd-muted-foreground text-pretty">{lead}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
 
 export default function HomePage() {
   return (
     <main className="flex-1">
-      <section className="relative isolate overflow-hidden px-6 pt-24 pb-24 sm:pt-32 sm:pb-32">
+      <section className="relative isolate overflow-hidden px-6 pt-24 pb-16 sm:pt-32 sm:pb-20">
         <BayerWash />
         <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
           <p className="animate-reveal text-caption font-medium text-fd-muted-foreground">
-            {appTagline}
+            {appName}
           </p>
           <h1 className="animate-reveal mt-5 text-display text-balance [animation-delay:60ms]">
-            {appName}
+            Building an agent is easy.
           </h1>
-          <p className="animate-reveal mt-6 max-w-xl text-body text-pretty [animation-delay:120ms]">
-            Building an agent is easy. Building an agentic system a company can depend on is
-            software engineering.
+          <p className="animate-reveal mt-4 max-w-2xl text-title font-normal text-fd-muted-foreground text-balance [animation-delay:120ms]">
+            Building an agentic system a company can depend on is software engineering.
           </p>
-          <div className="animate-reveal mt-10 flex flex-wrap items-center justify-center gap-3 [animation-delay:180ms]">
-            <Link
-              href={`${docsRoute}/preface`}
-              className="pressable inline-flex h-11 items-center rounded-full bg-fd-primary px-6 text-sm font-medium text-fd-primary-foreground hover:bg-fd-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring"
-            >
+          <p className="animate-reveal mt-7 max-w-xl text-body text-pretty [animation-delay:180ms]">
+            {appTagline} The failure modes are old — they come from retrieval, durable execution,
+            distributed transactions and authorization. What changes is that a nondeterministic,
+            expensive, occasionally-wrong component now sits in the middle.
+          </p>
+          <div className="animate-reveal mt-9 flex flex-wrap items-center justify-center gap-3 [animation-delay:240ms]">
+            <Link href={`${docsRoute}/preface`} className={primaryAction}>
               Start reading
             </Link>
-            <Link
-              href={`${docsRoute}/core-path`}
-              className="pressable inline-flex h-11 items-center rounded-full border bg-fd-card px-6 text-sm font-medium hover:border-fd-foreground/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring"
-            >
+            <Link href={`${docsRoute}/core-path`} className={secondaryAction}>
               The core path
             </Link>
           </div>
-          <p className="animate-reveal mt-8 text-caption text-fd-muted-foreground [animation-delay:240ms]">
-            Every sample in TypeScript and Python
+          <p className="animate-reveal mt-7 text-caption text-fd-muted-foreground [animation-delay:300ms]">
+            214 chapters · every sample in TypeScript and Python
           </p>
         </div>
+
+        <ul className="animate-reveal mx-auto mt-16 grid max-w-4xl gap-4 text-start [animation-delay:360ms] sm:grid-cols-3">
+          {openingQuestions.map(({ question, answer }) => (
+            <li key={question} className={`${panel} p-5`}>
+              <p className="text-headline text-balance">{question}</p>
+              <p className="mt-2 text-caption text-fd-muted-foreground text-pretty">{answer}</p>
+            </li>
+          ))}
+        </ul>
       </section>
 
-      <section className="mx-auto w-full max-w-3xl px-6 pb-28">
-        <div className="reveal-on-view">
-          <h2 className={sectionHeading}>
-            There is a lot of material on building an agent. Very little on running one.
-          </h2>
-          <p className="mt-5 text-body text-fd-muted-foreground text-pretty">
-            The gap is not subtle. The techniques that close it are mostly not new — they come from
-            information retrieval, durable execution, distributed transactions, authorization and
-            testing methodology, and the agent ecosystem is rediscovering them one incident at a
-            time.
-          </p>
-        </div>
-
-        <div className="reveal-on-view mt-10 grid gap-4 sm:grid-cols-2">
+      <Section
+        label="The gap"
+        heading="There is a lot of material on building an agent. Very little on running one."
+        lead="A tutorial agent and a production agent share a name and almost nothing else. The techniques that close the distance are mostly not new — the agent ecosystem is rediscovering them one incident at a time."
+      >
+        <div className="reveal-on-view mt-8 grid gap-4 sm:grid-cols-2">
           {[
             { label: 'A tutorial agent', items: tutorialAgent, muted: true },
             { label: 'A production agent', items: productionAgent, muted: false },
           ].map(({ label, items, muted }) => (
-            <div key={label} className="rounded-2xl border bg-fd-card p-6">
+            <div key={label} className={`${panel} p-6`}>
               <h3 className="text-headline">{label}</h3>
               <ul className="mt-4 space-y-2.5">
                 {items.map((item) => (
@@ -129,22 +122,47 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-      </section>
+      </Section>
 
-      <section className="mx-auto w-full max-w-3xl px-6 pb-28">
-        <div className="reveal-on-view">
-          <p className={sectionLabel}>The running project</p>
-          <h2 className={`${sectionHeading} mt-3`}>You build one system, three times.</h2>
-          <p className="mt-5 text-body text-fd-muted-foreground text-pretty">
-            Atlas is an internal agent for a fictional company. It answers questions across systems
-            that were never designed to be queried together, and it takes actions with consequences
-            — under a policy, with approval where the blast radius warrants it. First with no
-            framework, so you know what the loop is. Then as an explicit graph. Then on durable
-            execution, so it survives being real.
-          </p>
-        </div>
+      <Section
+        label="The one mistake"
+        heading="Almost every architectural mistake is the same mistake."
+        lead="State held by the wrong layer. Business state in the graph dies with the worker. Facts in the context window mean the agent is confidently reasoning from a stale copy. Decisions in the workflow make a deterministic engine responsible for judgment, and the first replay will disagree with itself."
+      >
+        <dl className={`reveal-on-view mt-8 divide-y ${panel}`}>
+          {stateLadder.map(([signal, owner]) => (
+            <div key={owner} className="flex flex-col gap-1 p-5 sm:flex-row sm:items-baseline sm:gap-6">
+              <dt className="flex-1 text-caption text-fd-muted-foreground text-pretty">{signal}</dt>
+              <dd className="text-caption font-medium">{owner}</dd>
+            </div>
+          ))}
+        </dl>
+      </Section>
 
-        <dl className="reveal-on-view mt-10 divide-y rounded-2xl border bg-fd-card">
+      <Section
+        label="Before the architecture"
+        heading="Where does the answer live?"
+        lead="Asked once per piece of information the agent needs. Read the rows as ingredients, not as a routing switch — most real questions need two or three at once, and an architecture that assumes one route per question will bend every question toward the path it happens to have."
+      >
+        <ul className={`reveal-on-view mt-8 divide-y ${panel}`}>
+          {answerRoutes.map(([sounds, reach, because]) => (
+            <li key={reach} className="grid gap-1 p-5 sm:grid-cols-[1fr_auto] sm:gap-6">
+              <div>
+                <p className="text-caption font-medium text-pretty">{sounds}</p>
+                <p className="mt-1 text-caption text-fd-muted-foreground text-pretty">{because}</p>
+              </div>
+              <p className="text-caption text-fd-muted-foreground sm:text-end">{reach}</p>
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section
+        label="The running project"
+        heading="You build one system, three times."
+        lead="Atlas is an internal agent for a fictional company. It answers questions across systems that were never designed to be queried together, and it takes actions with consequences. First with no framework, so you know what the loop is. Then as an explicit graph, so you can see what the abstraction buys. Then on durable execution, so it survives being real."
+      >
+        <dl className={`reveal-on-view mt-8 divide-y ${panel}`}>
           {atlasForces.map(([demand, forces]) => (
             <div key={demand} className="grid gap-1 p-5 sm:grid-cols-2 sm:gap-6">
               <dt className="text-caption font-medium text-pretty">{demand}</dt>
@@ -152,29 +170,23 @@ export default function HomePage() {
             </div>
           ))}
         </dl>
-      </section>
+      </Section>
 
-      <section className="mx-auto w-full max-w-3xl px-6 pb-28">
-        <div className="reveal-on-view">
-          <p className={sectionLabel}>How it is organized</p>
-          <h2 className={`${sectionHeading} mt-3`}>Two books sharing a table of contents.</h2>
-          <p className="mt-5 text-body text-fd-muted-foreground text-pretty">
-            Parts I–XX are a narrative: each assumes the ones before it, and Atlas accumulates
-            across all of them. Part XXI is a catalog you consult when you have the problem it
-            names — reading it end to end is possible and not especially useful.
-          </p>
-        </div>
-
-        <ul className="reveal-on-view mt-10 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border bg-fd-border sm:grid-cols-4">
+      <Section
+        label="How it is organized"
+        heading="Two books sharing a table of contents."
+        lead="Parts I–XX are a narrative: each assumes the ones before it, and Atlas accumulates across all of them. Part XXI is a catalog you consult when you have the problem it names — reading it end to end is possible and not especially useful."
+      >
+        <ul className="reveal-on-view mt-8 grid grid-cols-2 gap-px overflow-hidden rounded-2xl border bg-fd-border sm:grid-cols-4">
           {counts.map(([value, label]) => (
             <li key={label} className="bg-fd-card p-5">
-              <p className="text-3xl font-semibold tracking-tight tabular-nums">{value}</p>
+              <p className="text-title tabular-nums">{value}</p>
               <p className="mt-1 text-caption text-fd-muted-foreground">{label}</p>
             </li>
           ))}
         </ul>
 
-        <ol className="reveal-on-view mt-4 divide-y rounded-2xl border bg-fd-card">
+        <ol className={`reveal-on-view mt-4 divide-y ${panel}`}>
           {arc.map(([parts, title, outcome]) => (
             <li key={parts} className="grid gap-1 p-5 sm:grid-cols-[5rem_1fr] sm:gap-6">
               <span className="text-caption font-medium text-fd-muted-foreground tabular-nums">
@@ -187,50 +199,79 @@ export default function HomePage() {
             </li>
           ))}
         </ol>
-      </section>
 
-      <section className="mx-auto w-full max-w-3xl px-6 pb-28">
-        <div className="reveal-on-view">
-          <p className={sectionLabel}>Who this is for</p>
-          <h2 className={`${sectionHeading} mt-3`}>
-            You write software. You have called an LLM API at least once.
-          </h2>
-          <p className="mt-5 text-body text-fd-muted-foreground text-pretty">
-            You do not need an ML background — not because this is ML made easy, but because it is a
-            different job. Making a system behave when a model you did not train, cannot inspect and
-            do not control sits in the middle of it. What you need is comfort with a typed language,
-            an HTTP API, SQL, and the idea that a system can fail halfway through.
+        <div className={`reveal-on-view mt-4 ${panel} p-6`}>
+          <h3 className="text-headline">The catalog</h3>
+          <ul className="mt-4 flex flex-wrap gap-2">
+            {catalogCategories.map((category) => (
+              <li
+                key={category}
+                className="rounded-full border px-3 py-1 text-caption text-fd-muted-foreground"
+              >
+                {category}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-5 text-caption text-fd-muted-foreground text-pretty">
+            Sixty-six entries, each self-contained and written to the same shape:
           </p>
+          <p className="mt-2 text-caption font-medium text-pretty">{catalogShape.join(' · ')}</p>
         </div>
+      </Section>
 
-        <ul className="reveal-on-view mt-10 space-y-3">
+      <Section
+        label="Who this is for"
+        heading="You write software. You have called an LLM API at least once."
+        lead="You do not need an ML background — not because this is ML made easy, but because it is a different job. Making a system behave when a model you did not train, cannot inspect and do not control sits in the middle of it. What you need is comfort with a typed language, an HTTP API, SQL, and the idea that a system can fail halfway through."
+      >
+        <ul className="reveal-on-view mt-8 space-y-3">
           {exclusions.map(([claim, detail]) => (
-            <li key={claim} className="rounded-2xl border bg-fd-card p-5">
+            <li key={claim} className={`${panel} p-5`}>
               <p className="text-caption font-medium">{claim}</p>
               <p className="mt-1 text-caption text-fd-muted-foreground text-pretty">{detail}</p>
             </li>
           ))}
         </ul>
-      </section>
+      </Section>
 
-      <section className="mx-auto w-full max-w-3xl px-6 pb-32">
-        <div className="reveal-on-view flex flex-col items-center rounded-2xl border bg-fd-card px-6 py-14 text-center">
-          <h2 className={sectionHeading}>Start with the preface.</h2>
+      <section className="mx-auto w-full max-w-3xl px-6 py-16 sm:py-20">
+        <div className="reveal-on-view">
+          <p className="text-caption font-medium text-fd-muted-foreground">Start here</p>
+          <h2 className="mt-3 text-title text-balance">Five chapters before the build begins.</h2>
+        </div>
+
+        <ul className="reveal-on-view mt-8 grid gap-3 sm:grid-cols-2">
+          {startHere.map(([slug, title, summary], i) => (
+            <li key={slug} className={i === 0 ? 'sm:col-span-2' : undefined}>
+              <Link
+                href={`${docsRoute}/${slug}`}
+                className={`pressable group flex h-full flex-col ${panel} p-5 hover:border-fd-foreground/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring`}
+              >
+                <h3 className="text-headline text-balance">{title}</h3>
+                <p className="mt-1.5 text-caption text-fd-muted-foreground text-pretty">
+                  {summary}
+                </p>
+                <ArrowRight
+                  aria-hidden
+                  className="mt-auto pt-5 size-4 box-content text-fd-muted-foreground transition-transform duration-200 ease-out group-hover:translate-x-0.5"
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+
+        <div
+          className={`reveal-on-view mt-12 flex flex-col items-center ${panel} px-6 py-14 text-center`}
+        >
+          <h2 className="text-title text-balance">Start with the preface.</h2>
           <p className="mt-4 max-w-md text-caption text-fd-muted-foreground text-pretty">
             Or take the core path — 49 chapters that get you to something you can ship and defend.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Link
-              href={`${docsRoute}/preface`}
-              className="pressable inline-flex h-11 items-center rounded-full bg-fd-primary px-6 text-sm font-medium text-fd-primary-foreground hover:bg-fd-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring"
-            >
+            <Link href={`${docsRoute}/preface`} className={primaryAction}>
               Start reading
             </Link>
-            <a
-              href={githubUrl}
-              rel="noreferrer noopener"
-              className="pressable inline-flex h-11 items-center rounded-full border px-6 text-sm font-medium hover:border-fd-foreground/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fd-ring"
-            >
+            <a href={githubUrl} rel="noreferrer noopener" className={secondaryAction}>
               View on GitHub
             </a>
           </div>
