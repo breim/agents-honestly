@@ -1,0 +1,157 @@
+---
+title: "When Not to Build an Agent"
+description: "The cheapest agent is the one you replaced with three if-statements and a good prompt."
+---
+
+
+Part I has been about the model's interface: what it reads, what it costs, what it guarantees, and what it refuses to guarantee. The last thing worth knowing about that interface is when not to wrap it in a loop at all.
+
+This chapter is the one the [preface](/docs/preface) warned you was not neutral. The claim is simple: **most systems being built as agents should not be**, and the ones that should are recognizable by a single property that has nothing to do with how impressive the task sounds.
+
+## The direction of the evidence
+
+Industry survey numbers in this field are noisy: methodologies differ, incentives differ, and the absolute percentages should be read with suspicion. But one finding is consistent across sources in a way that is hard to explain away.
+
+As teams moved from single LLM calls to autonomous agentic architectures, **reported failure rates went up, not down**, from roughly seven in ten to roughly eight or nine in ten, depending on whose survey you read. Gartner separately expects more than 40% of agentic projects to be cancelled by the end of 2027.
+
+The diagnosis in those post-mortems is remarkably uniform, and it is not "the model wasn't smart enough." It is architecture: autonomy granted where it wasn't needed, no checkpoint where the blast radius warranted one, no way to tell what the system did or whether it worked. Teams reached up the ladder and paid for the rungs.
+
+<Aside type="note" title="Read this as direction, not magnitude">
+Treat those percentages as illustrative. The transferable finding is the *slope*: the same organizations, the same models, the same problems, getting worse outcomes from a more autonomous architecture. That is a design signal, and it is the whole argument of this chapter.
+</Aside>
+
+## The one question
+
+From [What an Agent Actually Is](/docs/foundations/what-is-an-agent): a program is an agent when the model decides what happens next. Invert it and you get the test.
+
+> **Do you know the sequence of steps before the run starts?**
+>
+> If yes, write the sequence. If no, you need something that can decide at run time.
+
+Two clarifications do most of the work.
+
+**"Known" means known in code, not known to a person.** "Our support process is: look up the order, check the shipment, reply" is known, and you can write it. "It depends what the ticket says" is only unknown if the *branching* is genuinely open. If it's four cases, that's a `switch`, and a model can pick the branch without owning the control flow. Deciding once into a set you enumerated is a router, and a router is a workflow.
+
+**The unknown must be the sequence, not the content.** Almost every task has unpredictable *content*. You don't know what the ticket says or what the customer wants. That is not what makes an agent necessary. Unpredictable content inside a fixed sequence is a workflow with a model in it, which is the most under-used architecture in this field and gets its own section below.
+
+## What the loop actually costs
+
+An agent is not a slightly more flexible function. It is a different operational category, and moving up costs you six things at once.
+
+| | Deterministic workflow | Agent |
+| --- | --- | --- |
+| **Latency** | One round trip per step you wrote | N sequential round trips, N unknown until it ends |
+| **Cost** | Predictable per run | Multiplies with iterations, each resending a growing history |
+| **Behavior** | Same input, same path | [Different path per run](/docs/foundations/nondeterminism), different systems touched |
+| **Debugging** | A stack trace | A transcript, and no call graph to reason from |
+| **Blast radius** | What you called | Anything in the tool list, in any order |
+| **Testing** | Assertions | [Rates over runs](/docs/evals/eval-discipline), with a threshold you have to choose |
+
+The last three are where the real bill lands. Once control flow is decided at run time, [tracing](/docs/observability/what-a-trace-must-answer) stops being nice-to-have and becomes the only way to know what happened; [evals](/docs/evals/eval-discipline) stop being optional because assertions no longer work; [approval gates](/docs/human-in-the-loop/risk-tiers) become mandatory wherever an action is hard to reverse, and [what the agent may reach at all](/docs/security/threat-model) becomes a decision rather than a consequence. Parts XII, XIV, XV and XVII are, in effect, the invoice for this table.
+
+None of that is an argument against agents. It is an argument against paying for them when the leftmost column would have done the job.
+
+## The ladder, with the test at each rung
+
+Same task, six architectures, and the honest question that moves you up one:
+
+```
+   Function ──▶ Chain ──▶ Router ──▶ Workflow ──▶ Agent ──▶ Multi-agent
+
+   Function      "Does anything here need judgment?"
+                 → getOrder(id). No model at all. Cheapest thing that works.
+
+   Chain         "Is the order of steps fixed?"
+                 → classify → retrieve → draft. Model fills content, you own flow.
+
+   Router        "Can I enumerate the branches?"
+                 → triage into one of four queues, then run that queue's chain.
+
+   Workflow      "Does it need to survive failure, waits, and deploys?"
+                 → same fixed steps, on durable execution. Still not an agent.
+
+   Agent         "Is the number and order of steps genuinely unknown?"
+                 → and does the next step depend on what the last one returned?
+
+   Multi-agent   "Is one context window actually insufficient?"
+                 → almost always no. See Part XIX.
+```
+
+Two rungs deserve a flag. **Workflow is not a step toward agent.** It is a parallel concern. Durability answers "does this survive a crash," autonomy answers "who decides the next step," and conflating them produces the common mistake of reaching for an agent when what you needed was a retry policy. And **multi-agent is the rung with the worst ratio of adoption to justification**; [Part XIX](/docs/multi-agent/when-not-to) is an entire argument for staying off it.
+
+## The pattern almost everyone skips
+
+Between "hardcoded logic" and "autonomous agent" there is a shape that solves most real problems, and it is chronically under-built because it doesn't demo well:
+
+<Figure caption="The model does the judgment. Your code does the control flow. Neither does the other's job." frame={false}>
+
+```
+   ┌──────────────────────────────────────────────────────┐
+   │  your code owns the sequence                         │
+   │                                                      │
+   │   fetch ticket ──▶ ┌─────────┐ ──▶ route ──▶ act     │
+   │                    │  MODEL  │       │               │
+   │                    │ classify│       └── if urgent:  │
+   │                    │  + score│              page_human│
+   │                    └─────────┘                        │
+   │                    one call, typed output             │
+   └──────────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+One model call, [structured output](/docs/foundations/structured-output) so the result is a typed value, and ordinary code around it. You get the model's judgment on the genuinely ambiguous part: is this angry, is this a refund request, which of these documents answers the question. And you keep a call graph, a stack trace, real unit tests, predictable cost, and a bounded blast radius.
+
+The consensus emerging from teams who have shipped both is a layered system: **deterministic flow for the bulk of the work, with autonomy reserved for the exploratory tail.** Not one architecture applied uniformly because the whole thing got called "the agent."
+
+## How to tell you over-built
+
+You do not need a design review for this. You need your traces.
+
+Pull the last few hundred runs and look at the trajectories. Then read the following list, where every row is a finding, not a hypothesis:
+
+- **The step count is the same every run.** You have a chain paying agent prices: extra latency, extra tokens, and a variance budget you're not using.
+- **The tools are called in the same order every run.** That order is a function. Write it.
+- **One tool accounts for nearly every call.** The model isn't choosing; you have a wrapper with a planning tax.
+- **The prompt contains the algorithm.** "First check X, then if Y do Z" in a system prompt is source code in the worst possible language: unversioned, untyped, untestable, and re-parsed on every request.
+- **You added retries until it passed.** Retrying a nondeterministic path until you like the answer is not reliability. It's sampling until the result is convenient.
+
+Every one of those is a downgrade opportunity, and downgrading is a normal engineering outcome rather than an admission of failure. Fewer moving parts, less money, more predictability, same result.
+
+## When you genuinely need one
+
+The inverse list is short, which is the point. Build the agent when:
+
+- **The step count is unknown until run time**, and depends on what earlier steps returned. Investigating why an account is at risk takes as many hops as the evidence takes.
+- **The relevant tools depend on findings.** You cannot enumerate the path because which question to ask next is the thing being decided.
+- **The input space genuinely has a long tail** you could not enumerate if you tried, and you have checked that assumption against real traffic rather than assuming it.
+- **Exploration is the deliverable**, not a means to a known end. Research, debugging, open-ended analysis.
+
+Notice that all four are statements about the *shape of the problem*, and none is a statement about how sophisticated the system should look.
+
+<Aside type="tip" title="The legitimate reason to build one first">
+There is one good argument for starting at a higher rung than the problem needs: you don't yet know the distribution. Ship an agent, instrument it, watch a few hundred real runs, and *then* look at the trajectories. The fixed spine you can promote to code will be visible, and so will the genuinely branching tail that has to stay adaptive.
+
+That is a deliberate, time-boxed discovery strategy with a downgrade planned into it. It is not the same as shipping an agent and never looking.
+</Aside>
+
+## Where Part I leaves you
+
+You now know what the interface is: a stateless function that reads tokens, spends a budget you re-pay every call, guarantees shape but not content, and varies for reasons that have nothing to do with your code. And you know when wrapping it in a loop earns its cost, which is less often than the discourse suggests.
+
+Part II builds Atlas out of exactly that, by hand and with no framework, so that when a framework does appear, you know precisely which of these problems it is solving and which it is only hiding.
+
+---
+
+Next: [Before the Agent: Process Discovery and Value](/docs/foundations/process-discovery-and-value), mapping the work, baseline, authority, and exit criteria before Atlas becomes a software project.
+
+## Takeaways
+
+- Reported failure rates rose as teams moved from LLM calls to autonomous architectures. The post-mortems blame architecture, not model capability.
+- The test is one question: do you know the sequence of steps before the run starts? Unpredictable *content* inside a fixed sequence is a workflow, not an agent.
+- A model that decides once, into branches you enumerated, is a router. The line is whether it decides again after seeing the result.
+- Moving up the ladder costs latency, cost predictability, reproducibility, debuggability, blast radius, and testability, all at once. Evals, tracing, and approval gates become mandatory rather than optional.
+- Durability and autonomy are independent axes. Needing to survive a crash is not a reason to hand over control flow.
+- The under-built pattern is one model call for the judgment step inside deterministic code. Layered beats uniform: fixed flow for the bulk, autonomy for the tail.
+- Your traces will tell you if you over-built: identical step counts, identical tool order, one dominant tool, or the algorithm written in the system prompt.
+- Starting with an agent to learn the distribution is legitimate, if downgrading is part of the plan.
