@@ -1,0 +1,194 @@
+---
+title: "Shadow Run"
+description: "Run the new version against live traffic without showing anyone the output."
+---
+
+## Problem
+
+A prompt change passes the [golden set](/docs/patterns/evaluation/golden-set). Two hundred and fifty curated cases, all green.
+
+That is a real signal and a narrow one. The fixtures were written by your team, from tickets someone chose, at a moment that has passed. Real traffic contains phrasings nobody anticipated, attachment shapes nobody curated, and a distribution that has drifted since the set was built. A change can be better on all 250 and worse on the eleven percent of live tickets that arrive as forwarded email threads.
+
+The obvious next step is [a canary](/docs/patterns/evaluation/canary-eval), but that exposes real customers to an unvalidated version. Between "tested on fixtures" and "serving customers" there is a gap, and for a change with any risk you want something in it.
+
+## Forces
+
+- **Fixtures are not traffic.** Curated distributions diverge from real ones, and the divergence grows.
+- **Canaries expose customers**, which is acceptable at some risk levels and not others.
+- **The inputs already exist**: you have live requests and recorded runs.
+- **Comparison needs the same input through both versions**, which live traffic provides for free.
+- **Running a second version costs tokens** and, if it executes tools, has side effects.
+- **A prompt change invalidates recorded model responses**, which limits the cheaper variant.
+
+## Solution
+
+Two variants, and choosing between them is the whole design decision.
+
+<Figure caption="Replay is free and cannot cross a change to the prompt or the model. Execution costs tokens and can. Neither shows a customer anything." frame={false}>
+
+```
+   ① SHADOW REPLAY          recorded model + tool responses, new CODE
+   ┌──────────────────────────────────────────────────────────────┐
+   │ 1,000 recorded runs ──▶ new dispatcher / policy / retrieval   │
+   │ deterministic · free · no model calls · no side effects        │
+   │ VALID ONLY while prompt, model, sampling unchanged             │
+   │ answers: does my CODE change behaviour on real traffic?        │
+   └──────────────────────────────────────────────────────────────┘
+
+   ② SHADOW EXECUTION       live inputs, fresh model calls, output discarded
+   ┌──────────────────────────────────────────────────────────────┐
+   │ live request ──┬──▶ stable version   ──▶ SERVED to the user    │
+   │                └──▶ candidate version ──▶ scored, then dropped │
+   │ costs double tokens · TOOLS MUST BE STUBBED                    │
+   │ answers: does my PROMPT change behaviour on real traffic?      │
+   └──────────────────────────────────────────────────────────────┘
+
+   both: zero customer exposure · diff DECISIONS, not text
+```
+
+</Figure>
+
+Four rules:
+
+**Diff decisions, not text.** Which tools were called, whether the run resolved or escalated, which chunks were cited, the turn count, the cost. Text differs on every run of a nondeterministic system and tells you nothing; a changed *decision* is a finding.
+
+**Stub every write in shadow execution.** The candidate must not issue credits, send replies, or mutate state. Route its class ④–⑤ calls to a counter that records what it *would* have done, which is also the most interesting output, because a candidate proposing a different action is exactly what you want to see before it serves anyone.
+
+**Know which variant answers your question.** Replay is valid only while the prompt, the model, and its sampling parameters are unchanged: the recorded responses were generated for a different question, or by a different answerer, so replaying them past that line produces results that look valid and mean nothing. [Detect both kinds of divergence](/docs/observability/replay-debugging) and fail loudly rather than reporting a number: a model swap moves no prompt text, so comparing prompts alone will not catch it.
+
+**Sample, and stratify.** Shadow execution doubles tokens, so 1–2% of traffic is plenty, but sample across routes and tenants rather than uniformly, or the rare path you were worried about contributes four runs.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/shadow.ts"
+const SHADOW_FRACTION = 0.02;
+
+export async function handleWithShadow(req: Request, ctx: RunContext) {
+  const stable = await runAgent(req, ctx, STABLE_BUNDLE);
+
+  if (shouldShadow(req, SHADOW_FRACTION)) {
+    // Fire-and-forget: the customer never waits for the candidate.
+    void runShadow(req, ctx, CANDIDATE_BUNDLE, stable)
+      .catch(err => metrics.inc('shadow.error', { err: String(err) }));
+  }
+  return stable;   // the customer always gets the stable version
+}
+
+async function runShadow(
+  req: Request, ctx: RunContext, bundle: ConfigBundle, stable: Outcome,
+) {
+  // Writes are STUBBED. The candidate must not issue a credit or send mail —
+  // and what it WOULD have done is the most interesting output here.
+  const shadowCtx = { ...ctx, dispatcher: stubbingDispatcher(ctx), shadow: true };
+  const candidate = await runAgent(req, shadowCtx, bundle);
+
+  // Diff DECISIONS. Text differs on every run and means nothing.
+  await store.putShadowDiff({
+    runId: ctx.runId,
+    outcome:    [stable.outcome, candidate.outcome],
+    toolsCalled:[stable.tools,   candidate.tools],
+    citedIds:   [stable.cited,   candidate.cited],
+    turns:      [stable.turns,   candidate.turns],
+    costMicros: [stable.cost,    candidate.cost],
+    wouldHaveWritten: shadowCtx.dispatcher.stubbedCalls,   // the payoff
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/shadow.py"
+SHADOW_FRACTION = 0.02
+
+
+# The event loop keeps only WEAK references to tasks, so a bare
+# create_task() can be garbage-collected mid-execution and the shadow run
+# would vanish silently. Hold a strong reference until it finishes.
+_shadow_tasks: set[asyncio.Task] = set()
+
+
+async def handle_with_shadow(req, ctx):
+    stable = await run_agent(req, ctx, STABLE_BUNDLE)
+
+    if should_shadow(req, SHADOW_FRACTION):
+        # Fire-and-forget: the customer never waits for the candidate.
+        task = asyncio.create_task(
+            _run_shadow(req, ctx, CANDIDATE_BUNDLE, stable))
+        _shadow_tasks.add(task)
+        task.add_done_callback(_shadow_tasks.discard)
+        # Nothing awaits this task, so a failure would otherwise surface
+        # only as an unretrieved-exception warning. Count it instead.
+        task.add_done_callback(_record_shadow_failure)
+
+    return stable          # the customer always gets the stable version
+
+
+def _record_shadow_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        metrics.inc("shadow.error", err=str(task.exception()))
+
+
+async def _run_shadow(req, ctx, bundle, stable) -> None:
+    # Writes are STUBBED. What the candidate WOULD have done is the most
+    # interesting output here.
+    shadow_ctx = replace(ctx, dispatcher=stubbing_dispatcher(ctx), shadow=True)
+    candidate = await run_agent(req, shadow_ctx, bundle)
+
+    # Diff DECISIONS. Text differs on every run and means nothing.
+    await store.put_shadow_diff(
+        run_id=ctx.run_id,
+        outcome=(stable.outcome, candidate.outcome),
+        tools_called=(stable.tools, candidate.tools),
+        cited_ids=(stable.cited, candidate.cited),
+        turns=(stable.turns, candidate.turns),
+        cost_micros=(stable.cost, candidate.cost),
+        would_have_written=shadow_ctx.dispatcher.stubbed_calls,   # the payoff
+    )
+```
+
+</Tab>
+</Tabs>
+
+`wouldHaveWritten` is the field that justifies the whole exercise. A candidate that would have issued a credit where the stable version escalated, or vice versa, is a behavioural change you get to see and discuss before any customer is affected, which is not available from any fixture suite.
+
+## Trade-offs
+
+**Shadow execution doubles token spend on sampled traffic.** At 2% that is negligible; at 50% it is a second production system. Sample small and stratify rather than sampling broadly.
+
+**Stubbing has to be complete and it is easy to get wrong.** A single unstubbed write in the candidate path means the shadow issued a real credit. Enforce it structurally: the shadow context gets a dispatcher that *cannot* execute class ④–⑤, rather than a flag every tool remembers to check.
+
+**Replay goes stale the moment the prompt or the model moves.** This is the limit that surprises people: the cheap, deterministic, free variant covers dispatcher, policy, and post-retrieval changes and cannot cover the two changes you most want to test. [Divergence detection](/docs/observability/replay-debugging) is what stops it silently answering the wrong question.
+
+**Diffs need triage.** A thousand shadow runs produce hundreds of small differences, most of them noise from nondeterminism. Group by decision type, look at outcome flips first, and expect that reading them is a person's afternoon rather than a dashboard.
+
+## When not to use it
+
+**For a pure refactor, use replay alone.** The expected diff is zero, no model calls are needed, and it costs nothing. [The zero-diff assertion](/docs/observability/replay-debugging) is a stronger check than any sampled comparison.
+
+**When the change is low-risk and the golden set covers it.** A tightened tool description with clean fixtures does not need a shadow phase. Reserve it for changes whose blast radius justifies the setup.
+
+**When you cannot stub the writes.** If the candidate path cannot be prevented from acting, do not run it. A shadow with side effects is a canary you did not admit to running.
+
+**When traffic is too low to be representative.** Ten shadow runs a day is anecdote. Below a useful sample, go straight from fixtures to a small canary with tight gates.
+
+<Aside type="note" title="The gap this fills is the one where confidence actually comes from">
+The rungs are: [fixtures](/docs/patterns/evaluation/golden-set), replay, shadow execution, [canary](/docs/patterns/evaluation/canary-eval), full. Each one trades exposure for realism.
+
+Fixtures have no exposure and no realism: your distribution, your phrasings, your moment. A canary has full realism and real exposure. Shadow execution is the only rung with **real traffic and zero exposure**, which makes it the only place you can be wrong about a prompt change for free.
+
+Most teams skip it, because it needs stubbing infrastructure and a diff-triage habit and it does not produce a number anyone asked for. What it produces instead is the sentence you want before a canary: *on two thousand real tickets, the candidate made a different decision on nineteen, and here they are.*
+
+That is a materially better basis for a rollout decision than a fixture pass rate, and it is available without anyone being affected.
+</Aside>
+
+## Related
+
+- [Canary Eval](/docs/patterns/evaluation/canary-eval): the next rung, where real customers are served
+- [Golden Set](/docs/patterns/evaluation/golden-set): the rung below, with no exposure and no realism
+- [Replay-Driven Debugging](/docs/observability/replay-debugging): the replay variant, and why divergence detection matters
+- [Rollout and In-Flight Migration](/docs/production/rollout): the full ladder and the blast-radius gating
+- [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion): the decision fields worth diffing
