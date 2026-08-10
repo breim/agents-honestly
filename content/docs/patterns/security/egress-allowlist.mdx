@@ -1,0 +1,176 @@
+---
+title: "Egress Allowlist"
+description: "Constrain where an agent can send data, so exfiltration has nowhere to go."
+---
+
+## Problem
+
+An agent that reads private data and processes attacker-influenced text is dangerous only if the attacker can get bytes *out*. That third element is the one teams miss, because an exfiltration vector almost never looks like one.
+
+The canonical demonstration is **EchoLeak** (CVE-2025-32711, CVSS 9.3): a crafted external email carries hidden instructions; when the assistant later answers a sensitive internal question, it emits a markdown image pointing at an attacker URL, and the client fetches it automatically. Zero clicks. The data leaves in a query string.
+
+The instructive part is what did not stop it. A cross-prompt-injection classifier was in place, and the researchers found phrasings that got past it, which is the point this book keeps arriving at: *detection* against an adversary who can iterate is not a boundary. Microsoft has since fixed it with a server-side change, and there is no indication it was exploited before disclosure; the vulnerability is interesting here as a demonstration of the shape, not as a live risk.
+
+## Forces
+
+- **Exfiltration channels do not look like network calls.** A rendered image, a citation link, a webhook parameter, a hostname.
+- **Anything reaching a resolver is a channel**, including DNS, which carries data in the name itself.
+- **The agent legitimately needs some outbound access**: a model provider, a broker, sometimes a customer's inbox.
+- **Detection fails against iteration.** The attacker rewrites until something passes.
+- **Blocking too much breaks the product**, and a control that breaks things gets removed.
+- **Denials are high-signal** and almost nobody alerts on them.
+
+## Solution
+
+**Default deny, allowlist by destination, at every layer that can carry bytes**, and remove the model's ability to name a destination at all wherever you can.
+
+<Figure caption="Four layers, because the channel is not always a socket. EchoLeak needed the third one missing; the fourth is the one everyone forgets." frame={false}>
+
+```
+   ①  NETWORK        default-deny egress from the agent's process
+       │             allow: broker socket · model endpoint (pinned)
+       │             deny:  package registries at runtime · everything else
+       ▼
+   ②  TOOL ARGUMENTS no free-form URL parameters
+       │             webhook_url, callback, redirect_to — none of them exist
+       │             recipients resolve from records, not from the model
+       ▼
+   ③  RENDERED OUTPUT strip or allowlist markdown images and links
+       │             no remote images · no auto-fetched resources
+       │             this is the EchoLeak layer
+       ▼
+   ④  DNS            resolve through a controlled resolver
+                     a hostname IS a payload
+```
+
+</Figure>
+
+Four rules:
+
+**Deny the package registry at runtime.** `pip install` inside a live agent process is arbitrary third-party code execution in the middle of your run, and it is how a dependency-confusion attack reaches a system that never deploys unreviewed code. Dependencies are baked at image build.
+
+**Delete URL-shaped parameters rather than validating them.** A `webhook_url` argument with a hostname allowlist is a policy someone must maintain; a tool with no such argument has no policy to get wrong. This is [the same move as removing the recipient from `send_reply`](/docs/patterns/security/tool-permission-boundary), and it is the strongest available form of this pattern.
+
+**Treat model-authored output as an egress surface.** Markdown images, reference-style links, HTML, and anything a client will auto-fetch. The safe default for an agent handling private data is that its output contains **no remote resources at all**: text and internal links only.
+
+**Alert on denials, do not just drop them.** A blocked connection to an unexpected host is the highest-signal detection available anywhere in [Part XVII](/docs/security/threat-model). It is what a successful injection looks like from the outside, and a silent drop throws that away.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/security/egress.ts"
+// ① network — default deny. Everything not listed is refused and alerted.
+export const ALLOWED_HOSTS = new Set([
+  'broker.internal',           // the only path to credentials and backends
+  'api.eu.provider.example',   // pinned model endpoint, pinned region
+]);
+
+export function guardOutbound(url: URL, ctx: RunContext): void {
+  if (ALLOWED_HOSTS.has(url.hostname)) return;
+  // A denial is a detection, not an error to swallow.
+  metrics.inc('egress.denied', { host: url.hostname, run: ctx.runId });
+  alerts.egressDenied(url.hostname, ctx);
+  throw new EgressDenied(url.hostname);
+}
+
+// ③ rendered output — the EchoLeak layer. Applied to everything the model
+// produces, before any client sees it.
+const REMOTE_IMAGE = /!\[[^\]]*\]\((https?:\/\/[^)]+)\)/g;
+const REF_LINK_DEF = /^\s*\[[^\]]+\]:\s*https?:\/\/\S+/gm;   // reference-style
+const HTML_SRC     = /<(img|script|iframe|link)[^>]*>/gi;
+
+export function stripRemoteResources(markdown: string): string {
+  return markdown
+    .replace(REMOTE_IMAGE, '[image removed]')
+    .replace(REF_LINK_DEF, '')       // the indirect form, easy to miss
+    .replace(HTML_SRC, '');
+}
+
+// ② tool arguments — enforced by absence. There is no url parameter to
+// validate, on any tool, anywhere in the catalogue.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/security/egress.py"
+import re
+
+# ① network — default deny. Everything not listed is refused and alerted.
+ALLOWED_HOSTS = {
+    "broker.internal",           # the only path to credentials and backends
+    "api.eu.provider.example",   # pinned model endpoint, pinned region
+}
+
+
+def guard_outbound(url, ctx) -> None:
+    if url.hostname in ALLOWED_HOSTS:
+        return
+    # A denial is a detection, not an error to swallow.
+    metrics.inc("egress.denied", host=url.hostname, run=ctx.run_id)
+    alerts.egress_denied(url.hostname, ctx)
+    raise EgressDenied(url.hostname)
+
+
+# ③ rendered output — the EchoLeak layer.
+REMOTE_IMAGE = re.compile(r"!\[[^\]]*\]\((https?://[^)]+)\)")
+REF_LINK_DEF = re.compile(r"^\s*\[[^\]]+\]:\s*https?://\S+", re.MULTILINE)
+HTML_SRC = re.compile(r"<(img|script|iframe|link)[^>]*>", re.IGNORECASE)
+
+
+def strip_remote_resources(markdown: str) -> str:
+    out = REMOTE_IMAGE.sub("[image removed]", markdown)
+    out = REF_LINK_DEF.sub("", out)      # the indirect form, easy to miss
+    return HTML_SRC.sub("", out)
+
+
+# ② tool arguments — enforced by absence. There is no url parameter to
+# validate, on any tool, anywhere in the catalogue.
+```
+
+</Tab>
+</Tabs>
+
+Note that layer ③ is a *transformation*, not a classifier. It does not try to decide whether a URL is malicious. It removes remote resources unconditionally. That is what makes it a boundary rather than a filter, and it is why it holds where a classifier tuned to spot the payload does not.
+
+## Trade-offs
+
+**Legitimate remote content stops working.** Product images in replies, avatars, embedded charts. The fix is to proxy them through your own domain from an internal store, which is work, and it is the work that converts an unbounded channel into a bounded one.
+
+**Allowlists must be maintained.** A new provider region, a new internal service, a vendor changing hostnames. Stale allowlists cause outages, so the list belongs in the [config bundle](/docs/production/versioning) with a review path, not in a firewall rule nobody can find.
+
+**DNS is easy to forget.** An agent that cannot open a socket but can resolve `<base64-payload>.attacker.example` still leaks, one hostname at a time. Route resolution through a controlled resolver, or accept that layer ① is partial.
+
+**Full denial is not always possible.** [`send_reply` is a class ⑤ external write](/docs/tools/read-and-write-tools): the product *is* sending bytes to a customer. The mitigation is that the recipient comes from the ticket record and the body carries no remote resources, which bounds the channel rather than closing it.
+
+## When not to use it
+
+**When there is no private data.** An agent over a public corpus with no user context has nothing worth exfiltrating. Confirm that honestly, including the conversation itself, which is frequently private even when the corpus is not.
+
+**When there is no untrusted content.** [The trifecta needs all three](/docs/security/prompt-injection). If nothing attacker-influenced can enter the context, egress is a hygiene measure rather than a control, and re-check that assumption whenever a new ingestion path appears.
+
+**As the only control.** Egress bounds the *leak*; it does nothing about an agent induced to issue a credit or send a wrong reply. [Capability constraints](/docs/patterns/security/tool-permission-boundary) are a separate axis.
+
+**Where it would break a core workflow with no proxy path.** Then be explicit: document the exception, narrow it to specific hosts, and raise the [risk tier](/docs/human-in-the-loop/risk-tiers) on that path rather than quietly allowing everything.
+
+<Aside type="caution" title="This is usually the cheapest element of the trifecta to remove">
+[Private data, untrusted content, and an exfiltration vector](/docs/security/prompt-injection): any two are survivable, all three is an incident. For most agents the first two are the product: reading customer records and processing customer-written text is the job.
+
+The third is often removable at almost no cost. An agent that can read your database and process hostile tickets is contained if there is nowhere for the bytes to go, and "no remote images in output, no URL parameters on tools, default-deny egress" costs a proxy for product images and nothing else.
+
+EchoLeak is the argument stated as a CVE: an injection classifier was in place and the researchers found phrasings past it. The control that would have held is the one that removes the capability, no remote resources in output, rather than the one inspecting its use.
+</Aside>
+
+## Related
+
+- [Prompt Injection](/docs/security/prompt-injection): the lethal trifecta, and why element three is the one to remove
+- [Sandboxing and Credential Boundaries](/docs/security/sandboxing): egress policy for generated code, and the broker socket
+- [Tool Permission Boundary](/docs/patterns/security/tool-permission-boundary): removing URL parameters rather than validating them
+- [Output Guardrail](/docs/patterns/security/output-guardrail): the other check on the way out, and why it is mitigation
+- [PII, Audit, and Compliance](/docs/security/pii-and-compliance): what is actually at stake in the bytes that leave
+
+## References
+
+- [EchoLeak (CVE-2025-32711)](https://www.hackthebox.com/blog/cve-2025-32711-echoleak-copilot-vulnerability), the zero-click exfiltration chain and the rendering path it travelled.
