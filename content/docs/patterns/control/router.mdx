@@ -1,0 +1,190 @@
+---
+title: "Router"
+description: "Classify first, then dispatch to a specialized path."
+---
+
+## Problem
+
+One agent handles every ticket. It carries nine tools, a system prompt covering policy questions, aggregations, account relationships, credits, and escalation, and a context assembly that pre-loads a bit of everything because any of it might be needed.
+
+Every request pays for all of it. The tonnage question carries the refund policy language; the returns question carries the SQL schema description. Both pay the [full tool catalogue](/docs/tools/tool-discovery) on every turn, and both get a model choosing among nine options when three were plausible.
+
+The failures follow the same shape. The agent semantically searches for a number that lives in a database. It reaches for `issue_credit` on a question that was only asking about timelines. It takes six turns to do what a specialized path does in two. [Turn count is the strongest cost lever there is](/docs/production/cost-engineering).
+
+## Forces
+
+- **Different request types need different tools, prompts, and context**, and the union is worse at each than any specialization.
+- **Classification is cheap and reliable**; open-ended tool selection is neither.
+- **A misroute is a whole-request failure**, not a degraded one. The wrong path may have no way to recover.
+- **Routing adds a turn** before any work begins.
+- **Some requests are genuinely mixed** and belong to two paths at once.
+- **Each route is a separate thing to evaluate and maintain.**
+
+## Solution
+
+**Classify first with a small model, then dispatch in code** to a path with its own prompt, its own tool subset, and its own context budget.
+
+<Figure caption="The classifier chooses a label. Code chooses the path. The model never sees nine tools at once." frame={false}>
+
+```
+   request
+      │
+      ▼
+   ┌────────────────────┐   small model, low temperature,
+   │   CLASSIFY         │   fixed label set, structured output
+   │   → one of N       │   ── cheap, fast, evaluable
+   └─────────┬──────────┘
+             │  label
+             ▼
+   ┌────────────────────┐   ordinary code. a switch statement.
+   │   DISPATCH         │   ── deterministic, testable, no model
+   └──┬────┬────┬────┬──┘
+      │    │    │    │
+      ▼    ▼    ▼    ▼
+   policy data account action        each path:
+   3 tools 2    2       5             · its own system prompt
+   ~2 turns 1   2       6-8           · its own tool subset
+                                      · its own context budget
+                                      · its own eval set
+```
+
+</Figure>
+
+Four rules:
+
+**Classify into a closed set with [structured output](/docs/foundations/structured-output).** A fixed enum, a small model, temperature at or near zero, where the model still takes one. [Current frontier models reject the sampling parameters outright](/docs/foundations/nondeterminism), so `temperature: 0` is a setting for the small classifier you route *with*, not something to carry into the large model you route *to*. This is the one step where the model's job is narrow enough to be genuinely reliable, and a free-form label defeats the point.
+
+**Dispatch in code, not by prompting.** The classifier returns `policy`; a `switch` picks the path. Asking one model to both classify and then behave differently is the undifferentiated agent again, wearing a routing table.
+
+**Include an `unknown` label, and route it to a human.** A classifier forced to pick among five when the answer is none of them will pick confidently. The sixth label is what turns a misroute into an [escalation](/docs/human-in-the-loop/escalation-and-audit).
+
+**Record the label on the trace.** Routing accuracy is one of the rare deterministic assertions available in this field: *which path did this request take* has a right answer, and per-route metrics are how you find the path that is quietly failing.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/graph/router.ts"
+const Route = z.enum(['policy', 'data', 'account', 'action', 'mixed', 'unknown']);
+
+// Small model, near-zero temperature, closed label set.
+export async function classify(req: Request): Promise<z.infer<typeof Route>> {
+  const { route } = await model.structured({
+    model: SMALL,
+    temperature: 0,
+    schema: z.object({ route: Route, confidence: z.number() }),
+    system: ROUTE_PROMPT,        // one line per label, plus the negative cases
+    input: req.text,
+  });
+  return route;
+}
+
+// Each path is a different agent configuration, not a different prompt
+// for the same one.
+const PATHS: Record<string, PathConfig> = {
+  policy:  { tools: ['search_policies'], prompt: POLICY, maxTurns: 3 },
+  data:    { tools: ['query_warehouse', 'get_order'], prompt: DATA, maxTurns: 2 },
+  account: { tools: ['get_account_graph', 'get_order'], prompt: ACCOUNT, maxTurns: 3 },
+  action:  { tools: ACTION_TOOLS, prompt: ACTION, maxTurns: 8 },
+};
+
+export async function route(req: Request, ctx: RunContext) {
+  const label = await classify(req);
+  ctx.trace.set('route', label);        // routing accuracy is assertable
+
+  // A classifier forced to choose will choose. The escape hatch is a label,
+  // not a confidence threshold nobody calibrated.
+  if (label === 'unknown') return escalate(ctx, 'unroutable request');
+  if (label === 'mixed')   return decompose(req, ctx);   // see trade-offs
+
+  return runAgent(PATHS[label], req, ctx);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/graph/router.py"
+class Route(str, Enum):
+    POLICY = "policy"; DATA = "data"; ACCOUNT = "account"
+    ACTION = "action"; MIXED = "mixed"; UNKNOWN = "unknown"
+
+
+class Classification(BaseModel):
+    route: Route
+    confidence: float
+
+
+async def classify(req: Request) -> Route:
+    # Small model, near-zero temperature, closed label set.
+    out = await model.structured(
+        model=SMALL, temperature=0, schema=Classification,
+        system=ROUTE_PROMPT,          # one line per label, plus negatives
+        input=req.text,
+    )
+    return out.route
+
+
+# Each path is a different agent configuration, not a different prompt.
+PATHS = {
+    Route.POLICY:  PathConfig(("search_policies",), POLICY, max_turns=3),
+    Route.DATA:    PathConfig(("query_warehouse", "get_order"), DATA, max_turns=2),
+    Route.ACCOUNT: PathConfig(("get_account_graph", "get_order"), ACCOUNT, 3),
+    Route.ACTION:  PathConfig(ACTION_TOOLS, ACTION, max_turns=8),
+}
+
+
+async def route(req: Request, ctx):
+    label = await classify(req)
+    ctx.trace["route"] = label          # routing accuracy is assertable
+
+    # A classifier forced to choose will choose. The escape hatch is a label.
+    if label is Route.UNKNOWN:
+        return await escalate(ctx, "unroutable request")
+    if label is Route.MIXED:
+        return await decompose(req, ctx)
+
+    return await run_agent(PATHS[label], req, ctx)
+```
+
+</Tab>
+</Tabs>
+
+The `PATHS` table is the pattern. Each entry is a *different agent configuration*, tools, prompt, and turn cap together, not one agent given different instructions. That is what buys the shorter loops and the smaller contexts.
+
+## Trade-offs
+
+**A turn before any work.** A small classifier is fast, and it is still a round trip on the latency path. Skip it where the caller already knows the type: a form field, a queue name, or an API endpoint is a free, correct, deterministic route.
+
+**Misroutes are whole-request failures.** The data path has no `search_policies`, so a policy question routed there cannot recover. It will produce a confident answer from nothing or fail. Design each path to detect that it is on the wrong one and hand back rather than improvise.
+
+**Mixed requests are the hard case and they are common.** *"Can we return these, and how long does the credit take?"* is two routes. Options are decomposing into two runs and merging, routing to the broader path, or routing to a human. Decomposition is best and most work; picking the broader path silently is what most systems do and it forfeits the specialization for that request.
+
+**N paths is N eval sets.** Each route needs its own fixtures and its own quality bar, plus a routing-accuracy set on top. This is real maintenance cost, and it is why five routes is usually better than twelve.
+
+## When not to use it
+
+**When the routing is knowable without a model.** [The determinism test](/docs/workflows/the-determinism-test) applies directly: if a form field, a queue, or an endpoint already determines the type, route on that. A classifier re-deriving something you were told is pure cost and a new failure mode.
+
+**When the paths barely differ.** If two routes share a prompt and a tool set, they are one route. Splitting for tidiness adds a classification decision that can be wrong in exchange for nothing.
+
+**When one path handles everything acceptably.** A three-tool agent does not need a router. Measure whether the undifferentiated version is actually failing before adding a layer.
+
+**Below a volume where per-route evals are affordable.** Five routes you cannot separately evaluate is five paths whose quality you are guessing at. Fewer routes, each measured, beats more routes, each assumed.
+
+<Aside type="note" title="Routing is the cheapest form of specialization, and the one people skip">
+When an agent underperforms, the reflexive moves are a better prompt, a bigger model, or [more agents](/docs/multi-agent/when-not-to). Routing is usually a better first move than any of them, and it is strictly cheaper: it removes tools from the prompt, shortens the loop, narrows the context, and makes each path separately measurable.
+
+It is also what a "specialist agent" almost always turns out to be. A specialist is a system prompt and a tool subset, both available inside one agent for the price of a conditional edge, rather than a message boundary, a serialization format, a fresh context, and a [coordination tax](/docs/multi-agent/the-coordination-tax).
+
+If you are considering multiple agents for specialization, build the router first. It answers the same need, and if it is insufficient you will have learned exactly which part was insufficient.
+</Aside>
+
+## Related
+
+- [Deterministic Rails](/docs/patterns/control/deterministic-rails), the general form: code owns control flow, the model owns judgment
+- [Plan Then Execute](/docs/patterns/control/plan-then-execute): the other way to separate deciding from doing
+- [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool): routing expressed as tool descriptions instead of a classifier
+- [Model Cascade](/docs/patterns/cost/model-cascade): routing on difficulty rather than on type
+- [Routing and Orchestration](/docs/workflows/routing-and-orchestration): the chapter this pattern comes from
