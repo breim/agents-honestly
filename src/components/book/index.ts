@@ -1,6 +1,10 @@
 export { Aside } from './aside';
 export { ContextBudget } from './context-budget';
+export { Decision } from './decision';
 export { Figure } from './figure';
+export { Flow } from './flow';
 export { FrameworkCheck, FrameworkOption } from './framework-check';
+export { Ladder } from './ladder';
+export { Layers } from './layers';
 export { TokenStrip } from './token-strip';
 export { TurnGrowth } from './turn-growth';
