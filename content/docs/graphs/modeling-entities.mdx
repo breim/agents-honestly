@@ -1,0 +1,149 @@
+---
+title: "Entities, Relations, and Ontology"
+description: "Deciding what a Customer is once, so five systems stop each having their own answer."
+---
+
+
+Ask five systems at Meridian what a Customer is.
+
+The CRM says an account record with an owner and a renewal date. Billing says a legal entity with a tax ID and payment terms. Shipping says a delivery address with a receiving contact. Support says whoever sent the email. The warehouse says a `customer_id` column that has meant three different things since 2019.
+
+Every one of those is correct **locally**. Each system's definition serves its own job perfectly well. The trouble starts the moment you want to say something that spans them, like "why is Acme at risk," which requires the CRM's Acme, support's Acme, and the warehouse's Acme to be the same Acme.
+
+## The graph doesn't create this problem. It exposes it.
+
+This is the thing to understand before any modeling work starts, because it explains why these projects fail.
+
+You cannot draw an edge until you have agreed what the nodes are. Vector search never asked. It happily indexed documents from five systems with five definitions, because similarity doesn't require the concepts to line up. A graph does. Every edge is an assertion that two specific things are related, and you can't assert that without first deciding those things exist and what they are.
+
+So **ontology work is organizational agreement wearing a data-modeling costume.** The hard part isn't the diagram; it's getting billing and support to accept a shared definition when each has a working one and neither wants to change.
+
+Which is why the standard failure mode is what it is: the work gets assigned to engineers or data modelers, who produce a beautiful, correct, comprehensive model, and then nobody adopts it, because the people who could have made those decisions were never in the room. If your ontology project has no one on it who can say "no, *this* is what a Customer is, and billing will change," you are producing a document rather than a system.
+
+## What actually is an entity
+
+A useful test cuts most of the argument:
+
+> **An entity has identity that persists through change.** If every attribute changed, would it still be the same thing?
+
+Order 4921 with a new shipping address, a new status, and a corrected total is still order 4921. It's an entity. "Shipped" is not an entity; it's a state the order passes through. "High priority" is not an entity; it's an attribute of a ticket.
+
+Run that test and four common mistakes disappear:
+
+**Attributes modelled as entities.** Status, priority, category, region as nodes. It feels tidy, since everything is a node, and it explodes the graph with millions of edges to a handful of hub nodes that connect everything to everything. Traversals through them are meaningless: "find things related to Acme" now returns every ticket that shares a priority.
+
+**Events modelled as attributes.** The inverse, and more damaging. `escalated: true` on a ticket is a boolean that destroys information: *when* it escalated, *who* escalated it, *how many times*. For the Acme question, "three escalations in ninety days" is the entire signal, and a boolean cannot express it. **Events want to be first-class**, with a time and participants.
+
+**The god-entity.** One `Party` type that is customer, supplier, employee, and prospect, distinguished by a type field. Technically elegant, and it makes every query start with a filter and every relationship ambiguous. Model the distinctions your questions actually make.
+
+**Modelling everything.** The enterprise ontology with forty entity types, drawn on a whiteboard, none of which any query traverses. Cost scales with what you model; value scales with what you traverse.
+
+## Relations: the edge type is the payload
+
+In a graph, the interesting information is usually in the edges rather than the nodes, which is the whole reason you're here rather than in a document store.
+
+Three properties to decide deliberately for each relationship:
+
+**Type.** `SUPPLIES` and `COMPETES_WITH` are not the same edge with different metadata; they support different questions and different traversals. Collapsing them into a generic `RELATED_TO` throws away exactly the signal that justified the graph.
+
+**Direction.** `Acme ──ESCALATED──▶ Ticket` reads differently from the reverse, and traversals depend on it. Undirected edges are occasionally right and usually laziness.
+
+**Cardinality and exclusivity.** One account owner at a time, many tickets, exactly one billing entity. These constraints are what let you detect bad data rather than silently traversing it.
+
+## The property nobody models: time
+
+Here is the most under-modelled aspect of enterprise graphs, and it produces a specific class of confidently wrong answer.
+
+Almost every relationship in a business is **valid over an interval, not forever.** Acme's account owner changed in June. Its payment terms changed at renewal. A contact left the company in March. A supplier relationship ended last year.
+
+A graph that stores relationships as timeless facts can answer *today's* question and will **lie about last quarter's**, with total confidence, because nothing in the data indicates that a fact had a beginning or an end.
+
+<Figure caption="Two timelines per fact. Without both, you cannot answer 'what did we believe in March?' or 'what was true in March?', and those are different questions." frame={false}>
+
+```
+   FACT: "Jvega owns the Acme account"
+
+   valid time     ├──────────────────────────┤
+                Jun 1                     Sep 12        ← true in the world
+                                                          during this window
+
+   ingestion time              ├──────────────────────▶
+                             Jun 4                      ← when WE learned it
+                                                          (three days late)
+
+   superseded by: "Mchen owns the Acme account", valid from Sep 12
+   → the old fact is INVALIDATED, not deleted
+```
+
+</Figure>
+
+The mature form of this is **bitemporal** modelling, which tracks two clocks per fact:
+
+- **Valid time.** When the fact was true in the world.
+- **Ingestion time.** When your system learned it.
+
+They differ, always, and the gap matters. "Who owned this account on 1 September?" and "who did we *think* owned it on 1 September?" are different questions, and only the second one explains why an email went to the wrong person.
+
+Two consequences follow, and both are echoes of rules from earlier chapters:
+
+**Invalidate, don't delete.** A superseded fact gets an end to its validity window; it does not disappear. This is the [memory chapter's](/docs/context/memory) `supersedes` field taken seriously, and it's what makes contradiction resolvable instead of a coin flip: highest authority, then most recent *as of the time being asked about*.
+
+**Keep provenance.** Every fact traces back to the raw source that produced it: the ticket, the CRM sync, the document. When two facts disagree, provenance is what adjudicates, and when an agent cites a relationship, provenance is the citation.
+
+This also makes the graph honest about staleness in a way an ordinary index isn't. From [Part IV](/docs/retrieval/where-does-the-answer-live): every index is a stale copy. A bitemporal graph is a stale copy **that knows it**. It can tell you a fact is from a sync three days ago, rather than presenting it as current truth.
+
+## Model the traversals, not the domain
+
+The scoping rule, carried from [the last chapter](/docs/graphs/when-relationships-are-the-query) and worth making concrete.
+
+Do not start from "what does Meridian's business look like." Start from the questions:
+
+1. Write the ten questions the graph must answer. Real ones, from real traffic.
+2. Underline the nouns. Those are your candidate entities.
+3. Underline the verbs connecting them. Those are your edges.
+4. Anything left over is out of scope for v1.
+
+For Atlas, ten account-health questions yield roughly five entities, **Account, Contact, Ticket, Order, Contract**, connected by `BELONGS_TO`, `RAISED`, `ESCALATED_AT`, `PLACED`, `RENEWS_ON`, `OWNED_BY`. That's a model a person can hold in their head, which matters more than completeness, because a model nobody understands is a model nobody maintains.
+
+Everything else, including products, suppliers, warehouses, and shipments, exists in the business and is not in the graph, because no account-health traversal touches it. It can be added when a question needs it.
+
+<Aside type="tip" title="The ontology is the same artifact as the semantic layer">
+Worth noticing: the metric definitions from [SQL Is Still the Answer](/docs/retrieval/sql-is-still-the-answer) and the entity definitions here are the same *kind* of thing: the business's meaning, written down once, owned by someone, versioned, and testable.
+
+"Revenue excludes cancelled orders" and "a Customer is the legal entity in billing, not the shipping address" are both statements that were previously implicit in scattered queries and one analyst's memory. Treat them as one governed vocabulary with one owner rather than two projects, and both get cheaper.
+</Aside>
+
+## Make it a contract
+
+An ontology that lives in a slide deck is a proposal. To be a system it needs the same things any schema needs:
+
+**An owner** who can settle disputes: a person, named, with authority.
+**A version**, so a change is a change rather than a surprise.
+**Tests.** Cardinality assertions (an account has one current owner), referential assertions (every ticket resolves to an account), and temporal assertions (no two owner-validity windows overlap). These run on every ingestion and catch upstream data problems as data problems, rather than as a strange graph answer six weeks later.
+**A rejection path.** Data that violates the ontology gets quarantined and reported, never coerced. A record silently forced into the model is a wrong edge with full confidence, and by now that phrase should sound familiar.
+
+## Atlas, concretely
+
+Five entities, six relationship types, bitemporal on account ownership, contract terms, and ticket escalation: the three that actually change and that questions ask about historically. Everything else stored as current-state only, because nobody has ever asked what a shipping address was in March.
+
+That last decision is the one worth stealing: **bitemporal where the history is queried, current-state where it isn't.** Modelling every fact bitemporally is possible and roughly doubles the complexity of every query, which is a real cost paid against questions nobody asks.
+
+Provenance on every edge, back to the CRM sync or the ticket that produced it. And a validation suite that fails ingestion when two ownership windows overlap, because that is a real upstream bug, and the graph is now the place it becomes visible.
+
+---
+
+Next: [Graph Storage and Query Models](/docs/graphs/graph-storage-and-query-models), on relational edges, property graphs, RDF, Cypher, and SPARQL without confusing storage with meaning.
+
+## Takeaways
+
+- Five systems have five correct local definitions of Customer. The graph doesn't create that conflict, it forces you to resolve it, because you cannot draw an edge before agreeing what the nodes are.
+- Ontology work is organizational agreement in a data-modeling costume. Without someone empowered to settle definitions, you produce a document, not a system.
+- An entity has identity that persists through change. Run that test and most modeling arguments end.
+- Four mistakes: attributes as entities (hub nodes that connect everything to everything), events as attributes (a boolean can't say "three times in ninety days"), the god-entity, and modeling what nothing traverses.
+- The edge type is the payload. Collapsing distinct relationships into `RELATED_TO` discards the signal that justified the graph.
+- Most business relationships are valid over an interval. A timeless graph answers today and lies about last quarter, confidently.
+- Track valid time and ingestion time separately. "Who owned this account in September" and "who did we think owned it" are different questions.
+- Invalidate rather than delete, and keep provenance. That's what makes contradictions resolvable and citations possible.
+- Start from ten real questions; the nouns are entities and the verbs are edges. Everything else is v2.
+- Be bitemporal where history is queried and current-state where it isn't, because full bitemporality doubles query complexity for questions nobody asks.
+- The ontology and the semantic layer are the same artifact: business meaning, written once, owned, versioned, tested.
