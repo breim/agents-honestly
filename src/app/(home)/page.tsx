@@ -59,21 +59,16 @@ export default function HomePage() {
       <section className="relative isolate overflow-hidden px-6 pt-24 pb-16 sm:pt-32 sm:pb-20">
         <BayerWash />
         <div className="mx-auto flex max-w-3xl flex-col items-center text-center">
-          <p className="animate-reveal text-caption font-medium text-fd-muted-foreground">
-            {appName}
-          </p>
-          <h1 className="animate-reveal mt-5 text-display text-balance [animation-delay:60ms]">
+          <h1 className="animate-reveal text-display text-balance">
             Building an agent is easy.
           </h1>
-          <p className="animate-reveal mt-4 max-w-2xl text-title font-normal text-fd-muted-foreground text-balance [animation-delay:120ms]">
-            Building an agentic system a company can depend on is software engineering.
+          <p className="animate-reveal mt-6 max-w-xl text-body text-pretty [animation-delay:120ms]">
+            <span className="font-medium">
+              Building an agentic system a company can depend on is software engineering.
+            </span>{' '}
+            <span className="text-fd-muted-foreground">{appTagline}</span>
           </p>
-          <p className="animate-reveal mt-7 max-w-xl text-body text-pretty [animation-delay:180ms]">
-            {appTagline} The failure modes are old — they come from retrieval, durable execution,
-            distributed transactions and authorization. What changes is that a nondeterministic,
-            expensive, occasionally-wrong component now sits in the middle.
-          </p>
-          <div className="animate-reveal mt-9 flex flex-wrap items-center justify-center gap-3 [animation-delay:240ms]">
+          <div className="animate-reveal mt-9 flex flex-wrap items-center justify-center gap-3 [animation-delay:180ms]">
             <Link href={`${docsRoute}/preface`} className={primaryAction}>
               Start reading
             </Link>
