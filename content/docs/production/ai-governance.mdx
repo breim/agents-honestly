@@ -1,0 +1,226 @@
+---
+title: "AI Governance"
+description: "Inventory, risk classification, ownership, impact assessment, evidence, exceptions, supplier review, and retiring an agent safely."
+---
+
+Meridian's security team asks for a list of AI systems in production. The platform team exports model-gateway traffic. Finance exports provider invoices. Legal has two vendor assessments. Product has three pilots using browser keys that appear in none of those places.
+
+Every list is correct for the system it can see. None is an inventory.
+
+Governance starts when the organization can name each system, its purpose, its owner, its authority, its evidence, and the condition that removes it from service.
+
+## Inventory the system, not the model account
+
+One model can support several products with different risk. One product can use several models, tools, datasets, and suppliers. The unit of governance is a deployed use case.
+
+```yaml
+system_id: atlas-support-eu
+purpose: resolve bounded support tickets for Meridian EU accounts
+owner: support-platform
+risk_owner: vp-support
+data_owner: customer-operations
+status: limited-production
+users:
+  - support agents
+subjects:
+  - customer contacts
+autonomy:
+  reads: automatic
+  writes: tier-0 automatic, tier-1 approval
+models:
+  - route: atlas-primary
+tools:
+  - policy_search
+  - order_status
+  - issue_credit
+data_classes:
+  - internal
+  - customer-confidential
+regions:
+  - eu-west
+evidence_bundle: bundle-2026-08-09.4
+review_due: 2026-11-09
+retirement_owner: support-platform
+```
+
+Keep pilots, shadows, internal experiments, and retired systems in the same registry. Status changes access and evidence requirements. It does not decide whether the entry exists.
+
+## Classify the use, data, and authority separately
+
+One label cannot express the risk of an agentic system. Record at least four dimensions:
+
+| Dimension | Low end | High end |
+| --- | --- | --- |
+| Decision impact | Draft wording | Employment, credit, health, legal status |
+| Data sensitivity | Public | Regulated or confidential personal data |
+| Authority | Read-only | Irreversible financial or external effect |
+| Reach | One supervised user | Autonomous multi-tenant operation |
+
+Route the combination to controls. A public-data research agent can have broad reading reach and no write authority. A refund agent handles ordinary customer data but can move money. Their risk profiles differ even if they use the same model.
+
+Legal classifications remain legal work. Engineering supplies the facts: intended purpose, users, affected people, data flows, autonomy, human oversight, metrics, known limitations, and logs.
+
+## Give every decision an owner
+
+"The AI team" cannot approve itself. Name roles by decision:
+
+| Decision | Accountable role |
+| --- | --- |
+| Business purpose and value | Business owner |
+| Acceptable error and autonomy | Risk owner |
+| Data access, retention, deletion | Data owner |
+| Architecture and reliability | Engineering owner |
+| Security controls and residual risk | Security owner |
+| Legal classification and obligations | Legal or compliance owner |
+| Dataset and eval validity | Evaluation owner |
+| Daily operation and escalation | Operations owner |
+| Retirement and data disposal | System owner |
+
+The same person may hold several roles in a small company. The decisions must still be explicit. A founder being accountable for everything is workable. Nobody being named because the team is small is not.
+
+The [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) treats governance as a cross-cutting function and asks organizations to define roles, policies, accountability, risk tolerance, inventory, and ongoing monitoring across the lifecycle.
+
+## The impact assessment is a versioned argument
+
+An impact assessment should answer concrete questions:
+
+1. What problem does the system solve and which non-AI alternatives were considered?
+2. Who uses it and who is affected without being a user?
+3. What decisions and effects can it produce?
+4. Which groups or routes can receive worse outcomes?
+5. What happens when it is wrong, unavailable, manipulated, or over-trusted?
+6. Which controls prevent, detect, contain, and recover from those outcomes?
+7. What evidence shows those controls work?
+8. Which residual risks were accepted, by whom, and until when?
+
+Store the assessment with the configuration bundle. A new tool, use case, language, user population, or autonomy tier may invalidate it even when the model remains unchanged.
+
+<Figure caption="Governance is a release loop with named evidence, not a committee that sees the system once." frame={false}>
+
+```text
+map purpose and impact
+          |
+          v
+classify and assign owners
+          |
+          v
+measure controls and outcomes
+          |
+          v
+approve, limit, shadow, or block
+          |
+          v
+monitor changes and incidents
+          |
+          +------------> review or retire
+```
+
+</Figure>
+
+## Maintain one evidence bundle
+
+The readiness review already produces most of it. Governance makes the bundle durable and queryable.
+
+Include:
+
+- inventory record and owners;
+- current impact assessment;
+- architecture and data-flow diagrams;
+- model, tool, data, and supplier manifest;
+- authority contract and risk tiers;
+- evaluation report and slice results;
+- threat model and red-team findings;
+- privacy, retention, residency, and deletion plan;
+- human-oversight design and training material;
+- incident, escalation, and complaint procedures;
+- rollout, rollback, suspension, and retirement plans;
+- approved exceptions with expiry.
+
+The bundle ID belongs in every release record. A governance review should never reconstruct the deployed system from a slide deck and six repositories.
+
+## Exceptions expire
+
+An exception needs:
+
+```yaml
+exception_id: gov-ex-44
+requirement: portuguese route reaches quality threshold
+temporary_control: route language=pt to human
+owner: support-operations
+expires_at: 2026-10-01
+removal_evidence: eval run with 200 reviewed pt cases
+```
+
+Enforce the temporary control in code or policy. A document saying the route is disabled while the router can still select it is not an exception process. It is a disagreement between paperwork and production.
+
+## AI literacy is role-specific
+
+The developer, reviewer, support agent, procurement analyst, and executive need different training.
+
+| Role | Must be able to do |
+| --- | --- |
+| Developer | Explain context, tools, nondeterminism, evals, identity, and failure bounds |
+| Reviewer | Detect missing evidence, scope violations, and approval fatigue |
+| Operator | Read traces, degrade safely, reconcile effects, and escalate incidents |
+| Product owner | Interpret rates, slices, review cost, and residual risk |
+| Procurement | Follow data, authority, update channels, and exit constraints |
+
+As of August 2026, the European Commission's official [AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers) states that the Article 4 obligation has applied to providers and deployers since 2 February 2025, while national supervision and enforcement provisions apply from 2 August 2026. The engineering lesson is broader than one jurisdiction: training must match the person's actual role in the system.
+
+## Retirement is a production change
+
+Turning off a route leaves workflows, credentials, indexes, data copies, approvals, webhooks, contracts, dashboards, and user habits behind.
+
+A retirement plan names:
+
+- stop date for new work;
+- policy for in-flight runs;
+- replacement or human route;
+- credential and webhook revocation;
+- data export, retention, deletion, and legal hold;
+- index and memory disposal;
+- supplier termination and confirmation;
+- dashboard and alert removal;
+- evidence retained for audit;
+- owner who verifies completion.
+
+Keep the inventory entry with status `retired`. Deletion of the registry record destroys the proof that the system existed and that retirement finished.
+
+## Current regulatory snapshot
+
+This book does not classify Atlas under law. It records what an engineer must make available for that classification.
+
+As of August 2026, the European Commission's [AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act) reflects a phased and recently amended timeline. Prohibited-practice and AI-literacy provisions have applied since 2 February 2025. Governance and general-purpose AI obligations have applied since 2 August 2025. Article 50 transparency rules apply from 2 August 2026. The Annex III high-risk rules are scheduled for 2 December 2027, and rules for high-risk systems embedded in regulated products for 2 August 2028. Treat dates and legal scope as a maintained compliance input. Keep the durable engineering artifacts stable: inventory, purpose, ownership, data flow, authority, evidence, monitoring, incidents, and retirement.
+
+<Aside type="caution" title="A checklist cannot determine legal scope">
+Sector, jurisdiction, intended purpose, affected people, and deployment role matter. Use qualified legal advice for classification. Engineering owns the accuracy and traceability of the facts legal teams classify.
+</Aside>
+
+## Atlas, concretely
+
+Atlas is one registry entry per region and autonomy policy, not one entry per repository. The support VP owns risk, customer operations owns data, the platform team owns engineering, and support operations owns the approval queue.
+
+Every release points to an evidence bundle. Adding Portuguese, a carrier remote agent, or computer use triggers impact review because each changes users, suppliers, data, or authority. Quarterly review checks outcomes, complaints, exceptions, suppliers, literacy, and whether the system still beats its non-AI baseline.
+
+## References
+
+- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/), Govern, Map, Measure, and Manage outcomes across the AI lifecycle.
+- [NIST AI RMF Playbook](https://airc.nist.gov/airmf-resources/playbook/), suggested governance, impact, monitoring, and risk-treatment actions.
+- [NIST AI RMF and ISO/IEC 42001 crosswalk](https://airc.nist.gov/docs/NIST_AI_RMF_to_ISO_IEC_42001_Crosswalk.pdf), mapping risk-management outcomes to an AI management system.
+- [European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act), current application timeline and governance information.
+- [European Commission AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers), current Article 4 interpretation and enforcement information.
+
+---
+
+Next: [The Reference Architecture](/docs/production/reference-architecture), turning the approved purpose, authority, evidence, and ownership into deployed components.
+
+## Takeaways
+
+- Govern deployed use cases, not model accounts.
+- Classify decision impact, data, authority, and reach separately.
+- Assign owners to business value, risk, data, engineering, security, legal, evaluation, operations, and retirement.
+- Version the impact assessment with the configuration it describes.
+- Keep one evidence bundle that joins purpose, architecture, suppliers, authority, evals, security, privacy, operations, and rollback.
+- Enforce exceptions and give each one an owner, expiry, and removal test.
+- Train each role for the decisions it makes around the system.
+- Retire credentials, workflows, data, suppliers, dashboards, and user routes. Keep the inventory record as evidence.
