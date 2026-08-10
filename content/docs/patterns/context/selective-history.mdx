@@ -1,0 +1,189 @@
+---
+title: "Selective History"
+description: "Retrieve the relevant past turns instead of replaying all of them."
+---
+
+## Problem
+
+A long-running assistant has 240 turns of history with one customer. The current question is about a shipping address changed at turn 31.
+
+Every other approach to this is wrong in a different way. Sending all 240 turns is expensive and hits the window. [Compacting](/docs/patterns/context/context-compaction) or [summarizing](/docs/patterns/context/rolling-summary) will have compressed turn 31 into something like *"discussed logistics"* long ago, because at the time it was compressed nobody knew which turn would matter. Keeping the last N verbatim drops it entirely.
+
+The common structure of those failures: **compression decides what to keep before knowing what will be asked.**
+
+## Forces
+
+- **Relevance is only knowable at query time.** Which past turn matters depends on the current question, which did not exist when the turn happened.
+- **History is mostly irrelevant on any given turn**, often over 95% of it.
+- **Old turns must remain exact.** A paraphrase of the address change is not the address change.
+- **Recency is genuinely privileged.** The last few turns are almost always relevant, and dropping them breaks coherence.
+- **Retrieval has a cost and a failure mode:** it can miss, and a miss looks like amnesia to the user.
+- **Retrieved turns land mid-context**, where [attention is weakest](/docs/foundations/context-window).
+
+## Solution
+
+Treat conversation history as a **retrieval corpus**: index every turn as it happens, and each request assembles a window of recent turns verbatim plus a small number of older turns fetched by relevance.
+
+<Figure caption="Recency is structural; relevance is retrieved. The two are assembled fresh on every request." frame={false}>
+
+```
+   HISTORY (240 turns, indexed)          ASSEMBLED CONTEXT
+   ┌──────────────────────────┐          ┌────────────────────────────┐
+   │ turn 1                   │          │ system + tools             │
+   │ …                        │          ├────────────────────────────┤
+   │ turn 31  address change  │──┐       │ RETRIEVED (verbatim, cited)│
+   │ …                        │  │ query │  turn 31 · turn 118        │
+   │ turn 118 delivery pref   │──┤ ─────▶│  "from earlier in this     │
+   │ …                        │  │       │   conversation:"           │
+   │ turn 236                 │  │       ├────────────────────────────┤
+   │ turn 237                 │  │       │ RECENT (always, verbatim)  │
+   │ turn 238                 │──┘ last  │  turns 236–240             │
+   │ turn 239                 │    5     ├────────────────────────────┤
+   │ turn 240                 │          │ current question           │
+   └──────────────────────────┘          └────────────────────────────┘
+```
+
+</Figure>
+
+Four rules:
+
+**Index turns, not messages.** A tool call and its result are one unit; splitting them retrieves a call with no answer or an answer with no question. Index the pair, with the assistant text that motivated it.
+
+**Always keep the recent window.** Retrieval never decides whether the last few turns are included. Coherence in the immediate exchange is not negotiable and is not a relevance question.
+
+**Retrieve verbatim, and label the jump.** The point of this pattern is exactness: a paraphrase would be a summary, which is the thing being avoided. Mark retrieved turns explicitly (*"earlier in this conversation, at turn 31"*), because dropping a turn from 200 exchanges ago into the middle of the current context without a marker reads to the model as though it happened just now, and it will get the chronology wrong.
+
+**Put retrieved turns after the stable prefix and before the recent window.** They are the part that changes per request, so they must sit below the [cacheable region](/docs/patterns/context/stable-prefix), and they are the part most at risk of being [lost in the middle](/docs/foundations/context-window), which the explicit label partly mitigates.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/selective-history.ts"
+const KEEP_RECENT = 5;
+const RETRIEVE_K = 3;
+
+// Written as each turn completes. Turn = the model message plus any tool
+// calls and results it produced — indexed as one unit.
+export async function indexTurn(t: Turn, conv: string): Promise<void> {
+  await turnIndex.upsert({
+    id: `${conv}:${t.n}`,
+    conversationId: conv,        // the filter is an authorization boundary
+    turn: t.n,
+    text: renderTurn(t),
+    embedding: await embed(renderTurn(t)),
+  });
+}
+
+export async function assemble(
+  conv: string, question: string, history: Turn[],
+): Promise<Message[]> {
+  const recent = history.slice(-KEEP_RECENT);
+  const recentNums = new Set(recent.map(t => t.n));
+
+  const hits = await turnIndex.search(question, {
+    filter: { conversationId: conv },   // never cross a conversation
+    k: RETRIEVE_K + KEEP_RECENT,
+  });
+
+  // Chronological, deduped against the recent window, labelled.
+  const older = hits
+    .filter(h => !recentNums.has(h.turn))
+    .slice(0, RETRIEVE_K)
+    .sort((a, b) => a.turn - b.turn);
+
+  return [
+    ...older.map(h => ({
+      role: 'assistant' as const,
+      content: `[earlier in this conversation, turn ${h.turn}]\n${h.text}`,
+    })),
+    ...recent.flatMap(toMessages),
+    { role: 'user' as const, content: question },
+  ];
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/selective_history.py"
+KEEP_RECENT = 5
+RETRIEVE_K = 3
+
+
+async def index_turn(t: Turn, conv: str) -> None:
+    # Turn = model message plus any tool calls and results — one unit.
+    text = render_turn(t)
+    await turn_index.upsert(
+        id=f"{conv}:{t.n}",
+        conversation_id=conv,      # the filter is an authorization boundary
+        turn=t.n,
+        text=text,
+        embedding=await embed(text),
+    )
+
+
+async def assemble(conv: str, question: str, history: list[Turn]) -> list[dict]:
+    recent = history[-KEEP_RECENT:]
+    recent_nums = {t.n for t in recent}
+
+    hits = await turn_index.search(
+        question,
+        filter={"conversation_id": conv},   # never cross a conversation
+        k=RETRIEVE_K + KEEP_RECENT,
+    )
+
+    # Chronological, deduped against the recent window, labelled.
+    older = sorted(
+        [h for h in hits if h.turn not in recent_nums][:RETRIEVE_K],
+        key=lambda h: h.turn,
+    )
+
+    return [
+        {"role": "assistant",
+         "content": f"[earlier in this conversation, turn {h.turn}]\n{h.text}"}
+        for h in older
+    ] + [m for t in recent for m in to_messages(t)] + [
+        {"role": "user", "content": question}
+    ]
+```
+
+</Tab>
+</Tabs>
+
+The `conversationId` filter is not an optimization. It is the same [metadata-as-authorization](/docs/retrieval/metadata-and-authorization) rule as any other index: a history index without it will eventually surface one customer's turn in another customer's conversation, and it will do so as a fluent paraphrase with no access log.
+
+## Trade-offs
+
+**Latency and cost per request.** An embedding call and a search on every turn, against carrying tens of thousands of tokens. Usually strongly positive on long conversations and clearly negative on short ones.
+
+**Retrieval can miss.** This is the pattern's characteristic failure and it is worse than it sounds, because a miss presents as the assistant forgetting something the user knows it was told. Mitigate as you would any retrieval: [hybrid search](/docs/retrieval/hybrid-and-reranking) so exact strings and IDs match lexically, and a generous recent window so the common case never depends on retrieval at all.
+
+**Chronology confusion.** Retrieved turns arrive out of order relative to their neighbours. Sorting them chronologically and labelling the jump handles most of it; a model that still gets confused is a signal to raise `KEEP_RECENT` rather than to prompt harder.
+
+**Index maintenance.** Another store that must be [tenant-scoped, retained deliberately, and reachable by an erasure request](/docs/security/pii-and-compliance). It is a full-fidelity copy of every conversation, which is exactly the kind of store [the compliance chapter](/docs/security/tenant-isolation) warns gets built without anyone deciding to build it.
+
+## When not to use it
+
+**Short conversations.** Under a few dozen turns, send them all. This is the most common over-engineering in this group.
+
+**Task runs rather than conversations.** A run that investigates a ticket over twenty turns has no useful "past" to retrieve: everything is recent and everything is relevant. Use a [scratchpad](/docs/patterns/context/structured-scratchpad) and [compaction](/docs/patterns/context/context-compaction).
+
+**When the facts, not the turns, are what matter.** If what you need from turn 31 is *the address*, the right home is [a fact store](/docs/context/memory) or the scratchpad, not a retrieval over conversation text. Retrieving turns to recover a value is a workaround for state that should have been typed.
+
+**When exactness is not required.** If a summary would genuinely do, a [rolling summary](/docs/patterns/context/rolling-summary) is cheaper and simpler.
+
+<Aside type="note" title="This is the memory ambiguity, made concrete">
+[Three unrelated things are called memory](/docs/appendix/glossary), and this pattern sits precisely on the seam between two of them: it is *retrieval* applied to *the transcript*.
+
+Which makes it the right tool for one question: "what was said, exactly, earlier in this conversation." And the wrong tool for the one it gets used for: "what do we know about this customer." The second is a fact store, with typed fields, provenance, and an erasure path. Reaching for selective history there means asking a similarity search to reconstruct a database, and it will be approximately right in a way that is very hard to audit.
+</Aside>
+
+## Related
+
+- [Rolling Summary](/docs/patterns/context/rolling-summary): compress instead of retrieve, when exactness is not needed
+- [Context Compaction](/docs/patterns/context/context-compaction): rebuild at a boundary, for task runs rather than conversations
+- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): where a *value* from turn 31 should have lived
+- [Retrieval on Demand](/docs/patterns/context/retrieval-on-demand): the same idea, with the agent deciding when to search
+- [Memory](/docs/context/memory): the three things that share the word, and which one you actually need
