@@ -1,0 +1,290 @@
+---
+title: "Enterprise Integrations"
+description: "Live APIs, replicated data, webhooks, polling, CDC, delegated identity, and reconciliation when the source system changes underneath you."
+---
+
+Most enterprise agents do not fail because the model cannot reason about a customer. They fail because "customer" means one record in the CRM, three billing accounts in the ERP, an email address in support, and a warehouse row updated six hours ago.
+
+The integration layer has to answer three questions before it exposes a tool:
+
+1. which system is authoritative for this fact or action;
+2. whether the agent needs live state or a local copy;
+3. how the copy is repaired when events are late, duplicated, reordered, or missing.
+
+## The source-of-truth table
+
+Write this table before writing adapters.
+
+| Data or action | Authority | Read path | Write path | Freshness bound |
+| --- | --- | --- | --- | --- |
+| Customer name and owner | CRM | Local projection | CRM API only | 15 minutes |
+| Invoice balance | ERP | Live API | ERP API only | Live |
+| Historical shipment totals | Warehouse | SQL | ETL-owned | Previous business day |
+| Policy documents | Document system | Versioned index | Editorial workflow | 1 hour |
+| Ticket status | Support system | Live API | Support API | Live |
+
+"Local projection" does not make your database authoritative. It means the system owns a cache with a stated freshness promise. The field should carry `source`, `source_id`, `source_version`, and `observed_at` so the agent can say what it knows and how old that knowledge is.
+
+## Live call, replicated data, or event
+
+<Figure caption="Choose by required freshness and query shape. Replication is a product with a reconciliation burden, not a free performance optimization." frame={false}>
+
+```text
+Need the current value?
+       │
+   yes ▼                no
+  live API          Need aggregation or search?
+                         │
+                    yes  ▼          no
+                   replica       context / API
+                         │
+              Need to react to changes?
+                         │
+                    event / webhook
+```
+
+</Figure>
+
+Use a live call for balances, permissions, mutable status, and anything checked immediately before an effect. Use a local copy for analytical queries, retrieval, cross-system joins, and workloads the source API cannot serve economically. Use events to trigger work, never as the only proof that the copy is complete.
+
+The same fact may use two paths. Atlas reads a projected invoice summary while researching, then calls the ERP immediately before issuing a credit. Research tolerates minutes of lag. Moving money does not.
+
+## Keep the vendor API out of the model
+
+Vendor APIs expose transport details: cursors, page sizes, expansion flags, sparse fieldsets, webhook secrets, and version headers. A tool should expose the business task.
+
+```text
+Vendor client
+  listInvoices(customer, cursor, pageSize, include, fields)
+
+Agent tool
+  list_unpaid_invoices(customer_id)
+      → count, total_outstanding, oldest_due, invoice_refs[]
+```
+
+The adapter may fetch six pages and join a customer mapping. The model should neither drive pagination nor see access tokens. It receives a bounded result with provenance and freshness.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/integrations/envelope.ts"
+export interface SourceEnvelope<T> {
+  data: T;
+  source: 'crm' | 'erp' | 'warehouse' | 'documents';
+  sourceId: string;
+  sourceVersion?: string;
+  observedAt: string;
+  complete: boolean;
+  warnings: string[];
+}
+
+export interface Page<T> {
+  items: T[];
+  nextCursor?: string;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/integrations/envelope.py"
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Generic, Literal, TypeVar
+
+T = TypeVar("T")
+
+@dataclass(frozen=True)
+class SourceEnvelope(Generic[T]):
+    data: T
+    source: Literal["crm", "erp", "warehouse", "documents"]
+    source_id: str
+    source_version: str | None
+    observed_at: datetime
+    complete: bool
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+
+@dataclass(frozen=True)
+class Page(Generic[T]):
+    items: tuple[T, ...]
+    next_cursor: str | None = None
+```
+
+</Tab>
+</Tabs>
+
+`complete` is not decoration. A provider can return three pages and fail on the fourth. Returning the first three as a complete list creates a confident wrong total. Either retry and finish, or return an explicit partial result that downstream code refuses to aggregate.
+
+## Pagination stays inside the adapter
+
+Cursor pagination looks simple until the dataset changes between pages. An item can move forward, appear twice, or disappear from the walk. The integration contract should state the source's consistency behavior and deduplicate by stable source ID.
+
+For interactive tools:
+
+- cap pages and wall time;
+- aggregate in the adapter;
+- return a continuation handle only if the user can make a meaningful choice about continuing;
+- mark partial results as partial;
+- record pages, items, duplicates, and cursor age in the trace.
+
+For full synchronization, do not pretend an unbounded pagination loop is an interactive tool. Run a durable batch, checkpoint the cursor, write a manifest, and reconcile afterwards.
+
+## Webhooks are hints delivered at least once
+
+A webhook provider may retry after a timeout, deliver the same event twice, or deliver updates out of order. Treat the endpoint as an inbox:
+
+```text
+receive bytes
+    ↓
+verify signature and timestamp
+    ↓
+persist event ID + payload atomically
+    ↓
+acknowledge quickly
+    ↓
+process asynchronously
+    ↓
+deduplicate · order by source version · apply
+```
+
+Never run the agent before persisting the event. If the process dies after returning `200` and before starting work, the source considers delivery complete and you have lost the trigger.
+
+Event identity comes from the provider when available. Otherwise derive it from stable source fields, not from arrival time. Keep the raw payload for replay under the retention policy, and parse it through a versioned schema.
+
+Temporal's [Signal With Start](/docs/patterns/durability/signal-with-start) fits events that should create or wake a long-lived case. A status notification that should never create work belongs in the projection table instead.
+
+## Polling is sometimes the honest design
+
+Use polling when the source has no event feed, when events omit fields you need, or when correctness matters more than notification latency. Choose the schedule from the business freshness bound, not from how fast the API allows calls.
+
+Two polling modes solve different problems:
+
+- **incremental polling** asks for records changed since a cursor or watermark;
+- **reconciliation polling** lists current truth and diffs it against the projection.
+
+Incremental polling is efficient and can preserve a missed-event bug forever. Reconciliation is expensive and repairs it. Production systems usually need both at different cadences.
+
+## CDC copies changes, not meaning
+
+Change data capture can project database updates without teaching every application to emit events. PostgreSQL logical decoding, for example, extracts persistent table changes into a consumable stream through output plugins. See the [official PostgreSQL logical decoding documentation](https://www.postgresql.org/docs/current/logicaldecoding-output-plugin.html).
+
+CDC does not tell you that five row updates form one business event, that a soft delete means "policy withdrawn," or that a field changed units. The projection layer still needs a semantic mapping, idempotency, ordering, tombstones, and an ontology version.
+
+Do not expose a raw change stream to an agent. Apply changes to a queryable projection or translate them into named business events first.
+
+## Identity must survive every hop
+
+The chain is:
+
+```text
+user
+  ↓ delegated identity
+agent runtime
+  ↓ downscoped token
+integration adapter
+  ↓ resource-specific authorization
+CRM / ERP / documents
+```
+
+The adapter receives a delegation, not a global API key. Background jobs name a human owner and a service grant explicitly. [The Agent Is Not a Superuser](/docs/security/identity) covers token exchange and the `sub`/`act` distinction. The integration requirement is that no convenience constructor can omit them.
+
+Re-evaluate authorization at the live source for every effect. A workflow checkpoint from Tuesday does not prove that the employee still has permission on Thursday.
+
+## Quotas need one owner
+
+Provider limits may apply per account, tenant, token, endpoint, or rolling time window. If every worker retries independently, the fleet turns one `429` into sustained overload.
+
+Maintain one quota policy per downstream service:
+
+- concurrency limit;
+- requests and units per time window;
+- priority classes;
+- per-tenant fair share;
+- retry budget and breaker state;
+- cost attribution.
+
+The integration adapter reports the provider's reset and retry metadata in structured errors. [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure) decides admission before work begins. The adapter enforces the last line at the call.
+
+## Schema drift gets contract tests
+
+Integrations can remain HTTP-healthy while changing meaning. A new enum value falls into `default`. An amount moves from dollars to cents. A field becomes nullable. A webhook adds a new version and your parser accepts it while dropping the field that identifies a tenant.
+
+Run contract tests against a sandbox or recorded provider fixtures:
+
+```text
+Can we authenticate?
+Can we read the smallest known record?
+Does every enum value parse or fail loudly?
+Are units and time zones explicit?
+Does pagination terminate and deduplicate?
+Can a webhook fixture verify and parse?
+Does a tombstone remove the projection?
+Does the tool result still satisfy its schema?
+```
+
+Pin API versions where the provider permits it. Record response schema fingerprints and alert on unknown fields for critical objects. Unknown fields are often harmless, but seeing them is how you learn a change occurred before behavior drifts.
+
+## Reconciliation is the correctness mechanism
+
+Every replica should be able to answer:
+
+```text
+source count
+projection count
+missing IDs
+extra IDs
+version mismatches
+oldest unapplied event
+last successful full reconciliation
+```
+
+An event consumer with zero errors can still be wrong because the missing event never arrived. Reconciliation compares state, not processing logs. This is the same lesson as [Building the Ingestion Pipeline](/docs/retrieval/ingestion-pipeline). A green pipeline is not proof of a complete corpus.
+
+<FrameworkCheck decision="Keep domain adapters and tool contracts in application code. Use Temporal for long syncs and waits, and use MCP only when the integration crosses an ownership boundary.">
+<FrameworkOption name="plain">
+
+Ordinary adapters own pagination, auth, envelopes, schema validation, and query-shaped aggregation. This remains the default for systems in the same codebase.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+The graph calls task-shaped tools. It must not own cursors, webhook delivery, reconciliation, or source credentials in graph state.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Use Workflows for checkpointed backfills, polling schedules, event-driven cases, and reconciliation. Every remote call remains an Activity.
+
+</FrameworkOption>
+<FrameworkOption name="mcp">
+
+Use an MCP server when the system owner publishes one integration for several agent clients. Apply the same allowlist, delegated identity, and result shaping at the client boundary.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+The CRM projection updates from webhooks and reconciles nightly. The warehouse is authoritative for historical aggregates and publishes a completed-through timestamp. Policy documents use the versioned ingestion pipeline. Invoice balance and credit issuance always call the ERP live.
+
+All four adapters emit `SourceEnvelope`. A tool result without `observed_at` or `complete` fails schema validation. Webhooks enter an inbox table before acknowledgement. Every source has a dashboard for lag, duplicates, reconciliation mismatch, quota use, and schema version.
+
+## References
+
+- [Logical decoding output plugins](https://www.postgresql.org/docs/current/logicaldecoding-output-plugin.html), PostgreSQL's change-capture interface.
+
+---
+
+Next: [Computer-Using Agents](/docs/tools/computer-using-agents), for systems that expose a screen instead of an API and the larger action space that creates.
+
+## Takeaways
+
+- Name the authority, read path, write path, and freshness bound for every fact and action.
+- Use live calls for mutable truth at the point of effect. Use replicas for search, analytics, and cross-system queries.
+- Hide pagination, transport flags, and credentials behind task-shaped tools.
+- Persist webhooks before acknowledging them. Deduplicate and process asynchronously.
+- Incremental updates need periodic reconciliation. Processing logs cannot prove a replica is complete.
+- CDC transports row changes. Your mapping still owns business meaning, ordering, tombstones, and schema versions.
+- Carry delegated identity through every adapter and re-authorize live effects.
+- Give downstream quotas one policy across the fleet.
+- Contract-test authentication, schemas, units, pagination, webhooks, deletion, and final tool results.
