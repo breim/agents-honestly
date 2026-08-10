@@ -1,0 +1,239 @@
+---
+title: "Sandboxing and Credential Boundaries"
+description: "Where code runs, where secrets live, and making sure those are never the same place."
+---
+
+Someone adds a `run_python` tool so Atlas can compute refund proration without a round trip. It executes in a container, which is the sensible-sounding answer, and the container is the worker's own image because that is where the dependencies already are.
+
+Three environment variables live in that process: the database URL, the payments API key, and the observability token. The sandbox is a `subprocess` call.
+
+A ticket arrives containing a request to compute something, phrased helpfully, that resolves to `os.environ`. The result comes back as a tool result, which is prompt text, which the model dutifully summarizes into a reply.
+
+Nothing in this chapter is about the model. The model was the delivery mechanism for a defect that existed the moment untrusted-influenced code ran in a process holding credentials.
+
+> **A sandbox that shares an address space with your secrets is a naming convention.**
+
+## Two boundaries, and people build the wrong one
+
+The word "sandbox" gets applied to two different problems that need different mechanisms, and conflating them is why teams buy isolation they didn't need and skip the control they did.
+
+| | **Execution boundary** | **Capability boundary** |
+| --- | --- | --- |
+| Threat | Code the agent wrote does something | A tool the agent called does something |
+| Question | What can this *process* reach? | What can this *call* do? |
+| Mechanism | Kernel, VM, or WASM isolation | Dispatcher checks, scoped tokens, [argument scoping](/docs/security/least-privilege) |
+| Fails as | Container escape, credential theft, egress | An in-policy action for a hostile reason |
+| Needed when | The agent generates and runs code | **Always** |
+
+The second row is the one to internalize. **Most agents do not execute generated code and still need every capability control in this part.** Sandboxing is the additional boundary you take on when you let a model write code, and it does nothing about `issue_credit`. That was the previous three chapters.
+
+If you are not running generated code, read the credentials section and the egress section, and skip the isolation ladder. If you are, all of it applies and the isolation choice is real engineering.
+
+## The isolation ladder
+
+Four primitives, in ascending order of what an escape has to defeat.
+
+<Figure caption="Each rung defeats the escape techniques of the rung below. Pick from the threat model, not from the benchmark." frame={false}>
+
+```
+   ┌─────────────────────────────────────────────────────────────┐
+   │ WASM              no syscalls at all; deny-by-default       │
+   │                   capabilities. cannot run arbitrary        │
+   │                   native deps — that is the cost            │
+   ├─────────────────────────────────────────────────────────────┤
+   │ microVM           its own kernel, hardware-enforced.        │
+   │ (Firecracker)     ≤125 ms to guest userspace; snapshot      │
+   │                   restore in low ms. the production default │
+   ├─────────────────────────────────────────────────────────────┤
+   │ gVisor            user-space kernel intercepts syscalls.    │
+   │                   real isolation, some syscall overhead,    │
+   │                   awkward for GPU passthrough               │
+   ├─────────────────────────────────────────────────────────────┤
+   │ container         shared kernel. a namespace boundary,      │
+   │                   not a security boundary against           │
+   │                   hostile code                              │
+   └─────────────────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+The bottom rung is where the opening scene lives and it is worth being direct about it: **a plain container is a packaging boundary.** It isolates you from dependency conflicts and accidental file collisions. Against code written specifically to escape, it is one kernel vulnerability away from the host, and "we run it in Docker" is not a threat-model answer.
+
+The practical default for running model-generated code in production is a **microVM**: hardware-enforced isolation that Firecracker's own specification caps at 125 ms from start call to guest userspace. That figure is measured, it notes, with the serial console off and a minimal kernel and root filesystem, so treat it as a ceiling you have to build toward rather than a default you inherit. Snapshot restore is faster again; the project documents it as low milliseconds without committing to a figure, and the single-digit-to-thirty numbers you will find quoted come from individual builds rather than the specification. Either way it is fast enough to keep a warm pool, which is what makes per-run disposable sandboxes affordable. gVisor sits between: genuine syscall interception with less overhead than a VM, and a known friction point around GPU passthrough, since intercepting syscalls in user space is at odds with handing a device straight through. WASM is the strongest capability story on the list, because the default is *no* filesystem, *no* network, and *no* OS access, and the cost is that arbitrary native dependencies do not run.
+
+The choice is a threat-model decision: whose code is it, what would an escape reach, and how long does it live? Untrusted code that runs for two seconds and touches nothing is a different problem from an agent given a persistent working directory and a package manager.
+
+<Aside type="note" title="Managed sandboxes are a legitimate answer">
+Several vendors sell exactly this: disposable microVM sandboxes with an SDK, warm pools, and snapshotting. Buying one is usually the right call, because the failure mode of a hand-rolled sandbox is that it looks correct and isn't, and you will not be the one who finds out.
+
+What you still own, whichever you choose, is the next two sections. No vendor can decide for you what credentials the sandbox holds or where its packets may go.
+</Aside>
+
+## The sandbox holds no credentials. None.
+
+This is the part that matters even if you never run generated code, because the same rule governs tool handlers, [MCP servers](/docs/mcp/servers-clients-transports), and anything else in the agent's process.
+
+The instinct is to give the sandbox a scoped token. Better than the admin key, and still wrong: a token in the sandbox is a token the code can read, log, or send somewhere, and the entire point of the boundary is that you assume the code is hostile.
+
+The correct shape is a **broker**. Credentials live in a process the sandbox cannot reach. The sandbox asks for an *operation*, not for a secret.
+
+<Figure caption="The sandbox never holds a credential. It asks for an operation and receives a result." frame={false}>
+
+```
+   ┌──────────────────┐        ┌──────────────────┐      ┌─────────┐
+   │  SANDBOX         │  op    │  BROKER          │      │ backend │
+   │  generated code  │ ─────▶ │  holds creds     │ ───▶ │         │
+   │  no secrets      │ ◀───── │  checks scope    │ ◀─── │         │
+   │  no egress       │ result │  logs run + user │      │         │
+   └──────────────────┘        └──────────────────┘      └─────────┘
+        no network                 policy lives
+        except this socket         here, in code
+```
+
+</Figure>
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/sandbox/broker.ts"
+// Runs OUTSIDE the sandbox. The sandbox reaches it over one unix socket
+// and has no other network path — see the egress section below.
+export async function handleSandboxRequest(
+  req: { op: string; args: Record<string, unknown> },
+  ctx: { delegation: Delegation; scope: RunScope },
+): Promise<unknown> {
+  // The same authorization the model's tool calls go through.
+  // A sandbox is just another untrusted caller.
+  const verdict = authorize({ tool: req.op, args: req.args }, ctx.scope);
+  if (!verdict.ok) throw new BrokerDenied(verdict.reason);
+
+  // Token minted here, used here, never crosses the boundary.
+  const token = await mintToken(ctx.delegation);
+  return callBackend(req.op, req.args, token);
+}
+
+// What the sandbox gets is this — an operation list, not an environment:
+//   await host.call('get_order', { order_id });
+// There is no host.getSecret(). It was never implemented.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/sandbox/broker.py"
+# Runs OUTSIDE the sandbox. The sandbox reaches it over one unix socket
+# and has no other network path — see the egress section below.
+
+
+async def handle_sandbox_request(op: str, args: dict, ctx) -> object:
+    # The same authorization the model's tool calls go through.
+    # A sandbox is just another untrusted caller.
+    ok, reason = authorize(op, args, ctx.scope)
+    if not ok:
+        raise BrokerDenied(reason)
+
+    # Token minted here, used here, never crosses the boundary.
+    token = await mint_token(ctx.delegation)
+    return await call_backend(op, args, token)
+
+
+# What the sandbox gets is this — an operation list, not an environment:
+#   await host.call("get_order", order_id=order_id)
+# There is no host.get_secret(). It was never implemented.
+```
+
+</Tab>
+</Tabs>
+
+Three properties fall out, and the third is the one that makes this worth the plumbing:
+
+**Nothing to steal.** An escape yields an execution environment with no credentials in it. That is a bad day rather than a breach.
+
+**One authorization path.** The broker calls the same `authorize` the dispatcher does, so generated code cannot do anything the model could not have done directly. Without this you have built a second, unreviewed tool interface. A `run_python` tool with database access is a tool that can do anything, which quietly voids [everything the least-privilege chapter bought you](/docs/security/least-privilege).
+
+**One audit story.** Every backend call carries the user, the agent, and the run, whether it came from a tool call or from generated code.
+
+The same argument disposes of the ambient-environment habit generally: `os.environ` in the agent's own process is a smaller version of the same defect, and the fix is the same: secrets fetched at the point of use from a store, scoped and short-lived, never sitting in a variable that a stack trace, a debug endpoint, or a helpfully verbose error can print.
+
+## Egress is the control you actually need
+
+If you build one thing from this chapter and you are not running generated code, build this.
+
+Recall the [lethal trifecta](/docs/security/prompt-injection): private data, untrusted content, and a way for bytes to leave. Network egress *is* element ③, and it is the element you can most often remove without losing the product. An agent that can read your database and process hostile tickets is contained if there is nowhere for the data to go.
+
+Default deny, with an allowlist:
+
+| Destination | Policy |
+| --- | --- |
+| The broker socket | Allow, the only path to anything |
+| Model provider endpoint | Allow, pinned host |
+| Package registry | **Deny at runtime.** Dependencies are baked at image build |
+| Everything else | Deny, log, and alert |
+
+Two entries do most of the work. **Deny the package registry at runtime**, because `pip install` inside a live sandbox is arbitrary code execution from a third party in the middle of your run, and it is how a dependency-confusion attack reaches a system that never deploys unreviewed code. And **alert on denials rather than silently dropping them**, because a denied connection to an unexpected host is one of the highest-signal detections available in this entire part. It is what a successful injection looks like from the outside.
+
+Egress control also has to cover the paths that don't look like network calls: a rendered markdown image, a citation URL, a webhook argument, a DNS lookup that encodes data in the hostname. The [egress allowlist pattern](/docs/patterns/security/egress-allowlist) covers the mechanics; the principle is that anything reaching a resolver is an exfiltration channel.
+
+## Everything else the sandbox has to bound
+
+Shorter, because these are ordinary operational limits and their absence is a reliability problem before it is a security one.
+
+**Time and CPU.** A hard wall-clock kill, enforced by the supervisor rather than by the code. Generated code loops.
+
+**Memory.** A cap that terminates rather than swaps, so one run cannot degrade the node.
+
+**Disk.** A size-limited, ephemeral, per-run volume. Nothing written survives the run unless it is explicitly exported through the broker.
+
+**Filesystem visibility.** No mounted source tree, no credential files, no socket other than the broker's. The sandbox sees its own working directory and the standard library.
+
+**Output size.** Sandbox output becomes tool results, which become prompt text, which is a [context budget](/docs/context/context-as-budget) claimant and, at the extreme, a way to blow the window on purpose. Truncate at the boundary with a marker.
+
+**One sandbox per run, destroyed after.** Reuse is a cross-run leak with the same shape as the [tenancy problems](/docs/security/tenant-isolation) in the previous chapter: state left in `/tmp` by one customer's run, read by the next. Warm pools are fine; warm *state* is not.
+
+## What sandboxing does not buy
+
+The honest limit, in the pattern of this part.
+
+**It contains code, not decisions.** A perfectly sandboxed agent that calls `issue_credit` for a hostile reason has issued a credit. The isolation boundary has nothing to say about it, because nothing was compromised. The agent used an approved tool with valid arguments. Sandboxing raises the floor and the capability controls set the ceiling, and only one of those two is optional depending on your architecture.
+
+**It does not make generated code a safe default.** `run_python` is the single largest capability you can add to an agent, and the honest question before adding it is whether the task genuinely requires arbitrary computation or whether three narrow tools would do. The [determinism test](/docs/workflows/the-determinism-test) applies here with unusual force: if you can enumerate the operations, enumerate them.
+
+## Atlas, concretely
+
+| Decision | Choice |
+| --- | --- |
+| Does Atlas run generated code? | Only for proration math, behind a feature flag |
+| Isolation | microVM from a warm pool, one per run, destroyed on completion |
+| Credentials in the sandbox | None. A broker socket and an operation list |
+| Broker authorization | The same `authorize()` the tool dispatcher calls |
+| Egress | Deny by default; broker socket only; denials alert |
+| Package installs at runtime | Denied. Dependencies pinned at image build |
+| Limits | 10 s wall clock, 512 MB, 64 MB ephemeral disk, 32 KB output |
+| Secrets in the agent process | Fetched per use from the secret store; never in the environment |
+
+The last row applies to the whole deployment rather than the sandbox, and it is the one that would have prevented the opening scene without any of the rest. The sandbox is the boundary you build when you let a model write code. Not putting your credentials in an environment variable is the boundary you should already have had.
+
+## References
+
+- [Firecracker specification](https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md), the ≤125 ms boot figure and the measurement conditions attached to it.
+
+---
+
+Next: [The Agentic Supply Chain](/docs/security/agentic-supply-chain), the models, datasets, tools, servers, agents, images, registries, and update channels that can change Atlas without a code deploy.
+
+## Takeaways
+
+- A sandbox sharing an address space with your secrets is a naming convention, not a boundary.
+- Two different boundaries: execution (what can this process reach) and capability (what can this call do). Only the first is optional, and only if you never run generated code.
+- A plain container is a packaging boundary. Against code written to escape it, "we run it in Docker" is not a threat-model answer.
+- The ladder: container, gVisor, microVM, WASM. MicroVMs are the practical production default: hardware isolation with a specified boot-to-userspace ceiling of 125 ms, under stated measurement conditions, and snapshot restore in low milliseconds, which is what makes disposable per-run sandboxes affordable.
+- WASM has the strongest capability story: no filesystem, network, or OS access by default, at the cost of arbitrary native dependencies.
+- Buying a managed sandbox is usually right. Credentials and egress policy remain yours either way.
+- The sandbox holds no credentials. It asks a broker for an *operation* and gets a result; the token is minted and used outside the boundary.
+- Route broker requests through the same `authorize()` the dispatcher uses, or you have built a second, unreviewed tool interface that voids your least-privilege work.
+- Egress is the trifecta's third element and the one you can usually remove. Default deny, allowlist the broker and the model endpoint, deny the package registry at runtime.
+- Alert on egress denials. A blocked connection to an unexpected host is the highest-signal detection in this part.
+- Bound time, memory, disk, filesystem visibility, and output size. Truncate sandbox output. It becomes prompt text.
+- One sandbox per run, destroyed after. Warm pools are fine; warm state is a cross-run leak.
+- Sandboxing contains code, not decisions. A perfectly isolated agent can still be talked into an in-policy action.
+- `run_python` is the largest single capability you can grant. If you can enumerate the operations, enumerate them instead.
