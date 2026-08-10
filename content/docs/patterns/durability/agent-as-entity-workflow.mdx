@@ -1,0 +1,215 @@
+---
+title: Agent as Entity Workflow
+description: One long-lived workflow per business entity, holding the agent state for its whole life.
+---
+
+<Aside type="tip" title="Temporal pattern">
+This is the [Entity Workflow](https://temporal-sa.github.io/temporal-design-patterns/) pattern applied to agents. It composes with [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory), [Signal With Start](/docs/patterns/durability/signal-with-start), and [Updatable SLA Timer](/docs/patterns/durability/sla-timer). In practice you will use all four together.
+</Aside>
+
+## Problem
+
+An agent's work outlives any process that could hold it. A support ticket stays open for eleven days: the customer replies twice, a refund waits on approval overnight, a deploy restarts every worker on Tuesday afternoon, and the agent has to pick up mid-thought each time with everything it knew intact.
+
+The obvious implementation is a row in a database plus a queue. Load state, run a turn, write state back, enqueue whatever comes next. It works until you ask it any of the real questions: what happens when the process dies between the write and the enqueue? Who reconstructs the agent's position in its own reasoning? Where does the fourteen-day SLA timer live, and who fires it if the box that set it is gone? When two customer replies arrive four milliseconds apart, which one wins?
+
+Each answer is a component. Together they are a distributed system, and you did not set out to build one.
+
+## Forces
+
+- **State must survive processes**, and the lifetime is measured in days or weeks, not seconds.
+- **Input arrives asynchronously**: customer replies, approvals, webhooks, with no guarantee anything is listening.
+- **The agent's position matters**, not just its data. "Waiting for approval on step four" is state.
+- **Concurrent input must serialize.** Two replies interleaving into one agent loop is a correctness bug.
+- **You cannot hold a process open.** Thousands of concurrent tickets, each idle 99.9% of the time.
+
+## Solution
+
+Run **one workflow per entity**, for the entity's whole life.
+
+The workflow *is* the agent loop, expressed as ordinary sequential code. Its local variables are the agent state. Temporal persists every step to an event history, so a crash replays the workflow back to exactly where it was: same variables, same position, same pending timers, on whichever worker picks it up. The workflow ID is the entity ID (`ticket-8842`), which makes it addressable and makes duplicates impossible.
+
+The agent's turns and its tools become **activities**: retried independently, timed independently, and, critically, allowed to be nondeterministic. The LLM call lives in an activity precisely because it cannot live in the workflow.
+
+<Figure caption="The workflow holds position and state across weeks. Each blocking wait costs nothing while idle; only activities consume a worker.">
+
+```
+  workflow  ticket-8842                          worker process
+  ───────────────────────────────────────────     ─────────────
+  start ──▶ await reply ─────────── (4 days) ───▶  nothing running
+              │  signal: customerReplied
+              ▼
+            runAgentTurn ──────────────────────▶  activity · LLM call
+              │
+              ▼
+            await approval ───────── (18 hrs) ──▶  nothing running
+              │  signal: approved         ⟵ deploy restarts everything here
+              ▼                                    replay ─▶ same position
+            issueCredit ───────────────────────▶  activity · side effect
+              │
+              ▼
+            continue-as-new ◀── history too large
+```
+
+</Figure>
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="workflows/ticket-agent.ts"
+import * as wf from '@temporalio/workflow';
+import type * as activities from '../activities';
+
+const { runAgentTurn, notifyCustomer } = wf.proxyActivities<typeof activities>({
+  startToCloseTimeout: '2 minutes',
+  retry: {
+    maximumAttempts: 5,
+    // A refusal will never succeed on retry — see /patterns/failure/non-retryable-model-errors/
+    nonRetryableErrorTypes: ['ContentPolicyError'],
+  },
+});
+
+export const customerReplied = wf.defineSignal<[string]>('customerReplied');
+export const ticketStatus = wf.defineQuery<TicketState>('ticketStatus');
+
+const TURNS_PER_RUN = 50;
+const REPLY_SLA = '14 days';
+
+export async function ticketAgent(state: TicketState): Promise<TicketOutcome> {
+  const inbox: string[] = [];
+
+  // Handlers mutate workflow-local state. They never call activities directly.
+  wf.setHandler(customerReplied, (message) => void inbox.push(message));
+  wf.setHandler(ticketStatus, () => state);
+
+  while (state.status === 'open') {
+    // Blocks for up to 14 days without holding a process open.
+    const replied = await wf.condition(() => inbox.length > 0, REPLY_SLA);
+    if (!replied) return abandon(state); // pure function — safe in workflow code
+
+    state = await runAgentTurn(state, inbox.shift()!);
+    if (state.reply) await notifyCustomer(state.ticketId, state.reply);
+
+    if (state.turns >= TURNS_PER_RUN) {
+      // Resets the event history, keeps the conversation. Does not return.
+      await wf.continueAsNew<typeof ticketAgent>(compact(state));
+    }
+  }
+
+  return state.outcome;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="workflows/ticket_agent.py"
+import asyncio
+from datetime import timedelta
+from temporalio import workflow
+
+TURNS_PER_RUN = 50
+REPLY_SLA = timedelta(days=14)
+
+@workflow.defn
+class TicketAgent:
+    def __init__(self) -> None:
+        self._inbox: list[str] = []
+        self._state: TicketState | None = None
+
+    # Handlers mutate workflow-local state. They never call activities directly.
+    @workflow.signal
+    def customer_replied(self, message: str) -> None:
+        self._inbox.append(message)
+
+    @workflow.query
+    def ticket_status(self) -> TicketState | None:
+        return self._state
+
+    @workflow.run
+    async def run(self, state: TicketState) -> TicketOutcome:
+        self._state = state
+
+        while state.status == "open":
+            try:
+                # Blocks for up to 14 days without holding a process open.
+                await workflow.wait_condition(
+                    lambda: bool(self._inbox), timeout=REPLY_SLA
+                )
+            except asyncio.TimeoutError:
+                return abandon(state)  # pure function — safe in workflow code
+
+            state = await workflow.execute_activity(
+                run_agent_turn,
+                args=[state, self._inbox.pop(0)],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=5,
+                    # A refusal will never succeed on retry.
+                    non_retryable_error_types=["ContentPolicyError"],
+                ),
+            )
+            self._state = state
+
+            if state.reply:
+                await workflow.execute_activity(
+                    notify_customer,
+                    args=[state.ticket_id, state.reply],
+                    start_to_close_timeout=timedelta(minutes=2),
+                )
+
+            if state.turns >= TURNS_PER_RUN:
+                # Resets the event history, keeps the conversation.
+                workflow.continue_as_new(compact(state))
+
+        return state.outcome
+```
+
+</Tab>
+</Tabs>
+
+<Aside type="caution" title="One asymmetry between the tracks">
+TypeScript's `wf.condition(fn, timeout)` **returns `false`** when the timeout fires. Python's `workflow.wait_condition(fn, timeout=...)` **raises `asyncio.TimeoutError`**. Same semantics, different control flow. A Python port of TypeScript workflow code that checks a return value will silently never handle the timeout.
+</Aside>
+
+## Why the LLM call is an activity
+
+This is the load-bearing constraint of the whole pattern, and the one people violate first.
+
+Workflow code must be **deterministic**: on replay it re-executes from the start, and every decision must land the same way it did originally, or Temporal detects the divergence and fails the workflow. An LLM call is the least deterministic thing in your system. Put it directly in workflow code and the first replay after a worker restart produces a different response, a different branch, and a non-determinism error.
+
+Activities carry no such constraint. Their *results* are recorded in the event history, so on replay the workflow does not call the model again. It reads what the model said the first time. The nondeterminism is captured once and then frozen, which is exactly what you want: a replayed agent makes the same decisions it originally made, not new ones.
+
+The same rule extends past the model call. Anything nondeterministic: clock reads, random values, network calls, database queries, belongs in an activity or in Temporal's deterministic equivalents (`workflow.now()`, `wf.uuid4()`).
+
+## Trade-offs
+
+**You pay in event history.** Every signal, activity, and timer is persisted. Agent turns are chatty, so history grows fast, which is why [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory) is not optional here but part of the pattern.
+
+**Latency floor rises.** Each activity round-trip adds a few milliseconds of persistence. Irrelevant against a multi-second model call; noticeable if you wrap something that took 200 microseconds. See [Local Activities](/docs/patterns/durability/tool-as-activity).
+
+**Determinism constrains how you write code.** Not hard, but it is a rule you have to hold in your head, and it bites during refactors more than during first drafts.
+
+**Workflow versioning is now your problem.** Changing the agent loop while thousands of instances are mid-flight requires Temporal's patching mechanism. Covered in [Deploying and Versioning Agents](/docs/production/versioning). Plan for it before you need it, not after.
+
+## When not to use it
+
+- **The interaction is one-shot and short.** A classifier, an extraction call, a single-turn Q&A. There is no entity and no lifetime; a plain request handler with retries is correct and this is overhead.
+- **The entity is genuinely stateless between turns.** If everything you need lives in your own database and the "agent" is a pure function of a request, you have a workflow-shaped answer to a function-shaped question.
+- **You need thousands of writes per second per entity.** One workflow serializes its own input by design. That is a feature for a support ticket and a bottleneck for a hot counter.
+- **You have not yet felt the pain.** This pattern is worth its complexity when process death, long waits, or mid-flight deploys are real for you. Adopting it because it is architecturally satisfying is how teams end up with a durable execution engine wrapped around a chatbot.
+
+## Related
+
+- [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory): required companion once history grows
+- [Signal With Start](/docs/patterns/durability/signal-with-start): deliver the first message without a separate "does it exist" check
+- [Request-Response via Update](/docs/patterns/durability/update-request-response): ask a running agent something and get a validated answer back
+- [Updatable SLA Timer](/docs/patterns/durability/sla-timer): deadlines that move when new information arrives
+- [Saga for Tool Side Effects](/docs/patterns/durability/saga-for-tools): when the refund succeeded and the email didn't
+- Chapter: [Long-Lived Agents](/docs/durability/long-lived-agents): the narrative walkthrough this entry compresses
+
+## References
+
+- [Temporal Design Patterns](https://temporal-sa.github.io/temporal-design-patterns/), the entity workflow pattern this entry adapts.
