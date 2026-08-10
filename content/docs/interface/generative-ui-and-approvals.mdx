@@ -1,0 +1,138 @@
+---
+title: "Generative UI and Tool Approvals"
+description: "Rendering tool calls as interface, and putting the approval gate where the user actually is."
+---
+
+[The previous chapter](/docs/interface/streaming-ux) ended with a rule and deferred it: tool calls are structured elements, not text. This chapter is what that means, and then the question [Part XII designed a card for](/docs/human-in-the-loop/approval-gates) without saying where it goes.
+
+## A tool call is a sequence of frames
+
+The mistake is treating a tool call as an event that produces a result. It is a **state machine**, and every state is a frame worth rendering:
+
+| State | What is known | What to render |
+| --- | --- | --- |
+| Input streaming | The tool name, arguments arriving | `Looking up an order…` |
+| Input available | Name and complete arguments | `Looking up order 4921` |
+| Executing | Same, plus elapsed time | The same, with a spinner and a duration after ~2s |
+| Output available | The result | A component built for that result |
+| Error | What failed, and whether it is terminal | A state, not a stack trace |
+
+Rendering only the last two rows throws away the frames that matter most. [The perceptual budget](/docs/interface/streaming-ux) is spent in the first three, and that is where the user decides whether the system is working. *"Looking up order 4921"* at 400 milliseconds is the entire benefit of streaming, arriving before any result exists.
+
+Note also that the second row is strictly better than the first for the same cost. Once arguments have finished streaming you can say **which** order, and a specific status line is worth several generic ones.
+
+## Generative UI is a lookup table
+
+"Generative UI" covers a spectrum, and the industry has settled into roughly three positions:
+
+| Approach | The model decides | Risk |
+| --- | --- | --- |
+| **Component registry** | Which tool to call | Low: you wrote every component |
+| Declarative layout | Which tool, and a layout from a constrained grammar | Moderate |
+| Open-ended generation | Which tool, and arbitrary interface | High |
+
+This book's position is the first one, stated as a rule that will look familiar:
+
+> **The model picks the component. You wrote the component.**
+
+That is the same boundary as every other one in this book: [the model chooses the subject, your code supplies the authority](/docs/tools/tools-are-apis-for-models); the model proposes an action, your code enforces the limit. Rendering is not an exception, and the reason is concrete rather than aesthetic: a tool result may contain text from a document a stranger wrote, and an interface generated *from* that text is [an injection surface with a render step attached](/docs/security/prompt-injection).
+
+Mechanically the registry is unglamorous, which is the point:
+
+```
+   tool name  ──▶  component
+   ─────────       ─────────
+   get_order                → <OrderCard />
+   erp_list_unpaid_invoices → <InvoiceTable />
+   crm_account_risk_profile → <RiskSummary />
+   issue_credit             → <CreditApproval />   ← also the gate
+   (unknown)                → <RawResult />        ← always have this
+```
+
+The last row is the one people omit. A tool with no registered component still has to render something, because the alternative is a blank space where a result should be. And adding a tool should not require a UI deploy to avoid that.
+
+<Aside type="note" title="When open-ended generation is the right answer">
+Being fair to the other end of the spectrum: it earns its place when the data shape is genuinely unenumerable. Exploratory dashboards, one-off analyses, a surface whose whole purpose is that you did not anticipate the question.
+
+The constraint that makes it survivable is the same one as for any untrusted content: it renders into a sandbox with **no ability to trigger actions**. A generated layout may display; it may not have a button that does something. The moment a model-authored interface can invoke a tool, you have moved the approval gate inside the thing being approved.
+</Aside>
+
+## Where the gate goes depends on who is watching
+
+Part XII specified what an approval card contains. The placement question is separate, and it has a clean determinant: **is the approver the person currently driving the agent?**
+
+| Approver | Placement | Why |
+| --- | --- | --- |
+| The person in the session | **Inline**, as a message from the agent | They are already looking at it. Interrupting is free. |
+| Someone else, now | **A queue**, with the run waiting durably | The driver cannot approve their own action |
+| Someone else, later | **A queue**, and the run has [paused for days](/docs/durable-execution/signals-and-children) | Nobody is watching anything |
+
+The failure is picking one and applying it everywhere, and the sharpest way to say why is that **chat is a cockpit, not a conveyor belt.** Inline confirmation works beautifully for an interactive session and fails completely for autonomous operation, where nobody is in the chat, approvals arrive in volume, and the [risk tiers](/docs/human-in-the-loop/risk-tiers) exist precisely to batch them.
+
+Conversely, routing an interactive user's own action to a queue they will check tomorrow converts a two-second confirmation into a day of latency for no safety gain, since they are the authority and they are right there.
+
+## Render once, store the bytes, display the bytes
+
+Combining two earlier requirements produces a design conclusion neither reaches alone.
+
+[Escalation and Audit](/docs/human-in-the-loop/escalation-and-audit) argued that the audit record must contain the **rendered** card, because re-rendering it later produces a different card from state that has since moved. [Approval Gates](/docs/human-in-the-loop/approval-gates) argued that approvals expire for the same reason.
+
+So render the card **once**, at the moment the gate fires, and store it. The queue displays the stored bytes. The inline case displays the stored bytes. The audit record *is* the stored bytes.
+
+<Figure caption="One render, three consumers. Nothing can disagree, because there is nothing to disagree with." frame={false}>
+
+```
+   gate fires
+        │
+        ▼
+   render card ──▶ stored artifact ──┬──▶ inline in the session
+   (once)                            ├──▶ the review queue
+                                     └──▶ the audit record
+```
+
+</Figure>
+
+Do it the other way, rendering live in each surface, and you have three views that can differ, one of which is the legal record. This costs almost nothing to get right at the start and is unpleasant to retrofit.
+
+## Do not render agent actions optimistically
+
+Ordinary web practice says render the change immediately and reconcile with the server after. For agent actions this is wrong, and the reason is [Part VII's commitment rule](/docs/langgraph/streaming-and-control): anything you show, you have said.
+
+An optimistically rendered *"Refund issued"* that then fails is not a stale cache. It is a false statement made to a customer by a system they were told to trust, and no subsequent correction fully retrieves it. Show `issuing…`, then show the outcome. The two hundred milliseconds you would have saved are not worth the class of incident you buy.
+
+The same applies to the approval itself: a card should not disappear the instant Approve is clicked. It should show that the decision was **submitted**, and then that it was **accepted**, because [an update can be rejected by a validator](/docs/human-in-the-loop/approval-gates) for staleness, and a card that vanished has already told the reviewer their decision took effect.
+
+## Atlas, concretely
+
+| Surface | Rendering |
+| --- | --- |
+| Tool calls | Registry by tool name, with a raw fallback |
+| Frames | Status line at input-available, spinner with elapsed after 2s, component at output-available |
+| `issue_credit` < $1,000 | Inline card in the console. The agent handling the ticket is the approver |
+| `issue_credit` ≥ $1,000 | Queue for the team lead, run paused durably, [48-business-hour expiry](/docs/human-in-the-loop/approval-gates) |
+| Card lifecycle | Rendered once at gate time, stored, displayed from storage everywhere |
+| After Approve | `Submitted` → `Accepted`, never an immediate disappearance |
+| Model-generated layout | Not used |
+
+The console on the other end of the approve call is [Request-Response via Update](/docs/patterns/durability/update-request-response) in the catalog, the pattern that explains why Approve returns a validated answer instead of a fire-and-forget acknowledgement.
+
+That last row is a decision rather than an omission. Meridian's support console shows six known result shapes and one fallback, all written by people, all reviewable. There is no question a support agent asks that requires an interface nobody anticipated. And the one surface where an unanticipated interface would be genuinely useful, ad-hoc warehouse analysis, is [not something Atlas does](/docs/retrieval/sql-is-still-the-answer).
+
+---
+
+Next: [Accessible and Global Agent Interfaces](/docs/interface/accessible-and-global-interfaces), making the same streaming and approval states work across assistive technology, languages, locales, money, and time.
+
+## Takeaways
+
+- A tool call is a state machine, not an event. Every state is a frame worth rendering: input-streaming, input-available, executing, output-available, error.
+- The perceptual budget is spent in the first three states, before any result exists. Rendering only the result throws away the frames that decide whether the system feels alive.
+- Once arguments finish streaming you can name the specific order. A specific status line is worth several generic ones, at the same cost.
+- Generative UI spans a registry, a constrained grammar, and open-ended generation. Prefer the registry: **the model picks the component, you wrote the component.**
+- A tool result can contain text a stranger wrote, so an interface generated from it is an injection surface with a render step attached.
+- Always register a fallback component. Adding a tool should not require a UI deploy to avoid a blank space.
+- Open-ended generation earns its place for unenumerable data shapes, and only inside a sandbox that cannot trigger actions.
+- Gate placement depends on whether the approver is the person driving. Inline for interactive sessions; a queue when the authority is elsewhere or absent.
+- Chat is a cockpit, not a conveyor belt. Inline confirmation fails for autonomous operation, and a queue fails an interactive user who is the authority and is right there.
+- Render the card once at gate time and store it. The inline view, the queue, and the audit record all display the same bytes, so none of them can disagree.
+- Never render agent actions optimistically. An optimistic "Refund issued" that fails is a false statement to a customer, not a stale cache.
+- After Approve, show submitted and then accepted. A card that vanishes has claimed an outcome a validator may still reject.
