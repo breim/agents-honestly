@@ -1,0 +1,149 @@
+---
+title: "The Coordination Tax"
+description: "What you pay the moment work crosses an agent boundary, stated in tokens and seconds."
+---
+
+Every topology in this part costs you context, latency, and money. Some of them earn it. This chapter is the price list, so that the earning can be assessed rather than assumed.
+
+Start with the number that reframes the whole discussion. Anthropic's published account of its multi-agent research system reports that **multi-agent systems use about 15× more tokens than chats**, against about 4× for a single agent, and, on one of its evaluations, that **token usage by itself explains 80% of the variance** in performance.
+
+Read those two facts together, because separately each is quoted to prove the opposite thing.
+
+## The confound at the centre of every multi-agent benchmark
+
+The same system reported outperforming a strong single agent by 90.2% on internal research evaluations. That is a real result and it is the one that gets cited.
+
+It was also produced with roughly fifteen times the tokens.
+
+If token spend explains most of the performance variance, then a comparison between a multi-agent system and a single agent *at different budgets* is substantially a comparison between more compute and less compute. And when researchers control for that, holding thinking-token budgets equal, the finding flips on at least some task families: single agents match or beat multi-agent systems on multi-hop reasoning under equal budgets.
+
+> **"Multi-agent beat single-agent" often means "more tokens beat fewer tokens." Before you buy the topology, check whether you could have bought the tokens.**
+
+That is not a debunking. It sharpens the question into the one worth asking: *given a fixed budget, does splitting the work spend it better than not splitting it?* Sometimes yes. For genuinely parallel search over many sources, more agents convert budget into wall-clock and coverage that one context cannot reach. Often no.
+
+## Three currencies
+
+<Figure caption="Each boundary charges in all three. Only the second is sometimes refunded." frame={false}>
+
+```
+   ┌─────────────────────────────────────────────────────────┐
+   │  TOKENS      each agent carries its own system prompt,   │
+   │              tool catalogue, and history. the handoff    │
+   │              is written by one and re-read by another.   │
+   │              ── always charged, roughly 15× reported     │
+   ├─────────────────────────────────────────────────────────┤
+   │  LATENCY     serial handoffs add. parallel fan-out       │
+   │              subtracts — the one refund available.       │
+   │              ── charged unless the work is independent   │
+   ├─────────────────────────────────────────────────────────┤
+   │  CORRECTNESS context does not cross; a summary does.     │
+   │              what the sender dropped, the receiver       │
+   │              cannot know was dropped.                    │
+   │              ── always charged, hardest to measure       │
+   └─────────────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+### Tokens
+
+The multiplier comes from four places, and none of them is waste you can engineer away. They are what having a second agent *means*:
+
+| Charge | Why |
+| --- | --- |
+| Duplicated preamble | Each agent has its own system prompt and tool catalogue, re-sent every turn of its own loop |
+| The handoff, twice | The sender spends output tokens writing it; the receiver spends input tokens reading it, on every subsequent turn |
+| Independent loops | Each agent runs its own [quadratic-in-turns](/docs/production/cost-engineering) accumulation |
+| Synthesis | A final pass to reconcile what the workers returned, a whole extra context |
+
+The third row is the one that surprises people. Two agents of ten turns each are not one twenty-turn run split in half; they are two separate quadratics, each re-sending its own growing transcript. Splitting a run does not divide the token cost. It multiplies the number of contexts that grow.
+
+### Latency
+
+The only currency where a refund exists, and it is conditional.
+
+**Serial handoff adds.** Agent A finishes, writes a summary, agent B starts cold and re-reads it. That is a full extra round trip plus B's ramp-up, and it repeats at every boundary. A four-hop chain is four ramp-ups.
+
+**Parallel fan-out subtracts,** when the items are genuinely independent. Twenty documents analyzed by twenty workers finish in about the time of the slowest one, and this is the case where multi-agent architecture is straightforwardly correct. Note the shape: it is a [map-reduce](/docs/patterns/scale/mapreduce-tree), the workers never talk to each other, and the reduce step is code.
+
+The distinction is the whole practical lesson of the part: **fan-out buys latency; conversation spends it.**
+
+### Correctness
+
+The expensive currency, and the one with no invoice.
+
+An agent boundary is a **lossy compression step you did not design**. Agent A read four documents, followed two references, and formed a judgment. Agent B receives three sentences. Everything B decides is downstream of what A chose to keep, and B has no way to discover what was dropped. It cannot ask, because the material is gone from its context.
+
+This compounds with the mechanism from [context poisoning](/docs/context/context-poisoning): a claim that crosses a boundary arrives stripped of provenance, and each agent that repeats it adds apparent corroboration. The intuition that a second agent will catch the first one's error is backwards. **A reviewer reading the previous agent's conclusion is a second vote.** Only a reviewer reading the *source data* is a check, which costs the tokens you were trying to save by summarizing.
+
+And the failure data from [the last chapter of this part](/docs/multi-agent/when-not-to) lands exactly here: roughly a third of observed multi-agent failures are inter-agent misalignment, which is this tax coming due.
+
+## What the tax buys, when it buys anything
+
+Two conditions, and both have to hold.
+
+**The task value exceeds the token cost.** A 15× multiplier is absorbable for legal due diligence, competitive intelligence, or literature review: work where a better answer is worth hundreds of dollars and hours of a professional's time. It is not absorbable for consumer question-answering, support triage, or anything with thin per-transaction margin. This is a [unit-economics](/docs/production/cost-engineering) question with a numeric answer, and it should be answered before the architecture is chosen rather than after.
+
+**The work is genuinely parallel, or genuinely must be isolated.** Breadth-first search over many independent sources converts budget into coverage. A [quarantined reader that must not hold tools](/docs/security/prompt-injection) converts budget into a security property. Neither of those is available to a single agent at any budget, which is what makes them real reasons.
+
+<Aside type="note" title="The shape that keeps showing up in systems that work">
+The reported production architectures converge on something narrower than "a team of agents": **an orchestrator that plans, workers that execute in parallel over disjoint inputs, and a separate verification pass**, in Anthropic's case a dedicated citation step checking claims against sources.
+
+Three properties of that shape are worth stealing regardless of your topology. The workers do not talk to each other. The orchestrator owns the plan and the termination. And verification reads the *sources*, not the workers' conclusions.
+
+Most of the coordination tax is charged by the thing that shape omits: agents negotiating with each other.
+</Aside>
+
+## Reducing the tax if you are paying it
+
+If you have decided the split is justified, the multiplier is not fixed:
+
+**Pass references, not payloads.** The handoff carries chunk IDs, run IDs, and record keys; the receiver fetches what it needs. This is [pointers over payloads](/docs/context/dynamic-selection) applied to the boundary, and it also fixes the correctness problem: the receiver can go back to the source.
+
+**Type the handoff.** A [validated schema](/docs/foundations/structured-output) is smaller than prose, unambiguous, and testable in isolation. Prose handoffs are where inter-agent misalignment lives.
+
+**Give workers small contexts and narrow tools.** A worker that inherits the orchestrator's full catalogue pays for it every turn and gains nothing.
+
+**Cache the shared prefix.** If every worker shares a system prompt, [prefix caching](/docs/foundations/prompt-caching) turns the duplicated preamble from a full charge into a fraction of one. This is the single largest available discount on the token multiplier.
+
+**Batch the workers.** Fan-out is usually latency-tolerant per item; [a batch endpoint](/docs/patterns/cost/batch-api-offload) halves it, and stacks with the cache discount.
+
+**Budget the whole topology, not each agent.** A per-agent cap with five agents is a 5× ceiling nobody chose. The [run budget](/docs/production/cost-engineering) belongs at the top and is spent down by everyone.
+
+## Atlas, concretely
+
+Atlas resolves support tickets. Per-ticket margin is single-digit dollars, runs are eight to twenty turns, and the work is one ticket about one order: sequential, not parallel.
+
+| Test | Atlas |
+| --- | --- |
+| Task value vs. 15× tokens | **Fails.** The multiplier exceeds the margin on a resolved ticket |
+| Genuinely parallel work | No, one ticket, one order, one customer |
+| Context exceeds one window | No, after [compaction](/docs/context/compaction) and selective retrieval |
+| Trust boundary needing isolation | Yes, exactly one: the [quarantined reader](/docs/security/prompt-injection) for untrusted ticket text |
+
+Three no's and one yes, and the yes is a security architecture rather than a team. So Atlas is a single agent with one isolated reader, which is the answer for most production systems and is not the answer most architecture diagrams show.
+
+The one place Atlas would pay the tax happily: a bulk backlog analysis over four thousand historical tickets. Independent items, latency-tolerant, batch-priced, no negotiation. That is fan-out, and its tax bill is almost entirely the token multiplier with the cache and batch discounts already applied.
+
+## References
+
+- [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system), Anthropic: the 15× token figure, the variance finding, and the architecture the numbers describe.
+
+---
+
+Next: [Supervisor and Handoff](/docs/multi-agent/supervisor-and-handoff), the two topologies that hold up in production, and how they differ in failure.
+
+## Takeaways
+
+- Reported multi-agent systems use roughly 15× the tokens of a chat interaction; single agents about 4×.
+- On one of the same system's evaluations, token usage by itself explains 80% of performance variance, so a multi-agent win measured at a higher budget is substantially a compute win.
+- Under equal thinking-token budgets, single agents match or beat multi-agent systems on some task families. Before buying the topology, check whether you could have bought the tokens.
+- Three currencies: tokens (always charged), latency (charged unless the work is independent), correctness (always charged, no invoice).
+- The token multiplier comes from duplicated preambles, the handoff paid twice, independent quadratic loops, and a synthesis pass. Splitting a run does not divide token cost. It multiplies the number of growing contexts.
+- Fan-out buys latency; conversation spends it. That distinction is the practical core of this part.
+- An agent boundary is a lossy compression step you did not design. The receiver cannot discover what the sender dropped.
+- A reviewer reading the previous agent's conclusion is a second vote. Only one reading the source data is a check, and that costs the tokens the summary was saving.
+- The tax is worth paying when task value exceeds the multiplier *and* the work is genuinely parallel or genuinely must be isolated. Both conditions, not either.
+- The production shape that works: an orchestrator that plans, workers that never talk to each other, and a verification pass that reads sources rather than conclusions.
+- If you are paying the tax: pass references not payloads, type the handoff, keep worker contexts narrow, cache the shared prefix, batch the workers, and budget the whole topology rather than each agent.
+- Prefix caching on a shared worker preamble is the single largest available discount on the multiplier.
