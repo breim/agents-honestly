@@ -1,0 +1,169 @@
+---
+title: "Tool Discovery at Scale"
+description: "What to do when there are two hundred tools and eleven are relevant."
+---
+
+Every chapter in Part VIII has assumed you designed the catalogue. This one is about the catalogue you didn't, because that is where two hundred tools actually comes from.
+
+[Part III already set the policy](/docs/context/dynamic-selection): pointers not payloads, static profiles where categories are stable, and the caching tension that makes naive per-request selection a bad trade. This chapter is the mechanism underneath it, at the scale where profiles stop being enough.
+
+## Nobody writes two hundred tools
+
+They connect five servers.
+
+An MCP tool definition costs roughly **200–500 tokens**. Five servers at thirty tools each is **30,000–60,000 tokens before the user's first message**; one widely-used official server ships around 42,000 tokens of definitions on its own. None of that is anyone's fault. Each server was built to be useful alone, by people with no knowledge of what else you would connect, and every one of them is complete because completeness is the right call for a component you publish.
+
+The pattern is familiar. [Auto-generating tools from an OpenAPI spec](/docs/tools/tools-are-apis-for-models) produced sixty tools for one system; the server ecosystem industrialized that and made it one line of configuration per system. The failure did not change. It just got easier to reach and harder to see, because the schemas are not in your repository.
+
+## What it costs, measured
+
+Two separate costs, and the second one surprises people:
+
+**Tokens.** Fixed overhead on every request for the life of the conversation. Being in the prefix means it [caches well](/docs/foundations/prompt-caching), so the dollar cost is softer than it looks, but a cached token is still a token the model attends to.
+
+**Accuracy.** This is the real bill. Selection quality degrades once a catalogue passes roughly **30–50 tools**, and the collapse is not gentle. One measurement of agents facing bloated tool sets recorded selection accuracy falling from **43% to under 14%**, a threefold degradation caused by nothing but the size of the menu.
+
+That extends the numbers [Part II gave for small catalogues](/docs/first-agent/first-tools) into the range where most production agents actually live once integrations land. Those numbers: ten to fifteen tools for smaller models, twenty to thirty for larger, against benchmarks that average three candidates.
+
+## First move: don't have two hundred tools
+
+Discovery machinery is what you reach for when consolidation has failed or is unavailable. Before that:
+
+**Disable what you don't use.** Most servers expose their full surface by default and accept an allowlist. A thirty-tool server where you use four is twenty-six tools of pure overhead, and turning them off is a config change.
+
+**Prefer several narrow servers to one broad one.** Teams that split into domain-specific servers, each exposing a small and relevant surface, report per-session schema overhead dropping by roughly half. Same tools, better partitioning. (The larger reductions you will see quoted, 80% and above, belong to *deferred loading*, not to partitioning. That mechanism is what the rest of this chapter is about.)
+
+**Consolidate the ones you own.** That is the entire preceding half of Part VIII: [a tool is a job, not an endpoint](/docs/tools/tools-are-apis-for-models), and three chained calls that always occur together are one tool.
+
+Do those three and a great many catalogues land back under fifty, where none of the rest of this chapter is necessary.
+
+## The mechanism: deferred loading plus a search tool
+
+When the catalogue is genuinely large and genuinely not yours, the move is to stop sending schemas and start sending an index.
+
+<Figure caption="The catalogue is declared but not loaded. Only the search tool is resident; matches are appended when the model asks." frame={false}>
+
+```
+   RESIDENT (position 0, cached)        DEFERRED (declared, not loaded)
+   ┌────────────────────────┐          ┌──────────────────────────────┐
+   │ search_tools           │          │  jira_*      (34)            │
+   │ escalate_to_human      │  ──────▶ │  slack_*     (22)            │
+   └────────────────────────┘  search  │  carrier_*   (19)            │
+              │                        │  …           (127)           │
+              │                        └──────────────────────────────┘
+              ▼                                     │
+   "invoices overdue account"                       │ top ~5 matches
+              └──────────────────────────────────────┘
+                       schemas APPENDED to the context,
+                       not substituted at position 0
+```
+
+</Figure>
+
+Mechanically: mark the catalogue `defer_loading: true`, keep a search tool resident, and let the model query the index and pull what it needs. Two meta-operations do the work: one that searches names and descriptions, one that activates a match for the rest of the run.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/catalogue.ts"
+const tools = [
+  // Resident. The search tool itself can never be deferred.
+  { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' },
+
+  // Resident: the one action that must always be reachable.
+  escalateToHuman,
+
+  // Declared, but not loaded into context until a search surfaces them.
+  ...meridianCatalogue.map((t) => ({ ...t, defer_loading: true })),
+];
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/catalogue.py"
+tools = [
+    # Resident. The search tool itself can never be deferred.
+    {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+
+    # Resident: the one action that must always be reachable.
+    ESCALATE_TO_HUMAN,
+
+    # Declared, but not loaded into context until a search surfaces them.
+    *({**t, "defer_loading": True} for t in MERIDIAN_CATALOGUE),
+]
+```
+
+</Tab>
+</Tabs>
+
+The reported effect: **tool-definition tokens drop by roughly 85%**, since only the three-to-five tools a request actually needs are ever loaded. Accuracy moves too, and the shape of the movement is the interesting part. One evaluation records a weaker model going from **49% → 74%** and a stronger one from **79.5% → 88.1%**.
+
+Read those two numbers together. The model that was drowning gains twenty-five points; the model that was coping gains nine. **Tool search recovers accuracy that catalogue size destroyed. It does not manufacture accuracy that was never there.** If your catalogue is twelve tools, it costs you a round trip and buys nothing.
+
+<Aside type="caution" title="You cannot defer everything">
+The search tool must stay resident, and at least one real tool must remain non-deferred. A request that defers its entire catalogue is rejected outright.
+
+That constraint is not an implementation quirk. An agent whose every capability is invisible has nothing to reason from. It cannot know that searching is worthwhile, because nothing in its context suggests there is anything to find. Keep the search tool and your terminal action always visible. For Atlas, that action is `escalate_to_human`.
+</Aside>
+
+## Why this survives the cache and profile-swapping doesn't
+
+[Part III's warning](/docs/context/dynamic-selection) was that tools render at position zero, so varying them per request invalidates the entire cached prefix. You save 3,000 tokens of schema and start paying full price for the other 40,000.
+
+Tool search sidesteps that, and the reason is worth stating precisely: **discovered schemas are appended, not substituted.** The resident set at position zero never changes, so the prefix stays valid; the loaded tool arrives after the cached span, in the same position a new message would. It is the "an addition at the end is cheap, a substitution at the front is not" principle, implemented.
+
+Which resolves what looks like a contradiction between the two chapters. They are not competing recommendations:
+
+| | Use when |
+| --- | --- |
+| **Static profile** | You own the catalogue and the categories are stable. Zero latency, testable, visible in review. |
+| **Tool search** | The catalogue is large, third-party, or changes without your involvement. |
+
+Atlas uses a profile. An Atlas connected to four vendor servers would use both: a profile for the tools Meridian wrote, search over the ones it merely installed.
+
+## The index is the interface, one last time
+
+Search quality is entirely a function of names and descriptions, which is uncomfortable when the catalogue is someone else's and its descriptions were written to be read by a human browsing a README.
+
+This is where [namespacing](/docs/tools/tools-are-apis-for-models) stops being a nicety. A keyword search over `crm_`, `wms_`, and `erp_` prefixes has something to match on; a search over `listItems`, `getData`, and `fetchRecords` does not. When you control the wrapper, renaming and re-describing third-party tools *is* the integration work. It is the same "curate aggressively" conclusion from the start of this part, arriving at the point where it is least convenient and most necessary.
+
+The failure mode to expect: a team enables tool search across two hundred vaguely-described vendor tools, watches it pick badly, and concludes the mechanism doesn't work. It worked exactly as well as the index it was given, the same diagnosis [Part III gave for just-in-time loading generally](/docs/context/dynamic-selection).
+
+## What breaks
+
+**A tool that is never discovered does not exist.** Undiscovered is indistinguishable from unavailable, and the model will answer from what it found. Same silence as a selector dropping the right document, and it needs the same instrumentation: log searches that returned nothing useful, and read escalations that mention missing capability.
+
+**Discovery costs a round trip.** The step where the model searches is a step it did not spend working. On a short task that overhead can exceed the savings.
+
+**Descriptions you don't own are text you don't control.** A search index built from third-party descriptions is an index an outsider can influence, including by naming and describing a tool so that it wins searches it should lose. That is a real class of attack against tool ecosystems, and it belongs to [Part IX](/docs/mcp/what-mcp-is) and [prompt injection](/docs/security/prompt-injection); the piece that belongs here is that deferring a tool hides it from the model and **not** from your threat model.
+
+**Deferred is not disabled.** Anything loadable is callable, so the [blast radius](/docs/tools/read-and-write-tools) is the whole declared catalogue regardless of what is resident. If a vendor server exposes a destructive operation you never intend to use, the fix is the allowlist, not `defer_loading`.
+
+## Atlas, concretely
+
+Atlas has seven tools and does not need this chapter.
+
+That is the honest ending, and it is the point. Nothing in Part VIII pushed Atlas toward a large catalogue; consolidation kept it small on purpose, and a seven-tool agent with well-bounded descriptions sits comfortably inside every accuracy figure quoted above.
+
+The trigger is specific, though, and Meridian will hit it: connecting the Jira server for engineering escalations, the Slack server for internal notifications, and the carrier's tracking server takes the catalogue past ninety tools, none of which Meridian wrote, and none of which will consolidate. At that point the sequence is the one this chapter argued: allowlist each server down to what is used, keep the profile for the seven tools Meridian owns, and put search over the rest.
+
+The number that tells you it is time is not the tool count. It is **selection accuracy on your own ticket set**, the measurement [Part II told you to take](/docs/first-agent/first-tools) rather than trusting a benchmark, and the only one that knows where your catalogue's cliff actually is.
+
+---
+
+Next: [Enterprise Integrations](/docs/tools/enterprise-integrations). Live APIs, replicated data, webhooks, CDC, and the reconciliation work behind every useful tool.
+
+## Takeaways
+
+- Nobody writes two hundred tools; they connect five servers. An MCP tool definition runs 200–500 tokens, so five servers of thirty is 30,000–60,000 tokens before the first user message.
+- Selection degrades past roughly 30–50 tools, and one measurement records accuracy collapsing from 43% to under 14% purely from catalogue size.
+- Before any discovery machinery: allowlist each server to what you use, prefer several narrow servers to one broad one (reported ~50% overhead reduction; the 80%-plus figures belong to deferred loading, not to partitioning), and consolidate the tools you own.
+- The mechanism is deferred loading plus a resident search tool: declare the catalogue, load three to five tools per request. Reported ~85% reduction in tool-definition tokens.
+- Accuracy gains are recovery, not creation: 49%→74% for a weaker model, 79.5%→88.1% for a stronger one. Below the cliff, tool search costs a round trip and buys nothing.
+- You cannot defer everything. The search tool and at least one real tool stay resident, because an agent with no visible capability has nothing to reason from.
+- Discovered schemas are appended rather than substituted, so the cached prefix survives. That is exactly why profile-swapping at position zero does not.
+- Profiles and search are not competitors: profiles for the catalogue you own and control, search for the one you merely installed.
+- Search quality is entirely names and descriptions. Renaming and re-describing third-party tools is the integration work.
+- Undiscovered is indistinguishable from unavailable, and it fails silently. Deferred is not disabled. Anything loadable is callable, so blast radius is the whole declared catalogue.
+- The trigger to switch is selection accuracy on your own ticket set, not the tool count.
