@@ -1,0 +1,176 @@
+---
+title: "Worker-Specific Queues"
+description: "Pin work to the worker that holds the GPU, the cache, or the file."
+---
+
+## Problem
+
+A document-processing run has three steps: download a 200 MB PDF, extract and OCR its pages, and summarize the result.
+
+Each step is [an activity](/docs/patterns/durability/tool-as-activity), and activities are dispatched to whichever worker polls first. So step one downloads the file to worker A's local disk, step two runs on worker C, which does not have it, and either fails or downloads it again.
+
+The workaround everyone reaches for is to push the file through the activity boundary, which fails sooner and harder than people expect: a single payload is capped at 2 MB, so a 200 MB file is rejected outright rather than bloating the [event history](/docs/patterns/durability/continue-as-new-memory). The other workaround is object storage round trips, which is correct and costs two transfers per step for data that was already sitting on a local disk.
+
+The same shape appears with any resource that is not uniformly available: a GPU on four of forty workers, a warm model in memory, a checked-out repository, a licensed binary.
+
+## Forces
+
+- **Some state is local to a worker**: files, caches, loaded models, mounted volumes.
+- **Task queues are pools by design**, and that is what makes them scale.
+- **Payloads cannot carry the state**; the history has a size limit and object storage costs round trips.
+- **Pinning defeats load balancing**: a pinned worker that dies takes its work with it.
+- **Not all workers are equal.** Four have GPUs; forty do not.
+- **A pin must be released**, or capacity leaks one session at a time.
+
+## Solution
+
+**Each worker polls a unique queue in addition to the shared one.** A first activity on the shared queue reveals which worker took it; the rest of the sequence is routed to that worker's own queue.
+
+<Figure caption="Discover, then pin. The shared queue balances; the per-worker queue provides locality for one sequence." frame={false}>
+
+```
+   ① DISCOVER  ── shared queue "atlas" ──▶ any worker
+      activity: acquireWorker()
+      returns: "atlas-worker-7"          ← its own unique queue
+
+   ② PIN       ── queue "atlas-worker-7" ──▶ only worker 7 polls this
+      download(pdf)      → /tmp/9104.pdf on worker 7
+      ocr()              → reads that file, still worker 7
+      summarize()        → still worker 7
+
+   ③ RELEASE   ── frees the slot, deletes the scratch dir
+      MUST run in a finally: a leaked pin is capacity gone
+                             until the process restarts
+
+   ┌──────────────────────────────────────────────────────────┐
+   │ CAPABILITY QUEUES are different and often what you want:  │
+   │   "atlas-gpu"  polled by the 4 workers that have one      │
+   │   ── routing by CAPABILITY, still a pool, still balanced  │
+   └──────────────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+Four rules:
+
+**Distinguish capability routing from worker pinning.** If the requirement is *a worker with a GPU*, use a **capability queue**: a shared queue polled by the subset that qualifies. It keeps the pool and the balancing. Pinning to one specific worker is only needed when the requirement is *the worker that has the file I just wrote*, and that is a stronger and more expensive claim.
+
+**Discover through the shared queue.** The workflow does not know which workers exist. It dispatches an `acquireWorker` activity to the shared queue, and whichever worker picks it up returns its own queue name, which is how the pin is chosen without a registry.
+
+**Always release, in a `finally`.** A session that is acquired and never freed removes a worker from availability until the process restarts, and it does so silently. This is the leak this pattern is most likely to produce.
+
+**Handle the pinned worker dying.** The whole point is that the state is not durable, so a worker failing mid-sequence means the local file is gone. The recovery is to re-acquire and redo the sequence from the start, which means the sequence must be safe to repeat, the same [idempotency](/docs/tools/idempotency) requirement as anywhere else.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/pinned.ts"
+// Shared queue: any worker. Used only to discover one.
+const { acquireWorker } = proxyActivities<typeof shared>({
+  taskQueue: 'atlas', startToCloseTimeout: '30 seconds',
+});
+
+export async function processDocument(input: DocInput): Promise<Summary> {
+  // ① Discover — whichever worker picks this up names itself.
+  const { queue, sessionId } = await acquireWorker();
+
+  try {
+    // ② Pin — only that worker polls this queue, so local state persists
+    //    across the sequence without crossing the activity boundary.
+    const pinned = proxyActivities<typeof local>({
+      taskQueue: queue, startToCloseTimeout: '10 minutes',
+      heartbeatTimeout: '30 seconds',
+    });
+
+    const path = await pinned.download(input.url, sessionId);   // → local disk
+    const pages = await pinned.ocr(path);                        // reads it
+    return await pinned.summarize(pages);                        // same worker
+  } finally {
+    // ③ Release — a leaked pin removes a worker from the pool silently,
+    //    until the process restarts. This must not be conditional.
+    await acquireWorker.release?.(sessionId) ?? releaseWorker(sessionId);
+  }
+}
+
+// If the pinned worker dies mid-sequence the local file is gone, so the
+// caller re-acquires and repeats from ①. The sequence must be repeatable.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/pinned.py"
+@workflow.defn
+class ProcessDocument:
+    @workflow.run
+    async def run(self, input: DocInput) -> Summary:
+        # ① Discover — whichever worker picks this up names itself.
+        session = await workflow.execute_activity(
+            acquire_worker, task_queue="atlas",
+            start_to_close_timeout=timedelta(seconds=30))
+
+        try:
+            # ② Pin — only that worker polls this queue, so local state
+            #    persists across the sequence.
+            opts = dict(task_queue=session.queue,
+                        start_to_close_timeout=timedelta(minutes=10),
+                        heartbeat_timeout=timedelta(seconds=30))
+
+            path = await workflow.execute_activity(
+                download, input.url, session.id, **opts)      # → local disk
+            pages = await workflow.execute_activity(ocr, path, **opts)
+            return await workflow.execute_activity(summarize, pages, **opts)
+        finally:
+            # ③ Release — a leaked pin removes a worker from the pool
+            #    silently, until the process restarts.
+            await workflow.execute_activity(
+                release_worker, session.id, task_queue="atlas",
+                start_to_close_timeout=timedelta(seconds=30))
+
+
+# If the pinned worker dies the local file is gone: re-acquire and repeat
+# from ①. The sequence must be repeatable.
+```
+
+</Tab>
+</Tabs>
+
+Some SDKs provide this as a built-in **worker session** API, which handles the discover/pin/release cycle and the concurrency cap for you. Where it exists, use it: the manual version is exactly the code above plus the bugs you have not found yet.
+
+## Trade-offs
+
+**Load balancing is gone for the pinned span.** The pinned worker may be busy while others idle. Cap concurrent sessions per worker, or one worker accumulates every long document while thirty-nine sit empty.
+
+**A worker failure costs the whole sequence.** Local state is not durable by definition, so recovery is redo-from-scratch. That is acceptable for a five-minute OCR and unacceptable for a two-hour job, at which point the answer is [checkpointing to durable storage](/docs/patterns/durability/resumable-activity), not a longer pin.
+
+**It is easy to over-apply.** A pin is not needed for a warm HTTP connection or a small cache; it is needed for state that is expensive to move and cannot be recomputed. Object storage round trips are frequently cheaper than the operational cost of pinning.
+
+**Deploys become disruptive.** Rolling a fleet with active sessions kills their sequences. Drain sessions before shutdown, and keep sessions short enough that draining is measured in minutes.
+
+## When not to use it
+
+**When object storage will do.** If the file is small or the transfer is cheap relative to the processing, write it to storage and pass a reference. Simpler, durable, and it keeps the pool.
+
+**When the requirement is a capability, not an identity.** *Needs a GPU* is a capability queue polled by the qualifying subset: still pooled, still balanced. Reach for a pin only when it must be **that** worker.
+
+**When steps are independent.** If step two does not need step one's local output, there is nothing to pin for.
+
+**When the sequence is long.** Beyond a few minutes, the probability of losing the worker stops being negligible, and durable checkpoints beat locality.
+
+<Aside type="caution" title="Sticky execution is a different thing, and the names invite confusion">
+Temporal's **sticky execution** is on by default and applies to *workflow tasks only*: the service caches workflow state in memory on a worker and routes subsequent workflow tasks there, so it does not have to rebuild from the event history every time. It is a performance optimization, it is automatic, and it is not something you design around.
+
+**Worker-specific queues** are the opposite in every respect: opt-in, about *activities*, about data locality rather than replay cost, and entirely your responsibility to acquire and release.
+
+The practical consequence is that "my workflow is already sticky, so my activities run on the same worker" is false, and it is the assumption behind the bug at the top of this page. Sticky execution gives you nothing for the file on local disk.
+</Aside>
+
+## Related
+
+- [Tool as Activity](/docs/patterns/durability/tool-as-activity): why payloads should be references, and what the boundary costs
+- [Resumable Activity](/docs/patterns/durability/resumable-activity): durable checkpoints, for when the sequence is too long to pin
+- [Fan-Out Over Items](/docs/patterns/scale/fan-out): the pooled default this pattern deliberately gives up
+- [Priority Task Queues](/docs/patterns/scale/priority-queues): routing by urgency rather than by capability
+- [Sandboxing and Credential Boundaries](/docs/security/sandboxing): one sandbox per run, destroyed after, for the same locality reasons
