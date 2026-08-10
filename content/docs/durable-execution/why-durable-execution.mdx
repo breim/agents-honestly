@@ -1,0 +1,149 @@
+---
+title: "Why Durable Execution"
+description: "Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at."
+---
+
+[Part VII ended](/docs/langgraph/persistence) by listing four practices that get a checkpointed system a long way: one effect per node with the effect last, deterministic idempotency keys, a lease per thread, and a sweeper that finds stalled runs.
+
+Read that list again as an architecture rather than as advice.
+
+## You already built half of it
+
+Each of those has a name in a field that has existed for decades:
+
+| What you wrote | What it is called |
+| --- | --- |
+| Idempotency keys derived from the run | Deduplication |
+| A lease per thread before resuming | Ownership and assignment |
+| A sweeper that finds runs with no progress | A scheduler plus a recovery loop |
+| One effect per node, effect last | A hand-rolled unit of atomicity |
+
+And that is only the part you built before the first incident. The rest arrives on a predictable schedule: retry with backoff when a provider throttles you, a dead-letter path for the ones that never succeed, per-call timeouts when something hangs, a durable timer when a step has to wait three days, compensating actions in `catch` blocks when a later step fails after an earlier one succeeded, and eventually some way to answer *what actually happened on run 8823* that is better than grepping logs across four services.
+
+None of those decisions is wrong. Collectively they are **a distributed system that nobody designed**. It accreted, one incident at a time, and its behaviour lives in the heads of whoever was on call for each one.
+
+The uncomfortable part is what you still do not have after all that work. Assembled by hand, you get roughly the right behaviour most of the time, and you are still missing the two properties that motivated the exercise: **correctness guarantees and observability.** The retry logic is per-caller and slightly different everywhere. The dedup windows are guesses. The timers are rows in a table that a cron polls. Nothing can tell you, definitively, whether step three ran.
+
+Durable execution is that system, designed on purpose, by people who did it more than once.
+
+## The idea: make the *program* durable
+
+Ordinarily, state is durable and the program is ephemeral. A row in Postgres survives; the process that wrote it does not. Everything you build to recover exists to reconstruct a *program's* position from *data* that outlived it: the checkpoint, the lease, the sweeper.
+
+Durable execution inverts that:
+
+> **The execution itself is the durable thing.** Its position in the code, its local variables, the timer it is waiting on: all of it survives the process.
+
+That should sound familiar. [Part VII made control flow into data](/docs/langgraph/state-nodes-edges) so that position could be written down. This is the same move carried to its conclusion: not just the position between steps, but the entire execution, including the fact that step three already happened and returned `cr_8823_1`.
+
+## The mechanism: a journal, and a replay
+
+The machinery is simpler than its reputation.
+
+<Figure caption="Effects go through the runtime, which records their results. On recovery the function re-runs from the top, and recorded steps return instead of executing." frame={false}>
+
+```
+   FIRST ATTEMPT                      JOURNAL
+   ─────────────                      ───────
+   get_order(4921)        ────────▶   ① get_order    → {…}
+   compute_credit()       ────────▶   ② compute      → 420000
+   issue_credit(…)        ────────▶   ③ issue_credit → cr_8823_1
+   send_reply(…)          ✗ CRASH     (nothing written)
+
+
+   RECOVERY — a different worker, minutes later
+   ────────────────────────────────
+   get_order(4921)        ◀────────   ① replayed from journal, not called
+   compute_credit()       ◀────────   ② replayed from journal, not called
+   issue_credit(…)        ◀────────   ③ replayed from journal, NOT CALLED
+   send_reply(…)          ────────▶   runs for the first time
+```
+
+</Figure>
+
+Four steps, and the third is the one that matters:
+
+1. Your function runs. Every effect goes **through the runtime** rather than directly, as an `await` on something the runtime owns.
+2. The runtime appends each completed effect's **result** to a durable log. Temporal calls it an Event History; Restate calls it a Journal; the idea is the same.
+3. On crash, a *different worker* re-executes your function **from the first line**.
+4. Every call already present in the journal returns its recorded result immediately instead of running. Execution catches up in memory, reaches the point where the log ends, and continues forward. The catch-up takes microseconds and makes no external calls.
+
+The consequence worth sitting with: **the code does not know it crashed.** There is no resume handler, no `switch (state)`, no reconstruction of where we were. You write straight-line code with `await`s, and the fact that this particular invocation is the seventh attempt on the third worker is invisible to it.
+
+That is what [Part VII's comparison table](/docs/langgraph/persistence) meant by a different unit of memoization. A checkpointer records state *between* nodes, so a node re-runs whole. A durable engine records *the result of every effect*, so a completed effect never runs again.
+
+## The price: your orchestration code must be replayable
+
+Replay only works if re-running the function produces the same sequence of calls. Which means the orchestration code cannot do the things that would make it differ between runs: read the clock, generate a random number, read a file, or call an API directly. All of it goes through the runtime, which records the answer the first time and hands back the same answer on every replay.
+
+There are two schools about how strictly to enforce that, and knowing which one you are using explains most of the friction people report:
+
+| | **Deterministic replay** | **Step memoization** |
+| --- | --- | --- |
+| Model | The whole function re-executes; the runtime feeds recorded results | Each step's result is persisted; completed steps are skipped |
+| Rules | Strict determinism rules to learn and follow | Ordinary language features, fewer custom rules |
+| Trade | More control and stronger guarantees | Gentler on-ramp |
+| Examples | Temporal | Inngest; Restate's `ctx.run` sits close to this |
+
+Both give durability. The difference is how much of the runtime's model you have to hold in your head, and [the rules themselves are their own chapter](/docs/durable-execution/determinism-and-retries).
+
+## What you get that you would not have built
+
+The point is not that each of these is impossible by hand. It is that each is a project, and here they are properties:
+
+- **Retries with backoff, per step, as policy** rather than as a loop reimplemented at each call site.
+- **Timers that survive everything.** `sleep(3 days)` is a line of code, not a row in a table plus a cron plus a resume path.
+- **Effects that happen once**, given the effect itself is idempotent. This is the guarantee [Part VII said a better checkpointer could not buy](/docs/langgraph/persistence).
+- **The platform notices a dead run.** Nobody writes the sweeper. A worker stops heartbeating and the work is reassigned.
+- **A way into and out of a running execution**: signals in, queries out, [covered later in this part](/docs/durable-execution/signals-and-children).
+- **A complete history, for free.** Every input, every result, every retry, every timer, in order. The [observability](/docs/observability/replay-debugging) you were going to build from logs arrives as a side effect of the mechanism that provides durability.
+
+That last one is routinely undersold. The event history exists because replay needs it, and it happens to be the exact artifact you want when someone asks what run 8823 did.
+
+## The honest cost
+
+This is a real adoption, and it deserves a fair accounting.
+
+**Infrastructure.** Most engines mean a server cluster to run or a managed service to buy, plus workers as a separate deploy unit with their own scaling and monitoring. The exception is the Postgres-native school. DBOS builds on transactional semantics and rides a database you likely already run, which is the lowest barrier available if that fits.
+
+**Rules to learn.** Determinism is not hard, but it is a constraint that will surprise people, and the failure mode is a replay error rather than something obvious.
+
+**Versioning.** Changing workflow code while executions of the old code are still running is its own discipline. Long-running workflows and continuous deployment interact, and the interaction has to be designed.
+
+**Testing changes shape.** You gain replay tests, which are excellent; you also gain a category of bug that only appears on replay.
+
+**And it is genuinely overkill for a lot of work.** The line is the same one [Part VII drew](/docs/langgraph/persistence): short runs, a single process, effects that are read-only or already idempotent, and a domain where a duplicated action is annoying rather than expensive. If that describes your system, a checkpointer and the four practices are the right answer and this part is background reading.
+
+<Aside type="note" title="The landscape, briefly and fairly">
+Several engines implement this model with different centres of gravity: **Temporal** (deterministic replay, event history, mature and infrastructure-heavy), **Restate** (journal-based, lighter application feel, built-in state and timers), **DBOS** (Postgres-native, transactional, lowest infrastructure barrier), **Inngest** (step memoization, no separate infrastructure).
+
+This book uses Temporal, for two reasons worth stating. Its model is the most explicit about the orchestration/effect split, which makes the concepts easiest to *see*. And most of the surrounding literature uses its vocabulary: workflow, activity, worker, task queue, event history.
+
+The concepts transfer. If your team lands on a different engine, essentially everything in Part X still applies with the nouns renamed.
+</Aside>
+
+## Atlas, and a deliberate delay
+
+Meridian's `issue_credit` is the whole argument in one call: real money, a network that can time out on the response, a process that can be deployed mid-run, and a customer who will notice either mistake. Everything Part VII could offer it was discipline; everything this part offers it is a property.
+
+But Part X is deliberately doing this **with no AI in sight.** Durable execution is a thirty-year-old idea with its own rules, and learning it against a nondeterministic component first is how people end up believing the two are related when they are not.
+
+There is one connection worth planting, because it determines the entire shape of Part XI: a model call is the least deterministic thing in your system, and replay requires determinism. That does not make the two incompatible. It makes the boundary between them the most important design decision in an agentic system, and it has an exact answer. [Part XI](/docs/durability/agent-as-workflow) is where it gets made.
+
+---
+
+Next: [Temporal in Forty Minutes](/docs/durable-execution/temporal-in-forty-minutes). Workflows, activities, workers, task queues, event history, replay: the whole mental model, quickly.
+
+## Takeaways
+
+- The four practices that rescue a checkpointed system are deduplication, ownership, a scheduler, and a hand-rolled unit of atomicity. You started building a durable execution engine and stopped partway.
+- Retries, a queue, and a cron job compose into a distributed system nobody designed, whose behaviour lives in the heads of whoever was on call. It still lacks the two things you wanted: correctness guarantees and observability.
+- Normally state is durable and the program is ephemeral. Durable execution inverts it: the execution's position, variables, and pending timers survive the process.
+- The mechanism: effects go through the runtime, which journals their results; on recovery the function re-runs from the top and journalled calls return instead of executing.
+- Therefore the code does not know it crashed. No resume handler, no state machine. Straight-line code with awaits.
+- Checkpointing memoizes state between nodes, so nodes re-run whole. Durable execution memoizes the result of every effect, so a completed effect never runs again.
+- The price is that orchestration code must be replayable: no clock, no randomness, no direct I/O. All of it goes through the runtime.
+- Two schools: deterministic replay (whole function re-executes, strict rules) and step memoization (completed steps skipped, gentler rules). Both deliver durability.
+- You get retries as policy, timers that survive anything, once-only effects, automatic recovery of dead runs, signals and queries, and a complete audit history as a by-product of the replay mechanism.
+- The costs are real: infrastructure, determinism rules, workflow versioning, and a new category of replay-only bug. For short single-process runs with cheap duplicate actions, a checkpointer is still the right answer.
+- Engines differ in centre of gravity, not in concept. The vocabulary transfers.
