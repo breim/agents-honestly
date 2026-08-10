@@ -1,0 +1,194 @@
+---
+title: "Cache-First Prefix"
+description: "Design the prompt so the expensive part is nearly always a cache hit."
+---
+
+## Problem
+
+The instinct when a prompt gets expensive is to make it shorter. Trim the examples, cut the policy summary, drop the glossary, describe the tools more tersely.
+
+With prefix caching that instinct is backwards, and the arithmetic says so plainly. Cached input reads at roughly a tenth of the normal input rate, so **9,000 tokens of stable prefix that always hits cache costs about the same as 900 tokens that never does.** Trimming the stable part saves almost nothing while making the agent worse; the money is in the varying part, which nobody looks at.
+
+[Stable prefix](/docs/patterns/context/stable-prefix) covers the layout rule: order by stability, breakpoint at the last invariant position. This pattern is the economic consequence, which is a different design decision: **once the prefix is nearly free, put more in it.**
+
+## Forces
+
+- **Cached reads are roughly an order of magnitude cheaper** than uncached input.
+- **A cache write costs a premium**, so a prefix used once is worse than no caching.
+- **Agents read the prefix once per model call**, not once per user turn. A four-call turn reads it four times.
+- **The window is still finite**, so a large prefix competes with retrieved context.
+- **Anything per-user or per-request in the prefix destroys sharing** across everyone.
+- **The failure is silent**: the request succeeds and you pay full price forever.
+
+## Solution
+
+Treat the prefix as **near-free shared capacity** and deliberately move expensive, stable, broadly-useful material into it.
+
+<Figure caption="Two prompts, same total size. The cached one costs roughly a tenth on every call after the first." frame={false}>
+
+```
+   ✗ TRIMMED-EVERYWHERE                ✓ CACHE-FIRST
+   ┌──────────────────────┐            ┌──────────────────────────┐
+   │ terse tool schemas   │            │ full tool schemas        │
+   │ minimal system prompt│            │ system prompt + rubric   │
+   │                      │            │ 8 worked examples        │
+   │  2,000 tokens        │            │ policy quick-reference   │
+   │  … but the prefix    │            │ glossary of SKU families │
+   │  varies, so 0% hit   │            │                          │
+   ╞══════════════════════╡            │  9,000 tokens            │
+   │ retrieved  6,000     │            ╞══════════════════════════╡ ◀ breakpoint
+   │ history    4,000     │            │ retrieved  6,000         │
+   │ question     200     │            │ history    4,000         │
+   └──────────────────────┘            │ question     200         │
+                                       └──────────────────────────┘
+   billed ≈ 12,200 input               billed ≈ 900 + 10,200
+                                              ▲ 9,000 read at ~0.1×
+
+   the prefix got 4.5× BIGGER and the bill went DOWN
+```
+
+</Figure>
+
+Four rules:
+
+**Move material in, not out.** Worked examples, a rubric, a glossary, a policy quick-reference, full tool descriptions. These improve quality and, in the cached region, cost roughly a tenth of their apparent price on every call after the first.
+
+**Nothing per-user, per-tenant, or time-varying above the breakpoint.** A name, an account ID, or a timestamp gives every caller a private prefix, so the cache does almost no work and you pay the write premium besides. Per-user facts belong in the message stream.
+
+**Check the break-even before caching at all.** A cache write costs more than a normal read, so a prefix used once is strictly worse than not caching it. Continuous traffic re-warms the entry and pays back inside a single turn; a rarely-invoked path may not.
+
+**Make cache hit rate a cost metric with an alert.** The failure is silent: the request succeeds, the answer is fine, and the bill quietly triples. `cache_read_input_tokens` divided by total prefix tokens is the number, and it drops the day someone edits a tool description for clarity.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/cost/cache-first.ts"
+// Built ONCE at startup from the pinned bundle. Identical bytes for every
+// caller, so every caller shares one cache entry.
+export const PREFIX = buildPrefix({
+  toolSchemas: canonical(bundle.toolSchemas),   // sorted keys, stable order
+  systemPrompt: bundle.systemPrompt,
+  // Deliberately included BECAUSE it is cached: these improve quality and
+  // cost ~0.1× per call once warm.
+  rubric: bundle.rubric,
+  workedExamples: bundle.examples,              // 8 of them, ~3k tokens
+  glossary: bundle.skuGlossary,
+});
+
+export function assemble(ctx: RunContext): Request {
+  return {
+    tools: PREFIX.tools,
+    system: [
+      ...PREFIX.system,
+      { ...PREFIX.reference, cache_control: { type: 'ephemeral' } },  // ◀ breakpoint
+    ],
+    // Everything below varies per request. Nothing here may appear above.
+    messages: [
+      { role: 'user', content: renderScratchpad(ctx.scratchpad) },
+      ...renderRetrieved(ctx.chunks),
+      ...ctx.history,
+      { role: 'user', content: `[${ctx.nowIso}] ${ctx.question}` },
+      //                         ▲ the clock lives HERE
+    ],
+  };
+}
+
+// The failure is silent, so measure it. This is a COST metric.
+export function recordCacheEconomics(res: ModelResponse, ctx: RunContext) {
+  const prefixTokens = res.cacheReadInputTokens + res.cacheCreationInputTokens;
+  ctx.metrics.observe('cache.hit_rate',
+    prefixTokens === 0 ? 0 : res.cacheReadInputTokens / prefixTokens);
+  // input_tokens is the UNCACHED remainder, not the prompt size.
+  ctx.metrics.observe('cache.uncached_tokens', res.inputTokens);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/cost/cache_first.py"
+# Built ONCE at startup from the pinned bundle. Identical bytes for every
+# caller, so every caller shares one cache entry.
+PREFIX = build_prefix(
+    tool_schemas=canonical(bundle.tool_schemas),   # sorted keys, stable order
+    system_prompt=bundle.system_prompt,
+    # Deliberately included BECAUSE it is cached: improves quality and costs
+    # ~0.1× per call once warm.
+    rubric=bundle.rubric,
+    worked_examples=bundle.examples,               # 8 of them, ~3k tokens
+    glossary=bundle.sku_glossary,
+)
+
+
+def assemble(ctx) -> dict:
+    return {
+        "tools": PREFIX.tools,
+        "system": [
+            *PREFIX.system,
+            {**PREFIX.reference, "cache_control": {"type": "ephemeral"}},  # ◀
+        ],
+        # Everything below varies per request.
+        "messages": [
+            {"role": "user", "content": render_scratchpad(ctx.scratchpad)},
+            *render_retrieved(ctx.chunks),
+            *ctx.history,
+            {"role": "user", "content": f"[{ctx.now_iso}] {ctx.question}"},
+        ],
+    }
+
+
+def record_cache_economics(res, ctx) -> None:
+    # The failure is silent, so measure it. This is a COST metric.
+    prefix = res.cache_read_input_tokens + res.cache_creation_input_tokens
+    ctx.metrics_observe("cache.hit_rate",
+                        0 if prefix == 0 else res.cache_read_input_tokens / prefix)
+    # input_tokens is the UNCACHED remainder, not the prompt size.
+    ctx.metrics_observe("cache.uncached_tokens", res.input_tokens)
+```
+
+</Tab>
+</Tabs>
+
+`PREFIX` being a module-level constant built at startup is not a style choice. Anything constructed per request will eventually have something per-request interpolated into it, and the resulting cache miss is invisible.
+
+## Trade-offs
+
+**The window is still finite.** A 9,000-token prefix is 9,000 tokens not available for retrieved context. Cheap is not free, and on a long run competing with a large transcript the trade can invert.
+
+**Prefix material must earn its place on quality, not just on price.** "It is nearly free" is a reason to *allow* eight worked examples, not a reason to add them. Measure whether they help: [an eval run](/docs/evals/ci-for-agents) with and without is a one-afternoon experiment.
+
+**Rare paths pay the write premium and never read it.** A workflow invoked twice a day may cost more with caching than without. Check invocation frequency against the cache TTL before enabling it everywhere.
+
+**It fights [dynamic tool selection](/docs/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. Select per conversation, or append rather than substitute.
+
+## When not to use it
+
+**Single-shot calls.** Caching a prompt used once is strictly worse than not caching it: you pay the write premium and never read.
+
+**When the prefix is below the model's minimum cacheable length.** Caching does not engage at all below a per-model threshold, so a small prefix gets nothing and the layout constraint buys nothing.
+
+**When the prefix genuinely cannot be shared.** A per-tenant system prompt that must differ means per-tenant cache entries, still useful for a high-volume tenant, worthless for the long tail.
+
+**When quality does not improve with more context.** If examples and glossaries do not move the eval numbers, a bigger prefix is a bigger prompt for no reason, cached or not.
+
+<Aside type="caution" title="The invalidators are all one-line changes a reviewer will approve">
+Every way this fails is a small, sensible-looking edit: a tool description tightened for clarity, a feature flag appended to the system prompt, a `datetime.now()` added for freshness, an unsorted `JSON.stringify` on the schemas, a per-node model swap that starts a cold cache.
+
+None of them errors. The request succeeds, the answer is fine, and the bill silently returns to full price, often for months, because nobody is watching the one number that would show it.
+
+Which is why [the tool catalogue hash belongs in the config bundle](/docs/production/versioning) and why cache hit rate belongs on the [cost dashboard with an alert](/docs/observability/cost-accounting). The alert is the only thing standing between a one-line edit and a quiet 10× on your largest line item.
+</Aside>
+
+## Related
+
+- [Stable Prefix](/docs/patterns/context/stable-prefix): the layout rule and the full list of silent invalidators
+- [Prompt Caching](/docs/foundations/prompt-caching): the mechanism, the break-even arithmetic, and how to verify
+- [Batch API Offload](/docs/patterns/cost/batch-api-offload): the other discount, which stacks with this one
+- [Token and Cost Accounting](/docs/observability/cost-accounting): metering cached input separately, and alerting on hit rate
+- [Dynamic Selection](/docs/context/dynamic-selection): the trade this pattern is usually in tension with
+
+## References
+
+- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), breakpoints, minimum cacheable length, and what invalidates a prefix.
