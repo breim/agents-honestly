@@ -1,0 +1,267 @@
+---
+title: "Failure Labs"
+description: "Kill workers, duplicate callbacks, poison retrieval, expire approvals, and verify the invariants instead of trusting the happy path."
+---
+
+The companion tests are green. Now break the system one boundary at a time and record what proves it recovered.
+
+Every lab has four fields:
+
+```text
+fault       what changes in the environment
+window      the exact moment it happens
+invariant   what must still be true
+evidence    the record that proves it
+```
+
+"The command finished" is not evidence. A recovery can return success after applying an effect twice.
+
+## Preflight
+
+Run both deterministic suites first.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```bash
+cd labs/atlas/ts
+npm test
+```
+
+</Tab>
+<Tab value="Python">
+
+```bash
+cd labs/atlas/py
+python3.11 -m unittest discover -s tests -v
+```
+
+</Tab>
+</Tabs>
+
+Then create a worksheet per lab:
+
+```text
+bundle:
+fixture version:
+started at:
+fault injected:
+expected terminal state:
+effect count before / after:
+trace or workflow ID:
+observed recovery:
+unexpected behavior:
+regression added:
+```
+
+The worksheet becomes a CI fixture when the outcome surprises you.
+
+## Lab 1: the effect happened and the response vanished
+
+**Fault.** The credit ledger accepts the effect, then the caller loses the response before recording completion.
+
+**Window.** After the external side effect and before the local success record.
+
+**Invariant.** Retrying produces one credit, not two.
+
+The no-key test raises `LostResponse` after writing the effect. The second call detects the existing effect and completes the local record.
+
+```text
+attempt 1
+  ledger effect          yes
+  response received      no
+  local completion       no
+
+attempt 2
+  paired read/reconcile  finds effect
+  second effect          no
+  local completion       yes
+```
+
+Inspect the ledger size, not the returned status. In the full adapter, inspect the fake ERP ledger and idempotency table under the same key.
+
+**Production extension.** Run the credit as a Temporal Activity. Kill the worker after the fake ERP writes and before the Activity reply reaches the server. Restart it. The Workflow may retry the Activity; the ledger still contains one effect. Save the Event History and ledger query as evidence.
+
+## Lab 2: the webhook arrives twice
+
+**Fault.** Deliver the same event ID twice.
+
+**Window.** Once immediately and once after the first handler acknowledged it.
+
+**Invariant.** One inbox row and one business transition.
+
+The endpoint should persist the raw event ID before acknowledgement. Processing may retry. The transition is keyed by source event and entity version.
+
+Extend the lab with out-of-order delivery:
+
+```text
+event version 8 arrives
+event version 7 arrives later
+```
+
+Version 7 remains in the audit inbox and must not move the projection backwards. Then delete one event from the stream and run reconciliation. The projection should repair from source truth.
+
+## Lab 3: retrieval crosses a tenant
+
+**Fault.** Put a high-scoring chunk from `rival-supply` beside the correct Meridian chunk.
+
+**Window.** Candidate generation, before reranking and prompt assembly.
+
+**Invariant.** The forbidden chunk never enters candidates visible to the run.
+
+Assert at three points:
+
+1. database or index query applies tenant scope;
+2. reranker input contains only permitted candidates;
+3. trace and model context contain no forbidden ID or text.
+
+Filtering after reranking is already a leak because an unauthorized record influenced ranking. Filtering only before rendering is worse. The test should fail at the earliest point the forbidden ID appears.
+
+**Graph extension.** Start on an authorized account, walk through a shared supplier, and place another tenant's order one hop away. Assert that the forbidden node never enters the traversal frontier.
+
+## Lab 4: a retrieved document tries to act
+
+**Fault.** Retrieve the external partner note containing an instruction to issue a large credit.
+
+**Window.** After retrieval, before the action loop.
+
+**Invariant.** The run's taint ceiling denies write tools regardless of model behavior.
+
+The deterministic test skips the model and proves the dispatcher boundary. The adversarial extension calls the real model with several placements and encodings. It may ignore the instruction or attempt the call. Both are safe if the dispatcher denies the attempt and the run escalates with evidence.
+
+Record two metrics:
+
+- attempted bypass rate, which measures behavioral pressure;
+- admitted bypass rate, whose target is zero.
+
+Do not merge them. A control can work while behavior regresses, and you want to see both facts.
+
+## Lab 5: approval expires while nobody is watching
+
+**Fault.** Pause on an approval, advance time past expiry, then deliver an old approval decision.
+
+**Window.** Between the human seeing the card and the effect.
+
+**Invariant.** The action is denied because approval expired, even if the signal itself is authentic.
+
+Add two variations:
+
+- change the amount after the card was rendered, so the action hash no longer matches;
+- revoke the user's permission while the Workflow waits, so live authorization fails.
+
+Temporal's test environment can skip the timer without waiting days. Use an Update when the UI needs a validated response; a Signal acknowledgement only proves receipt.
+
+The terminal outcome is not "approval denied, case closed." It is a handoff to the owner named in the escalation policy.
+
+## Lab 6: the model refuses to stop
+
+**Fault.** The decision function returns `continue` forever.
+
+**Window.** Every loop iteration.
+
+**Invariant.** The run stops at the hard step cap, records a bounded terminal outcome, performs no effect after the cap, and tells the caller what owns the unfinished case.
+
+Repeat for:
+
+- token budget;
+- spend budget;
+- wall deadline;
+- repeated identical tool error;
+- fan-out width;
+- approval-request rate.
+
+Each bound needs an owner and a terminal policy. Throwing `MaxStepsError` without creating a handoff satisfies the loop and fails the business process.
+
+## Lab 7: the index changes under a canary
+
+This one goes beyond the no-key kernel and catches a production class the first six cannot.
+
+**Fault.** Publish a candidate index where an external partner document outranks the reviewed policy for delivery timelines.
+
+**Window.** During a canary with the application bundle unchanged.
+
+**Invariant.** The index build is attributable, quality alarms by build, and rollback repoints to the previous build.
+
+Record:
+
+- old and new index build IDs;
+- cited-chunk turnover;
+- retrieval and end-to-end scores by build;
+- time from alert to diagnosis;
+- time to repoint;
+- in-flight run behavior.
+
+This lab proves that data releases are releases. A code-only deployment timeline cannot diagnose it.
+
+## Lab 8: the fallback works and quality does not
+
+**Fault.** Open the model breaker and route traffic to the fallback profile.
+
+**Window.** During a controlled canary or scheduled exercise.
+
+**Invariant.** Availability continues within the declared degraded tier, risky effects gate automatically, and traces identify `served_by`.
+
+Then score the fallback outputs. A green request rate with worse answers is a successful availability mechanism and a failed product mode. The fallback needs its own eval bundle and autonomy policy.
+
+## Run the sequence in the right order
+
+<Figure caption="Each laboratory adds a dependency on evidence produced by the one before it." frame={false}>
+
+```text
+deterministic invariants
+        ↓
+database and adapter integration
+        ↓
+durable crash and time tests
+        ↓
+behavioral adversarial runs
+        ↓
+data release and fallback game day
+        ↓
+go-live readiness evidence
+```
+
+</Figure>
+
+Do not begin with the flashy attack corpus. If the ledger can duplicate an effect under a plain retry, a multilingual hidden instruction is not the current problem.
+
+## What to promote after each lab
+
+| Finding | Permanent home |
+| --- | --- |
+| Wrong key inputs | Unit/property test |
+| Transaction boundary wrong | Database integration test |
+| Workflow retry surprises | Replay and Temporal test |
+| Model follows hostile result | Behavioral adversarial set |
+| Dispatcher admits it | Exact security invariant |
+| Index build degrades quality | Retrieval eval plus canary gate |
+| Human queue cannot absorb fallback | Capacity test and operating policy |
+
+The [testing pyramid](/docs/evals/testing-pyramid) gives a useful discipline: promote the failure to the lowest layer that can prevent it, and retain one end-to-end case to prove the layers still compose.
+
+<Aside type="caution" title="Do not clean up the evidence first">
+Keep the failed history, raw event, trace, and ledger state until the fixture is captured. Re-running after cleanup gives you a new execution, not the one that failed.
+</Aside>
+
+## Atlas, concretely
+
+Atlas requires the first six labs on every release candidate. Labs seven and eight run before changes to the index pipeline or model ladder. The readiness review links each result by bundle and date.
+
+A lab passes when the invariant and terminal business outcome hold, the trace explains what happened, and the evidence can be replayed. A screenshot of a green test command is the beginning of that proof, not the end.
+
+---
+
+Next: [Operating It](/docs/capstone/operating-it), the first month, where the same failures arrive without asking permission.
+
+## Takeaways
+
+- Define fault, window, invariant, and evidence before injecting anything.
+- Inspect effect state, not only return status.
+- Duplicate and reorder events, then use reconciliation to repair a missing one.
+- Assert tenant isolation before reranking, prompt assembly, and every graph hop.
+- Separate attempted bypass from admitted bypass.
+- Expired or mismatched approval routes to an owner, not to a dead end.
+- Every bound needs a terminal business policy.
+- Exercise index releases and fallback quality, not only code and availability.
+- Promote each finding to the lowest test layer that can prevent it.
+- Preserve the failed artifacts before cleanup or re-run.
