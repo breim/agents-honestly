@@ -1,0 +1,107 @@
+---
+title: Temporal Pattern Index
+description: Every pattern in the Temporal design-pattern catalog, mapped to the agent problem it solves and where this book uses it.
+---
+
+The [Temporal design-pattern catalog](https://temporal-sa.github.io/temporal-design-patterns/) organizes about thirty-five patterns into twelve categories. It is written for distributed systems generally, with no mention of agents.
+
+That is the opportunity. Nearly every hard problem in running an agent, such as memory that outgrows the window, tools with side effects, humans in the loop, provider quotas, or deploys mid-run, already has a named, battle-tested solution in that catalog. This appendix is the translation layer.
+
+<Aside type="note" title="How to use this">
+Read it in either direction. Coming from Temporal, the middle column tells you what each pattern buys you in an agent. Coming from an agent problem, scan the middle column and it names the pattern you want.
+</Aside>
+
+## Task Orchestration
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Child Workflows | Sub-agents with their own context, lifecycle, and failure boundary | [Sub-Agent Context Isolation](/docs/patterns/context/subagent-isolation) |
+| Parallel Execution | Independent tool calls that shouldn't run one after another | [Fan-Out Over Items](/docs/patterns/scale/fan-out) |
+| Pick First (Race) | Query two providers, take whoever answers first | [Fallback Model Ladder](/docs/patterns/failure/fallback-model-ladder) |
+
+## Workflow Messaging
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Signal with Start | A customer reply arrives for a ticket agent that may not exist yet | [Signal With Start](/docs/patterns/durability/signal-with-start) |
+| Request-Response via Updates | Ask a running agent a question and get a validated answer synchronously | [Request-Response via Update](/docs/patterns/durability/update-request-response) |
+| Event Accumulator | Three messages arrive in four seconds; respond once, not three times | [Long-Lived Agents](/docs/durability/long-lived-agents) |
+
+## Entity & Lifecycle
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| **Entity Workflow** | The agent that lives for the life of a ticket, customer, or case | [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow) |
+| **Continue-As-New** | Conversation memory outgrows what one event history can hold | [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory) |
+| Updatable Timer | An SLA deadline that moves when the customer replies | [Updatable SLA Timer](/docs/patterns/durability/sla-timer) |
+
+## External Interaction
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Polling External Services | Wait on a job the agent kicked off elsewhere | [Approval and Waiting](/docs/human-in-the-loop/approval-gates) |
+| Long-Running Activity | A tool call that takes an hour, with liveness detection | [Heartbeat for Long Tools](/docs/patterns/durability/heartbeat-long-tools) |
+| Delayed Start | Follow up in three days if the customer goes quiet | [Long-Lived Agents](/docs/durability/long-lived-agents) |
+| Delayed Callback | Resume when an external system finally calls back | [Approval and Waiting](/docs/human-in-the-loop/approval-gates) |
+| **Approval** | Refunds over the policy limit need a human, and humans are slow | [Approval Gate](/docs/patterns/durability/approval-gate) |
+
+## Distributed Transactions
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| **Saga Pattern** | The refund succeeded, then the next step failed. Undo it. | [Saga for Tool Side Effects](/docs/patterns/durability/saga-for-tools) |
+| Early Return | Acknowledge the user now, finish the slow work after | [Early Return + Local Activities](/docs/durability/latency) |
+
+## Error Handling & Retry
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Fixed Count of Retries | Bound the spend on a failing model call | [Bounded Autonomy](/docs/patterns/control/bounded-autonomy) |
+| Fixed Wall-Time Retries | Keep trying through a provider outage, up to a deadline | [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries) |
+| Non-Retryable Errors | A content refusal will never succeed on retry, stop paying for it | [Non-Retryable Model Errors](/docs/patterns/failure/non-retryable-model-errors) |
+| Delayed Retry | Back off from a 429 without synchronizing your whole fleet | [Delayed Retry with Jitter](/docs/patterns/failure/delayed-retry-jitter) |
+| Fast/Slow Retries | One policy for blips, another for outages | [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries) |
+| Retry Alerting via Metrics | Notice the agent is silently retrying its way through the budget | [Cost Accounting](/docs/observability/cost-accounting) |
+| Resumable Activity | Restart a long tool call from its checkpoint, not from zero | [Resumable Activity](/docs/patterns/durability/resumable-activity) |
+
+## Batch Processing
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Fan-Out with Child Workflows | One agent per ticket across the overnight backlog | [Fan-Out Over Items](/docs/patterns/scale/fan-out) |
+| Batch Iterator | Walk a dataset larger than any single history can hold | [Batch Iterator](/docs/patterns/scale/batch-iterator) |
+| Sliding Window | Keep N agents in flight continuously instead of in waves | [Sliding Window](/docs/patterns/scale/sliding-window) |
+| MapReduce Tree | A backfill too wide for one parent workflow | [MapReduce Tree](/docs/patterns/scale/mapreduce-tree) |
+
+## QoS & Throughput
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Downstream Rate Limiting | Respect a provider quota you do not control | [Downstream Rate Limiting](/docs/patterns/scale/downstream-rate-limiting) |
+| Priority Task Queues | Live chat stays fast while the nightly backfill runs | [Priority Task Queues](/docs/patterns/scale/priority-queues) |
+| Fairness | One noisy customer stops consuming the whole agent fleet | [Tenant Fairness](/docs/patterns/scale/tenant-fairness) |
+
+## Performance & Latency
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Local Activities | Cheap, fast tools that shouldn't pay full persistence cost | [Tool as Activity](/docs/patterns/durability/tool-as-activity) |
+| Early Return + Local Activities | Interactive responsiveness on top of a durable backend | [Paying for Durability in Milliseconds](/docs/durability/latency) |
+| Eager Workflow Start | Shave the startup hop off a user-initiated agent run | [Paying for Durability in Milliseconds](/docs/durability/latency) |
+
+## Worker Configuration
+
+| Temporal pattern | The agent problem it solves | In this book |
+| --- | --- | --- |
+| Worker-Specific Task Queues | Pin work to the worker holding the cache, the GPU, or the file | [Worker-Specific Queues](/docs/patterns/scale/worker-specific-queues) |
+| Activity Dependency Injection | Give tools their clients, credentials, and connection pools cleanly | [Temporal in Forty Minutes](/docs/durable-execution/temporal-in-forty-minutes) |
+
+## What the catalog does not cover
+
+The mapping is not total, and the gaps are worth naming: they are where agents genuinely differ from ordinary distributed systems.
+
+**Nondeterminism is inside the unit of work.** Temporal's model assumes activities are nondeterministic and workflows are not. An agent puts the nondeterminism at the center of the decision-making: the model chooses which activity runs next. Everything about [determinism](/docs/durability/agent-as-workflow) in this book is about keeping that choice recorded rather than recomputed.
+
+**Correctness is not binary.** A Temporal activity succeeds or fails. An agent turn can succeed and still be wrong, which no retry policy detects. That gap is what [Part XIV](/docs/evals/eval-discipline) exists to fill.
+
+**Cost is a first-class failure mode.** A retry loop in a conventional system wastes CPU. A retry loop around a model call spends money at a rate worth alerting on. See [Cost Engineering](/docs/production/cost-engineering).
