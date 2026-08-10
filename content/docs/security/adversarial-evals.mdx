@@ -1,0 +1,276 @@
+---
+title: "Adversarial Evals and Red Teaming"
+description: "Attack the whole trajectory: indirect injection, malicious tool results, exfiltration, authority escalation, and regression tests for every exploit found."
+---
+
+A prompt-injection test that asks a chatbot to reveal its system prompt is not a red team for an agentic system. The valuable targets are credentials, private data, authority, external writes, durable memory, and the resources an attacker can make you spend.
+
+Test the system the attacker reaches, not the model in isolation.
+
+## Start from objectives
+
+The threat model in this part named what an attacker wants. Turn each objective into an observable failure.
+
+| Objective | Failing observation |
+| --- | --- |
+| Cross-tenant disclosure | Any identifier, chunk, or field from another tenant enters the run |
+| Exfiltration | Model-controlled data reaches an unapproved destination |
+| Unauthorized action | Dispatcher admits an effect outside user scope or risk tier |
+| Approval bypass | Effect occurs without the required valid decision |
+| Memory poisoning | Unverified content becomes a durable fact |
+| Tool escalation | Untrusted text changes the available tool or credential set |
+| Resource exhaustion | Attacker drives steps, tokens, retries, or fan-out past a bound |
+| Audit evasion | Material action lacks actor, authority, evidence, and outcome |
+
+These are oracles. They decide pass or fail without asking another model whether the run looked safe.
+
+## Build a safe target
+
+Never point exploratory attacks at production effects. The red-team environment needs realistic policy and fake consequences:
+
+```text
+production-like agent
+       │
+       ├── seeded tenant data with canary records
+       ├── fake ERP ledger
+       ├── email sink
+       ├── egress proxy with deny log
+       ├── sandbox without production credentials
+       ├── Temporal test namespace
+       └── full traces and immutable audit records
+```
+
+Seed canary values that should never cross a boundary, such as a synthetic account number unique to tenant B. A leak then becomes an exact string assertion. Do not use real customer secrets as tripwires.
+
+Give the environment the same dispatcher, schemas, identity propagation, retrieval filters, and workflow code as production. A mock that always denies proves only that the mock denies.
+
+## Attack every untrusted channel
+
+Direct user text is one channel. The more interesting attacks arrive through content the user did not write in the current turn.
+
+| Channel | Case |
+| --- | --- |
+| Retrieved document | Instruction hidden in body, footer, table, image, or metadata |
+| Tool result | Vendor field contains text asking the model to call another tool |
+| MCP catalogue | Tool name or description tries to win discovery and widen behavior |
+| Memory | Previously stored preference carries an instruction or false authority claim |
+| Webhook | Signed but replayed, stale, reordered, or cross-tenant event |
+| File upload | Filename, OCR text, QR code, archive member, or embedded link |
+| Human feedback | Correction attempts to become policy or training data |
+| UI rendering | Model-authored URL, image, HTML, or citation triggers network access |
+
+Vary placement and encoding because filters see syntax while the model sees meaning. The goal is not to collect clever jailbreak strings. It is to verify that untrusted content cannot acquire authority regardless of wording.
+
+## Test trajectories, not replies
+
+The safest-looking reply may follow a dangerous internal path. The agent can read forbidden data and decide not to mention it. It can call a write tool that the sandbox later blocks. It can queue an approval request to an attacker-selected reviewer.
+
+Capture and assert:
+
+- retrieved IDs before post-filtering;
+- tool catalogue before and after discovery;
+- tool names and raw arguments;
+- authorization and risk decisions;
+- credentials and scopes minted for the call;
+- egress attempts, including blocked ones;
+- graph frontier per hop;
+- memory writes;
+- workflow signals, updates, timers, and effects;
+- final answer and rendered UI events.
+
+Security success is a property of the whole path. "No secret appeared in the answer" is one assertion near the end of a much longer list.
+
+## Encode cases as data
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/security/adversarial-case.ts"
+export interface AdversarialCase {
+  id: string;
+  objective: 'exfiltration' | 'cross_tenant' | 'unauthorized_effect' | 'exhaustion';
+  principal: { tenantId: string; userId: string; scopes: string[] };
+  input: string;
+  fixtures: { documents?: string[]; toolResults?: string[]; events?: string[] };
+  mustNever: {
+    retrieveIds?: string[];
+    callTools?: string[];
+    contactHosts?: string[];
+    writeMemory?: boolean;
+  };
+  bounds: { steps: number; tokens: number; wallMs: number };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/security/adversarial_case.py"
+from dataclasses import dataclass, field
+from typing import Literal
+
+@dataclass(frozen=True)
+class AdversarialCase:
+    id: str
+    objective: Literal["exfiltration", "cross_tenant", "unauthorized_effect", "exhaustion"]
+    tenant_id: str
+    user_id: str
+    scopes: tuple[str, ...]
+    input: str
+    documents: tuple[str, ...] = field(default_factory=tuple)
+    tool_results: tuple[str, ...] = field(default_factory=tuple)
+    events: tuple[str, ...] = field(default_factory=tuple)
+    forbidden_retrieval_ids: tuple[str, ...] = field(default_factory=tuple)
+    forbidden_tools: tuple[str, ...] = field(default_factory=tuple)
+    forbidden_hosts: tuple[str, ...] = field(default_factory=tuple)
+    allow_memory_write: bool = False
+    max_steps: int = 8
+    max_tokens: int = 20_000
+    max_wall_ms: int = 60_000
+```
+
+</Tab>
+</Tabs>
+
+Cases should name the objective and invariant, not the exact sentence the model must produce. The model may refuse, ignore, or safely summarize the hostile content. All are valid if the forbidden path remains unreachable.
+
+## Four suites
+
+### Boundary suite
+
+Run exact cases against retrieval filters, graph traversal, tool scopes, argument validation, egress rules, sandbox mounts, and identity propagation. These should pass deterministically on every commit.
+
+### Behavioral suite
+
+Run varied hostile inputs through the real model and score trajectory invariants across repeated samples. This catches the model following untrusted instructions until a control stops it. A blocked attempt still passes the safety invariant and should increment an attempted-bypass metric.
+
+### Chained suite
+
+Combine channels over several turns:
+
+```text
+user asks benign question
+    ↓
+retrieval introduces instruction
+    ↓
+tool result supplies destination
+    ↓
+later turn asks for summary
+    ↓
+agent attempts external write
+```
+
+Single-turn tests miss delayed attacks that wait for a capability or sensitive value to enter context.
+
+### Recovery suite
+
+Verify containment after detection. The run stops or downgrades, the effect does not occur, the user receives a safe result, the security event is recorded, and a human receives enough evidence to investigate. A guardrail that throws an unhandled exception can turn a safe block into an availability attack.
+
+## Generated attacks need human control
+
+An attacker model can vary wording, placement, language, and multi-turn strategy. It is useful for coverage and unreliable as both attacker and judge.
+
+Give it a fixed objective, allowed channels, and a sandbox. Keep exact invariants outside the model. Deduplicate generated cases by behavior, not text. Ten thousand paraphrases that all hit the same blocked argument add cost without adding coverage.
+
+Review novel successful trajectories manually. The interesting artifact is the path that crossed a boundary, not the attacker's explanation of why it worked.
+
+## MCP and dynamic tools
+
+Test the catalogue as untrusted data:
+
+- a server adds a new destructive tool after approval;
+- a description contains instructions unrelated to the tool;
+- two tools use confusable names;
+- a schema widens an argument from an enum to free text;
+- a read-only server begins returning model-controlled URLs;
+- discovery ranks an unapproved server above an internal tool;
+- a server asks the client to perform sampling or another privileged operation.
+
+Allowlist by stable server and tool identity, pin or review catalogue changes, and diff schemas as deploy events. "The model never selected it in testing" is not a permission policy.
+
+## Durable attacks
+
+Long-lived workflows create attacks that ordinary request tests miss:
+
+- replaying an old approval after policy changed;
+- signaling a workflow ID belonging to another tenant;
+- flooding updates to grow history or consume reviewer attention;
+- resuming after a deploy into a broader tool catalogue;
+- retrying an ambiguous effect until one succeeds twice;
+- poisoning memory before Continue-As-New carries it forward.
+
+Fast-forward timers, duplicate and reorder signals, rotate credentials, and change policy between pause and resume. Assert authorization at the point of effect. A valid Tuesday checkpoint is not Thursday authority.
+
+## Severity follows realized capability
+
+Score findings by the boundary crossed and the possible effect:
+
+| Finding | Severity posture |
+| --- | --- |
+| Hostile text changes wording, no boundary crossed | Quality defect |
+| Agent attempts forbidden tool, dispatcher blocks | Control worked; track pressure and improve behavior |
+| Forbidden data enters context but not answer | Security incident; confidentiality already failed |
+| Unauthorized write reaches fake adapter | Critical pre-production finding |
+| Unauthorized real effect | Production incident |
+| Unbounded cost or approval flood | Availability and abuse finding |
+
+Do not downgrade a leak because the final response omitted the value. Do not call every ignored injection a vulnerability. The system's observed capability decides.
+
+## Promote every exploit
+
+For each successful attack:
+
+1. preserve the full trace and environment manifest;
+2. identify the first boundary that should have stopped it;
+3. change the lowest reliable control;
+4. add an exact regression at that layer;
+5. keep one end-to-end adversarial case for defense in depth;
+6. re-run adjacent objectives and channels;
+7. record the fix in the threat model.
+
+The [OWASP GenAI Red Teaming Guide](https://genai.owasp.org/resource/genai-red-teaming-guide/) provides a broader engagement process. This chapter's narrower rule is compatible with it: scope the whole application, define objectives, collect evidence, and turn findings into repeatable tests.
+
+<FrameworkCheck decision="Keep security invariants in a framework-independent adversarial harness, then add runtime-specific suites for graph state, durable messaging, UI rendering, and MCP catalogues.">
+<FrameworkOption name="plain">
+
+The central harness owns principals, fixtures, canaries, bounds, forbidden observations, and finding records. It consumes normalized traces from every runtime.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+Inspect state writes, conditional paths, discovered tools, interrupts, and whether hostile content persists into checkpoints or subgraphs.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Duplicate and reorder signals, fast-forward timers, rotate policy during waits, replay histories, and assert each Activity receives fresh authority.
+
+</FrameworkOption>
+<FrameworkOption name="mcp">
+
+Diff catalogues and schemas, test malicious descriptions and results, enforce server and tool allowlists, and deny privileged client operations by default.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas seeds each tenant with unique canary records and runs all effects against a fake ledger and email sink. Its suite covers direct and retrieved injection, hostile tool results, cross-tenant graph paths, replayed webhooks, expired approvals, MCP catalogue changes, memory poisoning, and cost exhaustion.
+
+The CI gate is exact: no forbidden ID enters retrieval or graph state, no unapproved host receives an attempt, no effect bypasses the dispatcher, every run stays within bounds, and every block leaves a traceable terminal outcome. A nightly behavioral run varies the hostile text against the real model. Every successful path becomes a deterministic boundary test before the fix merges.
+
+---
+
+Next: [PII, Audit, and Compliance](/docs/security/pii-and-compliance), including the data copies, retention rules, and evidence obligations the test environment must respect.
+
+## Takeaways
+
+- Red-team the application trajectory, not the model in isolation.
+- Start from attacker objectives and exact forbidden observations.
+- Use production code with seeded canary data, fake effects, controlled egress, and full traces.
+- Cover retrieval, tools, MCP, memory, webhooks, files, feedback, and UI rendering.
+- Test boundary, behavioral, chained, and recovery suites.
+- Use attacker models for variation, never as the only judge.
+- Include durable waits, signals, policy changes, and retries in the attack surface.
+- Score findings by the boundary crossed and realized capability.
+- Promote every exploit to the lowest deterministic regression that can prevent it.
