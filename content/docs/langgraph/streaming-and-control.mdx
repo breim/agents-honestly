@@ -1,0 +1,135 @@
+---
+title: "Streaming and Control"
+description: "Emitting intermediate state, and putting hard ceilings on an autonomous loop."
+---
+
+Two features that look unrelated and belong in one chapter, because each is nearly useless without the other: **you cannot stop what you cannot see.**
+
+## Streaming matters more for agents than for chat
+
+From [Part I](/docs/foundations/tokens): output length dominates latency, and decode is sequential. For a single chat completion that means a few seconds before the first token.
+
+For an agent it compounds. A four-step Atlas run is four model calls plus tool execution, and the first user-visible word arrives after all of it. Twenty to forty seconds of nothing is not a slow interface; it's an interface a user assumes is broken.
+
+But the fix is not simply "stream the tokens," because most of those twenty seconds aren't generating tokens the user wants. They're lookups.
+
+> **For an agent, progress beats prose.** "Looking up order 4921…" at second two is worth more than the final answer streaming smoothly at second twenty-five. Users wait for work they can see happening.
+
+That reframing changes what you build. The valuable stream isn't the token stream; it's the **step** stream.
+
+## Four things you can stream
+
+Graph frameworks expose several modes, and they answer different questions:
+
+| Mode | Emits | Use for |
+| --- | --- | --- |
+| **updates** | The state delta each node returned | Progress, and production logging |
+| **values** | The *entire* state after each node | Debugging. Rarely production. |
+| **messages** | Token chunks from model calls, tagged with the node they came from | Streaming prose to a user |
+| **custom** | Whatever you emit from inside a node | Domain progress: "checked 3 of 7 policies" |
+
+They combine. You can subscribe to several at once, and a real UI usually wants `updates` for the step indicator, `messages` for the final reply, and `custom` for anything domain-specific.
+
+The one to be careful with is `values`.
+
+<Aside type="caution" title="`values` streams your whole state, every superstep">
+It dumps the complete state after each node. If you ignored [the last-chapter rule](/docs/langgraph/reducers-and-state) about keeping blobs out of state, that means the full content of every retrieved document, every tool payload, and every file, repeatedly, into your logs and across your network.
+
+Prefer `updates` in production. Use `values` when debugging, deliberately, and notice that if `values` is expensive for you, that's your state schema telling you something.
+</Aside>
+
+Streaming through subgraphs needs an explicit opt-in. By default the parent aggregates a subgraph's events into its own chunks, and turning nesting on changes the shape of every chunk you receive. Decide that once, early, because retrofitting it means rewriting your consumer.
+
+## What not to stream
+
+The half that gets skipped, and where the incidents are.
+
+**Raw tool results.** They contain internals and IDs. The real risk is data that passed an [authorization filter](/docs/retrieval/metadata-and-authorization) into the agent's context but was never meant for the user's screen. The agent seeing a record and the user seeing a record are different permissions. Stream a summary you generated deliberately, not the payload.
+
+**Intermediate conclusions that may be revised.** This is the sharp one. Recall the [poisoning example](/docs/context/context-poisoning): Atlas computes a credit of $540 at step four, and a later check corrects it to $180.
+
+In a non-streamed system that correction is invisible. The user sees $180. Streamed, the user watched $540 appear on their screen. You cannot unsay it. Even if the final message is right, the customer has now seen a number they will quote back to you.
+
+> **Streaming converts every intermediate state into a commitment.** Anything you stream, you have said.
+
+So: stream *progress* freely, stream *prose* once it's final, and never stream a number, decision, or promise that a later node can overturn. The [verification loop](/docs/workflows/evaluator-optimizer) runs before the compose output reaches a human, not after. That ordering is a streaming design decision as much as a workflow one.
+
+**Reasoning, by default.** Visible deliberation is compelling in a demo and creates support tickets in production, because the model explores options it then rejects. "I could issue a full refund here" is a sentence a customer will screenshot.
+
+## Control: stopping a run
+
+Two distinct operations, and conflating them causes surprises.
+
+**Interrupt** stops at a safe boundary and keeps the state. The run is paused, resumable, and everything completed stays completed. This is the same mechanism as [human-in-the-loop](/docs/langgraph/persistence) pausing, invoked from outside.
+
+**Rollback** discards work back to a prior checkpoint. The run isn't paused, it's rewound.
+
+The distinction matters most where it always matters in this book: **side effects don't roll back.** Rewinding graph state to before the `issue_credit` node does not un-issue the credit. The state machine forgets; the payments provider does not. Rollback is safe for pure work and dangerous for anything that touched the world. If that sounds like the [node-replay hazard](/docs/langgraph/persistence) from last chapter, it's the same hazard from the other direction.
+
+Cancellation also has a granularity limit worth knowing: the in-flight node either finishes or dies mid-execution, and neither is free. A node that was halfway through a three-call sequence leaves the world in a state your graph has no record of. Which is, once again, the argument for **one effect per node**.
+
+## Layered ceilings
+
+Bounds on an autonomous loop come in three layers, and each catches what the one before it missed:
+
+<Figure caption="Three layers. If an outer one fires, the inner one has a bug." frame={false}>
+
+```
+   ①  SEMANTIC BOUND        in your conditional edge
+      step >= MAX  →  "halt"     produces a reportable outcome
+                                 ▲ this should be what fires
+
+   ②  FRAMEWORK BACKSTOP    the runtime's recursion limit
+      raises an exception        catches a broken edge function
+
+   ③  EXTERNAL KILL         cancel(), a deadline, a budget guard
+      stops from outside         catches a wedged or runaway run
+```
+
+</Figure>
+
+The layering is the design. Layer ① produces a `halted` [outcome](/docs/first-agent/the-loop-by-hand) that routes to a human, a *result*. Layers ② and ③ produce errors, and **an error from those is a bug report about layer ①**, not a capacity issue. If your recursion limit fires regularly, your edge function is wrong; raising the limit is treating the alarm.
+
+Layer ③ needs one thing the others don't: something outside the run has to be watching. A budget guard that lives inside the node it's guarding doesn't fire when the node hangs.
+
+## Streaming is what makes control usable
+
+Here is why these two halves are one chapter.
+
+A stop button on an opaque run is decoration. Nobody presses it, because nobody knows whether the thing is working hard or stuck. And by the time it's obviously stuck, it has usually finished doing whatever you would have stopped.
+
+A stop button next to a live step feed is a genuine safety mechanism. The operator sees `gather → gather → gather → gather` on the same account and knows, at second six, that something is looping. That is a **human interrupt informed by observability**, and it catches classes of failure no automated bound will: the run that is technically progressing and semantically lost.
+
+Which suggests a design rule worth more than either feature alone:
+
+> **Anything you can stop, show. Anything you show, make stoppable.**
+
+An agent with a visible trace and a working stop button is safer than an agent with a better prompt, and it's cheaper to build.
+
+## Atlas, concretely
+
+**Streamed to the customer:** nothing until `finalize`. Support replies are short, they contain money, and the verify step can revise every number in them. Streaming buys a few seconds of perceived latency against the risk of retracting a figure to a customer. A bad trade for this product.
+
+**Streamed to the support agent's console:** everything. Node transitions from `updates`, custom progress events from inside `gather` (`"searching policies: 3 results"`), and the live tool trace. The human owning the ticket sees what Atlas is doing while it does it.
+
+**Control:** the console has a stop button wired to interrupt, never rollback, because `issue_credit` exists in this graph and rewinding state would create a credit the system believes it never issued. Stopping produces a `halted` outcome with the state attached, and the human continues from where Atlas got to.
+
+Note the split: the *operator* gets full visibility and control; the *customer* gets a finished answer. Those are different audiences with different needs, and building one stream for both is how internal reasoning ends up in a customer's inbox.
+
+---
+
+Next: [Graph Topologies](/docs/langgraph/graph-topologies). Pipeline, router, loop, fan-out/fan-in, supervisor, human gate, subgraph: the shapes and what each one costs.
+
+## Takeaways
+
+- Agent latency compounds across model calls, so the first user-visible output can be half a minute away. Progress beats prose. A visible step is worth more than smooth streaming of the final answer.
+- Four modes answer different questions: state deltas, full state, token chunks, and custom domain events. Combine them.
+- Prefer `updates` over `values` in production. `values` re-emits your entire state every superstep, and if that's expensive, your schema is the problem.
+- Turn on subgraph nesting early; it changes the shape of every chunk your consumer handles.
+- Never stream raw tool results. The agent's read permission is not the user's.
+- Streaming converts every intermediate state into a commitment. Don't stream a number a later node can overturn. You cannot unsay $540.
+- Reasoning is compelling in demos and generates support tickets in production.
+- Interrupt pauses and keeps state; rollback rewinds it. Side effects don't rewind, so rollback is only safe for pure work.
+- Three ceiling layers: a semantic bound producing a `halted` outcome, a framework backstop, and an external kill. If an outer layer fires, the inner one has a bug.
+- A stop button on an opaque run is decoration. Show what you can stop; make stoppable what you show.
+- Operators and customers need different streams. One stream for both is how internal reasoning reaches an inbox.
