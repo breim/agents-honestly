@@ -1,0 +1,131 @@
+---
+title: "GraphRAG, and When Not To"
+description: "Combining graph structure with documents and embeddings, plus the index-build cost that makes this a deliberate choice."
+---
+
+Everything in Part V so far has been about a graph built from **records**: accounts, tickets, orders, contracts. Entities that already existed, in systems that already had identifiers, with referential integrity someone else maintains.
+
+GraphRAG is a different proposition. It **derives** a graph from unstructured text. A model reads your documents, extracts entities and relationships, and builds a graph out of what it found. Same data structure, entirely different cost and risk profile, and conflating the two is how this decision gets made badly.
+
+## What it actually does
+
+Four stages, all offline:
+
+```
+   ①  a model reads every chunk and extracts entities + relationships
+   ②  the extracted triples are merged into one graph
+   ③  the graph is clustered into communities
+   ④  a model writes a summary of each community, at several levels
+```
+
+Then two query modes. **Local search** starts at entities mentioned in the question and walks their neighborhood, roughly what [the last chapter](/docs/graphs/graph-retrieval) described. **Global search** ignores the entity graph and answers from the community summaries.
+
+That second mode is the reason GraphRAG exists.
+
+## The genuine unlock: questions about the whole corpus
+
+Consider: *"What themes recur across our escalated tickets this year?"*
+
+No top-*k* retrieval answers that. Not with a better embedding model, not at k=100, not with reranking. This is not a "find me the relevant documents" question. **The answer requires having read all of them**, and any retrieval that returns a subset is answering a different question.
+
+Community summaries solve this by doing the reading in advance and compressing it hierarchically. A global query consults summaries rather than documents, so it can reason over a corpus far larger than any context window.
+
+This is a real capability that is genuinely not available another way, and it is the only thing that justifies the rest of this chapter. If you don't have corpus-level questions, you don't have a GraphRAG problem.
+
+## The bill
+
+The subtitle's promise. Stage ① is **a model call per chunk over your entire corpus**; stage ④ is more model calls per community, at each level of the hierarchy.
+
+Published figures span more than an order of magnitude: **tens of dollars** on a small benchmark corpus, **hundreds to a few thousand** once you are extracting over ten thousand pages. Assume the upper end is yours, because the low figure is measured on corpora smaller than the ones that make anybody want a graph. Even then the dollar amount is not the real cost. Three things are:
+
+**It's re-paid on change.** New documents need extraction. Changed documents need re-extraction and possibly re-clustering. This joins [re-embedding and re-chunking](/docs/retrieval/embeddings) on the list of things that make your corpus a migration rather than a table.
+
+**It's re-paid on every iteration.** You will not get the extraction prompt right the first time. Each adjustment means rebuilding, which means the feedback loop on your most important design decision is measured in hours and dollars rather than seconds.
+
+**It's re-paid at query time too, in the original design.** Global search reads a lot of summaries. Newer "lazy" variants have attacked exactly this. **LazyGraphRAG**, from the same lab that published the original, defers extraction to query time. It matches global-search quality while cutting cost by more than two orders of magnitude, and it skips the upfront summarization entirely. A follow-up from the authors that removes the build step is worth reading as a statement about the build step. That genuinely changes the arithmetic. It does not change the decision procedure below, because the hard problem isn't cost.
+
+## The hard problem is extraction quality
+
+Here is what I think is under-discussed, and it is the reason to be careful rather than merely thrifty.
+
+A graph built from records inherits **referential integrity**. Ticket 8801 belongs to account 4471 because a foreign key says so. That edge is either true or your database is corrupt.
+
+A graph extracted from prose has no such property. Every node and edge is a **model's reading of a sentence**, and the failure modes are the familiar ones, now baked into an index:
+
+**Inconsistent typing.** Schema-free extraction produces `Acme` as an `Organization` in one chunk and a `Customer` in another, with relationships named `supplies`, `SUPPLIES_TO`, and `is_supplier_of` across three documents. The graph is fragmented in ways no query anticipates.
+
+**Fragmented relations.** The same real relationship extracted differently from three mentions becomes three edges that don't connect, so a traversal that should find one path finds none.
+
+**Hallucinated edges.** This is the dangerous one, and the mechanism is worth stating. The model reads a chunk that *mentions* two entities but does not state their relationship, and fills the gap from its own parametric knowledge. The result is an edge that reads confidently and is **structurally wrong**, sitting permanently in an index that everything downstream trusts.
+
+<Aside type="caution" title="This is context poisoning with a longer half-life">
+[Part III](/docs/context/context-poisoning) described a false claim entering a transcript and being reasoned from for the rest of a run. Extraction errors are the same failure, promoted to infrastructure: the false claim is now in an index, later retrievals cite it, community summaries include it, and every future run reasons from it.
+
+And there is no ground truth to check against. With records, you can reconcile against the source system. With extraction, the "source" is a paragraph and the question "is this edge real?" requires a human to read that paragraph and judge.
+</Aside>
+
+**The fix that Part V already built.** Schema-free extraction is what produces inconsistent typing, so don't extract schema-free. Give the extractor your [ontology](/docs/graphs/modeling-entities): these are the five entity types, these are the six relationship types, emit nothing else. Ontology-guided extraction beats open extraction, and it converts an open-ended generation problem into a constrained classification one. That is [exactly the trade](/docs/foundations/structured-output) Part I recommended everywhere else.
+
+You also still need [entity resolution](/docs/graphs/entity-resolution), now on generated names rather than given identifiers. That is the harder version, because there is no tax ID to fall back on.
+
+## The chapter title's other half
+
+The [preface](/docs/preface) claims most teams reaching for GraphRAG have a chunking problem instead. Here is the diagnostic that decides it.
+
+Ask: **is the failing question global, or is it just spread across a few chunks?**
+
+| Symptom | Actual problem | Fix |
+| --- | --- | --- |
+| "The answer needs the rule *and* its exception" | [Chunking](/docs/retrieval/chunking) | Parent/child. Cost: near zero. |
+| "It needs facts from two documents" | Retrieval breadth | Raise *k*, add [hybrid](/docs/retrieval/hybrid-and-reranking). Cost: near zero. |
+| "It needs one document plus one record" | Tool design | Two tool calls. Cost: zero. |
+| "It needs a chain of entity relationships" | Multi-hop | [Agentic iteration](/docs/graphs/when-relationships-are-the-query), or a records graph. |
+| **"It needs everything, summarized"** | **Genuinely global** | GraphRAG, or the alternatives below. |
+
+Only the last row justifies the build. The first three are the common case, and something you should have done anyway fixes every one of them for a fraction of the cost.
+
+## Cheaper things to try first
+
+If your questions are genuinely global, there are intermediate options between "top-*k* retrieval" and "extract a knowledge graph from the whole corpus":
+
+**Hierarchical summarization without a graph.** Summarize each document, then each cluster of documents, and index summaries alongside chunks. You get corpus-level reasoning from the summary layer with none of the extraction risk. There are no edges to hallucinate because there are no edges. For a lot of "what are the themes" questions this is most of the value.
+
+**Metadata aggregation.** If the global question is *"what categories of escalation are increasing,"* that's a `GROUP BY` over ticket metadata, not a graph. Check whether the structure you need is already a column before deciding it has to be an edge.
+
+**An offline job that answers the recurring question directly.** If someone asks one global question weekly, compute the answer weekly. A batch job with a real query is cheaper, exact, and auditable. An index built so an agent can derive the same answer live is none of those.
+
+**Extraction-free structural methods.** A current line of work builds hierarchical structure over documents without an LLM extraction pass. Worth checking before committing to extraction, precisely because extraction is where the risk lives.
+
+## The decision
+
+**Build it when** a measurable fraction of real traffic asks corpus-level questions, you have an ontology to constrain extraction, you have an owner for the rebuild pipeline, and you have tried and measured the cheaper options.
+
+**Don't build it when** the motivating example is a question that spans two chunks, when nobody can name the ontology, when the corpus changes daily, or when the honest answer to "how many queries are global?" is "we haven't looked."
+
+And if you do build it, treat the graph as a **derived, fallible index** rather than a source of truth. Sample extracted edges and have a human check them. Keep provenance from every edge back to the sentence that produced it, so a wrong answer is diagnosable. And re-verify volatile facts against real systems before acting, exactly as with any other index.
+
+## Where Part V leaves you
+
+Five chapters, and the honest summary is that most readers should implement one of them.
+
+One insight is worth internalizing regardless. Some questions are about relationships, and similarity is only a one-hop operation. The ontology work is valuable even without a graph, because it's the same artifact as your semantic layer. Entity resolution is worth doing whether or not you ever build edges. Graph retrieval's discipline applies to any structured tool: aggregate at the boundary, bound the traversal, filter per hop.
+
+The graph itself is the part to defer. Atlas answers the Acme question today with three tool calls and eleven cents. The version of Meridian that justifies an index is one where a nightly job computes account health across ten thousand accounts. That is a batch job, not a chat feature.
+
+Part VI goes back to something more fundamental, and more often skipped: whether the thing you're building needs to be adaptive at all.
+
+---
+
+Next: [The Determinism Test](/docs/workflows/the-determinism-test), the question that decides whether you are writing a workflow or an agent.
+
+## Takeaways
+
+- A graph built from records inherits referential integrity. A graph extracted from prose is a model's reading of sentences, with no ground truth to reconcile against.
+- GraphRAG's real unlock is corpus-level questions, which no top-*k* retrieval can answer because the answer requires having read everything.
+- The build cost is a model call per chunk plus summarization per community, re-paid on every corpus change *and* every iteration of your extraction prompt.
+- Lazy variants cut query cost by orders of magnitude and skip upfront summarization. That changes the threshold, not the decision procedure.
+- Schema-free extraction produces inconsistent types, fragmented relations, and hallucinated edges. Constrain it with your ontology, which turns open generation into constrained classification.
+- A hallucinated edge is context poisoning promoted to infrastructure: it persists, gets cited, and enters summaries.
+- Most teams reaching for GraphRAG have a chunking problem. Only "it needs everything, summarized" justifies the build.
+- Try hierarchical summarization, metadata aggregation, a batch job, or extraction-free structuring first. All are cheaper, none carry extraction risk.
+- If you build it, keep per-edge provenance, sample edges for human review, and treat the graph as a fallible index.
