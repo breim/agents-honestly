@@ -1,0 +1,181 @@
+---
+title: "Errors as Instructions"
+description: "A tool error is a prompt. Write it for the model that has to recover from it."
+---
+
+[Part II established the mechanics](/docs/first-agent/first-tools): a failed tool returns a `tool_result` with `is_error: true`, you never throw, and you never drop a result for an issued call. It also made the observation this chapter is built on. Told *"Error: order 4921 not found"* the model says so; told *"Error: ORA-01722"* it guesses.
+
+That gap is not a matter of politeness. Reported figures put it starkly: agents recover from **structured, actionable failure feedback over 85% of the time, and from ambiguous signals about 17%.** Same model, same task, same loop. The five-fold difference is the text you put in `content`.
+
+So the reframe:
+
+> **An error is not a report. It is a branch instruction, and it is the only one the model gets.**
+
+## Classify by the branch, not by the cause
+
+Ordinary error taxonomies organize by what went wrong: validation, network, permission, upstream. That is the right taxonomy for your logs and the wrong one for the model, which does not care what happened and cares entirely about what to do next.
+
+There are four branches. Every error you return should unambiguously select one:
+
+| Branch | The model should | So the message must say |
+| --- | --- | --- |
+| **Retry unchanged** | Call again, identically | That it is transient, and that retrying is *its* job |
+| **Retry changed** | Fix an argument and call again | Which argument, what is wrong with it, what a valid one looks like |
+| **Switch tool** | Call a different tool | The other tool's name |
+| **Stop** | Escalate or report the limitation | That this is terminal and no retry will help |
+
+An error that selects none of them produces the documented default behaviour, which is worse than either a retry or a stop: **the agent apologizes.** It emits a turn acknowledging the failure, takes no corrective action, and either halts with nothing or tries the identical call again.
+
+<Aside type="caution" title="The model should almost never be your retry mechanism">
+"Retry unchanged" is the branch people reach for first and the one that is least often correct.
+
+Transient failures belong to your [retry policy](/docs/reliability/timeouts-and-retries), a loop in your code, with backoff, running in milliseconds and costing nothing. If a transient error is reaching the model at all, it is usually because that policy already ran and already failed.
+
+Which means the message should say so: *"the warehouse did not respond after 3 attempts"* selects **stop**. It is both more accurate and cheaper than an error that invites the model to burn a model call re-issuing a request your infrastructure already tried three times.
+</Aside>
+
+## The expensive branch is the one you forget to signal
+
+Omit terminality and you get a loop: the model calls, reads an error it cannot act on differently, and calls again. The [step and cost bounds from v0](/docs/first-agent/the-loop-by-hand) will catch it, which is what they are for. But you paid a full round trip per iteration to learn nothing, and the run ends in `halted` rather than a clean escalation.
+
+There is a control-flow corollary worth stating separately, because no error message can fix it: **the same tool called twice with the same arguments and returning the same error is a signal, not a message problem.** Detect it in the dispatcher and break, because whatever the text says, the model has demonstrated it cannot act on it.
+
+## Anatomy of an error written for a model
+
+Structure it. A bare string forces the model to parse prose for a decision it should be handed:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/errors.ts"
+type ToolError = {
+  toolUseId: string;    // the id you were issued — results match on this
+  error: string;        // stable code — for your traces and your tests
+  message: string;      // one or two sentences, written for the model
+  retryable: boolean;   // explicit. never leave this to inference.
+  next?: string;        // the branch, named
+};
+
+export function toolError(e: ToolError): Anthropic.ToolResultBlockParam {
+  return {
+    type: 'tool_result',
+    tool_use_id: e.toolUseId,
+    content: JSON.stringify({
+      error: e.error,
+      message: e.message,
+      retryable: e.retryable,
+      ...(e.next ? { next: e.next } : {}),
+    }),
+    is_error: true,
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/errors.py"
+def tool_error(
+    tool_use_id: str,
+    error: str,          # stable code — for your traces and your tests
+    message: str,        # one or two sentences, written for the model
+    retryable: bool,     # explicit. never leave this to inference.
+    next_action: str | None = None,   # the branch, named
+) -> dict:
+    body = {"error": error, "message": message, "retryable": retryable}
+    if next_action:
+        body["next"] = next_action
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps(body),
+        "is_error": True,
+    }
+```
+
+</Tab>
+</Tabs>
+
+The `error` code is for you. It is what your [trace](/docs/observability/what-a-trace-must-answer) groups on and what your tests assert against, and it must stay stable when you reword the message. The `message` and `next` are for the model. Keeping them in separate fields is what lets you improve one without breaking the other.
+
+## Before and after
+
+The Atlas catalogue, with the raw failure on the left and the branch-selecting version on the right:
+
+| What the system raised | What the model receives |
+| --- | --- |
+| `ORA-01722: invalid number` | `invalid_argument` · *"order_id must be digits only. You sent "ORD-4921". Try "4921"."* · retryable, **retry changed** |
+| `500 Internal Server Error` | `upstream_unavailable` · *"The warehouse did not respond after 3 attempts. Order status is temporarily unavailable. Say so rather than retrying."* · not retryable, **stop** |
+| `403 Forbidden` | `not_permitted` · *"Account 4471 is not associated with this ticket's requester. Do not try other account IDs."* · not retryable, **stop** |
+| `ValidationError: amount_cents 5000000 > max 100000` | `limit_exceeded` · *"Credits above $1,000.00 require human approval. Call `escalate_to_human` with reason 'credit above limit'."* · not retryable, **switch tool** |
+| `psycopg.errors.QueryCanceled` | `query_too_broad` · *"The query scanned too many rows and was cancelled. Narrow the date range or add a region filter."* · retryable, **retry changed** |
+
+Three things to notice.
+
+**The permission error tells the model what *not* to do.** Without *"do not try other account IDs,"* a helpful model will try 4472. The prohibition is doing as much work as the explanation, and it is the difference between a blocked call and a blocked call that turns into enumeration.
+
+**The limit error is a routing instruction.** A policy ceiling is enforced in the handler, because [strict schemas do not enforce `maximum`](/docs/tools/schema-and-granularity). It comes back naming the tool that handles the case. The block becomes a path forward instead of a dead end.
+
+**The query error says what to change.** Not "too expensive" but *narrow the date range or add a region filter*, which is a specific, checkable mutation. This is the shape that produces the 85% recovery rate: name the constraint, name the fix.
+
+## Empty is not an error
+
+A tool that finds nothing succeeded.
+
+```
+✗  is_error: true,  "No invoices found for account 4471"
+✓  { "count": 0, "invoices": [], "note": "Account 4471 has no unpaid invoices." }
+```
+
+Flagging an empty result as an error teaches the model the tool is broken, which invites exactly the retry you did not want. Worse, it destroys a distinction that matters: *"no such account"* is `not_found` and actionable, while *"this account exists and owes nothing"* is a **fact the customer asked for**. Collapsing those two produces an agent that cannot confidently tell someone their balance is zero.
+
+## Errors are permanent, and they accumulate
+
+Everything in a `tool_result` stays in the transcript and is re-sent on every subsequent request. A forty-line stack trace read three times is a meaningful fraction of the [context budget](/docs/context/context-as-budget), and it is not inert. It is text the model attends to while deciding everything that comes after.
+
+So: one or two sentences. No stack traces, no SQL, no internal hostnames, no other tenants' identifiers. Those belong in the `detail` field your trace records and the model never sees.
+
+<Aside type="caution" title="Never echo untrusted input back verbatim">
+`No account matching "Acme Industrial"` looks harmless. Now consider that the argument came from a model that read it out of a ticket body, and that ticket body was written by anyone with an email address.
+
+An error that interpolates attacker-controlled text has taken that text out of a quoted document and re-injected it into the transcript in the voice of your tooling. That is a meaningful upgrade in apparent authority. Tool results already [arrive as user content](/docs/first-agent/first-tools), so the payload is not gaining a privileged slot, but it is gaining the appearance of a system statement about the world.
+
+Echo a normalized, truncated form, or refer to the argument by name rather than by value: *"the account_id you provided did not match any account."* [Prompt Injection](/docs/security/prompt-injection) covers the attack properly; the part that belongs in tool design is that **your error strings are an echo surface**, and most people never think of them that way.
+</Aside>
+
+## Three audiences, one failure
+
+The same event has to serve three readers, and collapsing them is why most error handling is bad at all three:
+
+| Reader | Wants | Gets it from |
+| --- | --- | --- |
+| The model | A branch | `message`, `retryable`, `next` |
+| The engineer debugging at 2am | The cause | `error` code, `detail`, stack, request ID, all in the trace |
+| The customer | Usually nothing | Whatever the model composes from the above |
+
+The third row is why you write the message in plain, non-alarming language: **the model may paraphrase it to a customer.** *"The warehouse did not respond"* paraphrases into something a person can read. `psycopg.errors.QueryCanceled` paraphrases into either nonsense or a leak.
+
+## Atlas, concretely
+
+Every Atlas tool returns errors through one builder. Five stable codes cover the catalogue: `invalid_argument`, `not_found`, `not_permitted`, `limit_exceeded`, `upstream_unavailable`. Each has a fixed `retryable` value, so a new tool cannot invent an inconsistent convention. The dispatcher breaks the loop on a repeated identical `(tool, args, error)` triple, and every error's `detail` goes to the trace rather than the transcript.
+
+The measurable claim, and the one to put on your dashboard: **of the tickets that hit at least one tool error, what fraction still reach a correct outcome?** Reported self-correction rates sit around 70% across large error samples, and the distance between your number and that one is almost entirely the quality of the text above. It is the cheapest agent improvement available, because nothing about the model, the prompt, or the topology has to change.
+
+---
+
+Next: [Tool Result Design](/docs/tools/result-design), what comes back lands in the context window forever. Shape it, cap it, summarize it.
+
+## Takeaways
+
+- An error is a branch instruction, not a report. Agents recover from structured, actionable feedback over 85% of the time and from ambiguous signals about 17%.
+- Classify errors by the branch you want taken, not by what went wrong. The branches are retry unchanged, retry changed, switch tool, and stop. An error selecting no branch makes the agent apologize and take no action.
+- The model should almost never be your retry mechanism. If a transient error reached it, your retry policy already failed; say so and select **stop**.
+- Failing to signal terminality produces a retry loop that your step bound will catch, expensively and with the wrong outcome recorded.
+- Repeated identical `(tool, args, error)` is a control-flow signal. Break the loop in the dispatcher; no message can fix it.
+- Structure the result: a stable `error` code for your traces and tests, and `message` / `retryable` / `next` for the model. Reword one without breaking the other.
+- Prohibitions carry weight. "Do not try other account IDs" is what stops a permission error from becoming enumeration.
+- A policy limit should name the tool that handles the case, turning a block into a route.
+- Empty is not an error. Conflating "no such account" with "account owes nothing" produces an agent that cannot state a zero balance confidently.
+- Errors persist in context and are re-sent every turn. One or two sentences; stack traces and SQL go to the trace.
+- Error strings are an echo surface. Never interpolate untrusted input verbatim. Refer to the argument by name.
+- Track the fraction of runs that hit a tool error and still end correctly. It is the cheapest thing on the dashboard to move.
