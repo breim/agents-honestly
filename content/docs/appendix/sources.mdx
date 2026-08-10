@@ -1,0 +1,159 @@
+---
+title: "Sources and Attribution"
+description: "Every source this book leans on, and the terms it leans on them under."
+---
+
+[Further Reading](/docs/appendix/further-reading) is a short curated list, the sources worth your time. This page is the other thing: the complete record of what informed the book, and the statement of how it uses material it did not write.
+
+Everything listed here was read directly, either during the writing or as the source of a claim the text makes. Search results that were surfaced and never opened are not listed, because listing them would claim a consultation that never happened.
+
+## How this book uses other people's work
+
+Four rules held throughout:
+
+**Findings are reported, not reproduced.** Where a source measured something, the book states the measurement, names who measured it, and links to where you can check. It does not reproduce the source's tables, figures, or substantial passages.
+
+**Quotations are short and marked.** Where the exact wording matters, such as a spec's normative sentence or a paper's definition, it appears in quotation marks with its origin named in the same sentence.
+
+**Every number carries its provenance.** If a chapter says 15×, 41–86.7%, 125 ms, or `k ≈ 60`, the source is named where the number appears and linked here. Numbers the book chose for illustration are labelled illustrative, and are nobody's finding.
+
+**Specs are paraphrased, not copied.** The protocol and standards chapters describe mechanisms in the book's own words, then send you to the normative text. That is deliberate: a paraphrase that disagrees with the spec is the book's error to fix, and a copy that goes stale is a trap.
+
+<Aside type="note" title="Same posture as the rest of the book">
+These are pointers to *go and check the current state*, not settled facts. Specs are versioned by date and move; papers get superseded; vendor documentation changes without notice. Where a source has a version, that is the version this book read.
+</Aside>
+
+## Trademarks
+
+Anthropic and Claude, LangChain and LangGraph, Temporal, Vercel and the AI SDK, OpenAI, Microsoft, Google, Amazon and Firecracker, Stripe, PostgreSQL, Neo4j, Playwright, OWASP, and NIST are the marks of their respective owners.
+
+Their use here is nominative: naming the thing under discussion, as a book about building on these systems has to. It implies no endorsement, affiliation, or sponsorship in either direction.
+
+## Licenses of the sources
+
+Verified at the time of writing. Where a license could not be confirmed from the source itself, the row says so rather than guessing.
+
+| Source | Terms | What that permits here |
+| --- | --- | --- |
+| Model Context Protocol specification | Apache 2.0 (with earlier MIT contributions; docs CC BY 4.0) | Description and attributed quotation |
+| A2A protocol specification | Apache 2.0 | Description and attributed quotation |
+| OpenTelemetry semantic conventions | Apache 2.0 | Attribute names quoted directly |
+| OWASP GenAI content | CC BY-SA 4.0 | Attributed reference; the book paraphrases rather than adapts, so no share-alike obligation attaches |
+| NIST publications | US public domain, except items marked otherwise | Quotation and description, with NIST credited |
+| W3C specifications (WCAG, ARIA, WebRTC, RDF, SPARQL) | W3C Document License | Attributed quotation of normative text |
+| IETF RFCs | IETF Trust Legal Provisions (BCP 78) | Attributed quotation, see the source for the full grant |
+| arXiv papers | Per paper, chosen by the author (CC BY, CC BY-SA, CC BY-NC-SA, CC BY-NC-ND, or the arXiv perpetual non-exclusive license) | Findings reported and attributed; check the individual paper before reusing its text or figures |
+| Vendor documentation and engineering blogs | Each publisher's own terms | Short attributed reference and description only |
+| Temporal design patterns catalog | Not stated at the source | Description and attribution only |
+
+Nothing in this book is a derivative work of a listed source. Where the book agrees with a source it says so and cites it; where it disagrees, and it does, in places, it says that too, and the disagreement is the book's own.
+
+## The sources
+
+### Models and the API surface
+
+- [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): Anthropic. The workflow/agent distinction that [Part VI](/docs/workflows/the-determinism-test) and [what an agent is](/docs/foundations/what-is-an-agent) are built on.
+- [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching): Anthropic. Cache breakpoints, minimum cacheable prefixes, and TTL behavior behind [prompt caching](/docs/foundations/prompt-caching) and [the stable-prefix pattern](/docs/patterns/cost/cache-first-prefix).
+- [Message Batches](https://platform.claude.com/docs/en/build-with-claude/batch-processing): Anthropic. Window, discount, and limits behind [batch-API offload](/docs/patterns/cost/batch-api-offload) and [cost engineering](/docs/production/cost-engineering).
+- [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting): Anthropic. The provider endpoint that settles what a string actually costs, in [tokens](/docs/foundations/tokens).
+- [Tool use reference](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference) and [the computer use tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool): Anthropic. The tool-definition surface and the screen-control loop in [computer-using agents](/docs/tools/computer-using-agents).
+- [Anthropic Console](https://platform.claude.com/): where [setup](/docs/setup) sends you for a key.
+- [Tuning models on Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/tune-models): Google Cloud. The adaptation options weighed in [choosing and adapting models](/docs/foundations/choosing-and-adapting-models).
+
+### Retrieval and knowledge
+
+- **Reciprocal rank fusion outperforms Condorcet and individual rank learning methods**: Cormack, Clarke & Büttcher, SIGIR 2009, [10.1145/1571941.1572114](https://doi.org/10.1145/1571941.1572114). The RRF formula and the `k ≈ 60` constant in [hybrid fusion](/docs/patterns/retrieval/hybrid-fusion).
+- **PoisonedRAG: Knowledge Corruption Attacks to Retrieval-Augmented Generation**: Zou et al., USENIX Security 2025, [arXiv:2402.07867](https://arxiv.org/abs/2402.07867). Five malicious texts per target question for a 90% attack success rate, the basis of [untrusted retrieval](/docs/security/untrusted-retrieval).
+- **Spider 2.0: Evaluating Language Models on Real-World Enterprise Text-to-SQL Workflows**: [ICLR 2025](https://proceedings.iclr.cc/paper_files/paper/2025/file/46c10f6c8ea5aa6f267bcdabcb123f97-Paper-Conference.pdf). The 17–21% against 91.2% gap behind [SQL is still the answer](/docs/retrieval/sql-is-still-the-answer).
+- [Cypher overview](https://neo4j.com/docs/cypher-manual/current/introduction/cypher-overview/): Neo4j, plus W3C's [RDF 1.2 Concepts](https://www.w3.org/TR/rdf12-concepts/) and [SPARQL 1.2 Query](https://www.w3.org/TR/sparql12-query/). The two query models compared in [graph storage and query models](/docs/graphs/graph-storage-and-query-models).
+
+### Agent loops and graphs
+
+- **ReAct: Synergizing Reasoning and Acting in Language Models**: Yao et al., [arXiv:2210.03629](https://arxiv.org/abs/2210.03629). The reason–act–observe cycle named in [the ReAct loop](/docs/patterns/control/react-loop).
+- **Large Language Models Cannot Self-Correct Reasoning Yet**: Huang et al., ICLR 2024, [arXiv:2310.01798](https://arxiv.org/abs/2310.01798). Why [reflection](/docs/patterns/control/reflection) and [critic–reviser](/docs/patterns/control/critic-reviser) require external feedback rather than self-review.
+- [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution) and the [`Durability` type](https://reference.langchain.com/python/langgraph/types/Durability): LangChain. Checkpoint granularity and the node re-execution caveat in [persistence](/docs/langgraph/persistence) and [interrupts vs signals](/docs/human-in-the-loop/interrupts-vs-signals).
+- [Node retry policies](https://github.com/langchain-ai/langgraphjs/blob/main/examples/how-tos/node-retry-policies.ipynb): LangGraph.js examples. Per-node retry configuration in [node or function](/docs/langgraph/node-or-function).
+- [asyncio task documentation](https://docs.python.org/3/library/asyncio-task.html): Python. Cancellation and timeout semantics behind the Python track's concurrency samples.
+
+### Tools and workspaces
+
+- [Git worktree](https://git-scm.com/docs/git-worktree), [Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/), [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html), and [SLSA provenance 1.2](https://slsa.dev/spec/v1.2/provenance). Isolated working state, structured navigation, typed findings, and build provenance in [coding agents and workspaces](/docs/tools/coding-agents-and-workspaces).
+- [Locators](https://playwright.dev/docs/locators), [actionability](https://playwright.dev/docs/actionability), and [ARIA snapshots](https://playwright.dev/docs/aria-snapshots): Playwright. The accessibility-tree addressing that [computer-using agents](/docs/tools/computer-using-agents) prefers over pixel coordinates, and the snapshot form used in [accessible interfaces](/docs/interface/accessible-and-global-interfaces).
+- [Logical decoding output plugins](https://www.postgresql.org/docs/current/logicaldecoding-output-plugin.html): PostgreSQL. The change-capture mechanism in [enterprise integrations](/docs/tools/enterprise-integrations).
+
+### Protocols
+
+- [Model Context Protocol, revision 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28) and its [changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), plus the [client](https://modelcontextprotocol.io/specification/2025-06-18/client) and [server](https://modelcontextprotocol.io/specification/2025-06-18/server) sections of the preceding 2025-06-18 revision. [Part IX](/docs/mcp/what-mcp-is) describes the current revision and notes what moved.
+- [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/), [life of a task](https://a2a-protocol.org/latest/topics/life-of-a-task/), and [A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/). Agent Cards, task lifecycle, and the project's own comparison, in [MCP is not A2A](/docs/mcp/remote-agents-and-a2a).
+- [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) (protected resource metadata), [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) (authorization server metadata), [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) (resource indicators), and [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591) (dynamic client registration, now deprecated for this use). The authorization chain in [servers, clients, and transports](/docs/mcp/servers-clients-transports).
+
+### Durable execution
+
+- [Temporal Design Patterns](https://temporal-sa.github.io/temporal-design-patterns/): the catalog [Part XI](/docs/durability/temporal-pattern-map) maps onto agents, and the index behind [the pattern index](/docs/appendix/temporal-pattern-index).
+- [Temporal CLI setup](https://docs.temporal.io/cli/setup-cli): install paths and the local dev server in [setup](/docs/setup).
+- [LangGraph integration for the Temporal Python SDK](https://docs.temporal.io/develop/python/integrations/langgraph): the plugin behind [LangGraph on Temporal](/docs/durability/langgraph-on-temporal).
+- **Beyond the Leaderboard: A Synthesis of Tool-Use, Planning, and Reasoning Failures in Large Language Model Agents**: [arXiv:2607.05775](https://arxiv.org/abs/2607.05775). The six failure clusters that open [everything that breaks](/docs/durable-execution/everything-that-breaks).
+- **When Errors Become Narratives: A Longitudinal Taxonomy of Silent Failures in a Production LLM Agent Runtime**: [arXiv:2606.14589](https://arxiv.org/abs/2606.14589). Twenty-two observed incidents, and the invisibility meta-pattern that chapter is organized around.
+- [arXiv:2602.09345](https://arxiv.org/abs/2602.09345): the agent latency breakdown quoted in [not a background job](/docs/durability/not-a-background-job).
+
+### Interface, accessibility, and trust
+
+- [WCAG 2.2](https://www.w3.org/TR/WCAG22/), [WAI-ARIA 1.2](https://www.w3.org/TR/wai-aria/): particularly [live regions](https://www.w3.org/TR/wai-aria/#dfn-live-region): the [WCAG standards overview](https://www.w3.org/WAI/standards-guidelines/wcag/), and [W3C internationalization](https://www.w3.org/mission/internationalization/). The normative basis of [accessible and global interfaces](/docs/interface/accessible-and-global-interfaces).
+- [WebRTC](https://www.w3.org/TR/webrtc/), [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/), and [RFC 8827](https://www.rfc-editor.org/rfc/rfc8827). The transport and security architecture behind [realtime voice agents](/docs/interface/realtime-voice-agents).
+- **To Trust or to Think: Cognitive Forcing Functions Can Reduce Overreliance on AI in AI-assisted Decision-making**: Buçinca, Malaya & Gajos, [CSCW 2021](https://dl.acm.org/doi/10.1145/3449287) ([author copy](https://www.eecs.harvard.edu/~kgajos/papers/2021/bucinca21trust.pdf)). The 199-participant result behind [trust patterns](/docs/interface/trust-patterns) and the training argument in [organizational rollout](/docs/production/organizational-rollout).
+- **Evaluating Verifiability in Generative Search Engines**: Liu, Zhang & Liang, [arXiv:2304.09848](https://arxiv.org/abs/2304.09848). The citation-support rates that make [grounded citations](/docs/patterns/retrieval/grounded-citations) a mechanical check.
+- [Workflow agents](https://ai-sdk.dev/docs/agents/workflow-agent): Vercel AI SDK. The durable-agent surface compared in [two durable runtimes](/docs/interface/two-durable-runtimes).
+
+### Evals
+
+- **Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena**: Zheng et al., [arXiv:2306.05685](https://arxiv.org/abs/2306.05685). The judge biases and agreement ceiling tabulated in [scoring](/docs/evals/scoring) and [judge with rubric](/docs/patterns/evaluation/judge-with-rubric).
+- **Self-Preference Bias in LLM-as-a-Judge**: Wataoka, Takahashi & Ri, [arXiv:2410.21819](https://arxiv.org/abs/2410.21819). The perplexity-familiarity account of why a judge favours its own output.
+- [Challenges in Monitoring Deployed AI Systems](https://www.nist.gov/publications/challenges-monitoring-deployed-ai-systems-center-ai-standards-and-innovation): NIST. Referenced in [learning from production feedback](/docs/evals/learning-from-production-feedback).
+
+### Observability
+
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/), the [gen-ai attribute registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/), and the [dedicated conventions repository](https://github.com/open-telemetry/semantic-conventions-genai). The attribute names [Part XV](/docs/observability/otel-genai) instruments against.
+
+### Reliability
+
+- [Handling overload](https://sre.google/sre-book/handling-overload/) and the wider [Google SRE books](https://sre.google/books/). Retry budgets, load shedding, and amplification arithmetic, applied in [timeouts and retries](/docs/reliability/timeouts-and-retries) and [backpressure](/docs/reliability/backpressure).
+
+### Security
+
+- [OWASP Top 10 for LLM Applications — LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/), the [OWASP GenAI Security Project](https://genai.owasp.org/), the [Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), and the [GenAI Red Teaming Guide](https://genai.owasp.org/resource/genai-red-teaming-guide/). The coverage checklists in [the threat model](/docs/security/threat-model), [risk tiers](/docs/human-in-the-loop/risk-tiers), [the agentic supply chain](/docs/security/agentic-supply-chain), and [adversarial evals](/docs/security/adversarial-evals).
+- **Design Patterns for Securing LLM Agents against Prompt Injections**: Beurer-Kellner et al., [arXiv:2506.08837](https://arxiv.org/abs/2506.08837). The six patterns and their honestly stated utility costs, organizing [prompt injection](/docs/security/prompt-injection).
+- **Adaptive Attacks Break Defenses Against Indirect Prompt Injection Attacks on LLM Agents**: [arXiv:2503.00061](https://arxiv.org/abs/2503.00061). Eight defenses bypassed: the reason [filtering is not a defense](/docs/security/prompt-injection).
+- **Defending Against Indirect Prompt Injection Attacks With Spotlighting**: Hines et al., [arXiv:2403.14720](https://arxiv.org/abs/2403.14720). Delimiting, datamarking, and encoding, behind [untrusted content marking](/docs/patterns/security/untrusted-content-marking).
+- [The lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) and [CaMeL](https://simonwillison.net/2025/Apr/11/camel/): Simon Willison. The per-path review checklist and the capabilities-and-taint approach used throughout [Part XVII](/docs/security/prompt-injection).
+- [EchoLeak (CVE-2025-32711)](https://www.hackthebox.com/blog/cve-2025-32711-echoleak-copilot-vulnerability): Hack The Box. The zero-click exfiltration chain that [the egress allowlist](/docs/patterns/security/egress-allowlist) is a response to.
+- [Firecracker specification](https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md): the ≤125 ms boot figure, and its measurement caveats, quoted in [sandboxing](/docs/security/sandboxing).
+- [RFC 8693 — OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693) and the IETF draft [OAuth for AI agents acting on behalf of a user](https://www.ietf.org/archive/id/draft-oauth-ai-agents-on-behalf-of-user-01.html). The settled delegation mechanism and the in-progress extension, in [identity](/docs/security/identity) and [identity propagation](/docs/patterns/security/identity-propagation).
+- [NIST SP 800-161 Rev. 1](https://csrc.nist.gov/pubs/sp/800/161/r1/upd1/final) and the [NIST AI RMF Generative AI Profile](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf). Supply-chain risk management applied in [the agentic supply chain](/docs/security/agentic-supply-chain).
+
+### Governance and regulation
+
+- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/), the [Playbook](https://airc.nist.gov/airmf-resources/playbook/) and its [Manage function](https://airc.nist.gov/airmf-resources/playbook/manage/), the appendices on [AI actor tasks](https://airc.nist.gov/airmf-resources/airmf/appendices/app-a-descriptions-of-ai-actor-tasks/) and [human-AI interaction](https://airc.nist.gov/airmf-resources/airmf/appendices/app-c-ai-risk-management-and-human-ai-interaction/), and the [ISO/IEC 42001 crosswalk](https://airc.nist.gov/docs/NIST_AI_RMF_to_ISO_IEC_42001_Crosswalk.pdf). The governance structure behind [process discovery](/docs/foundations/process-discovery-and-value), [AI governance](/docs/production/ai-governance), and [organizational rollout](/docs/production/organizational-rollout).
+- [Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng), with [Article 12](https://artificialintelligenceact.eu/article/12/) on record-keeping and [Article 19](https://artificialintelligenceact.eu/article/19/) on log retention. The obligations shaping [escalation and audit](/docs/human-in-the-loop/escalation-and-audit) and [PII and compliance](/docs/security/pii-and-compliance).
+- [European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act) and [AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers). The maintained official sources for the phased timeline and Article 4.
+
+### Multi-agent
+
+- [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system): Anthropic. The 15× token figure, the variance finding, and the orchestrator-worker-with-citation-pass shape in [the coordination tax](/docs/multi-agent/the-coordination-tax) and [supervisor and handoff](/docs/multi-agent/supervisor-and-handoff).
+- **Why Do Multi-Agent LLM Systems Fail?**: Cemri et al., [arXiv:2503.13657](https://arxiv.org/abs/2503.13657). The MAST taxonomy and the 41–86.7% failure range.
+- **Single-Agent LLMs Outperform Multi-Agent Systems on Multi-Hop Reasoning Under Equal Thinking Token Budgets**: [arXiv:2604.02460](https://arxiv.org/abs/2604.02460). The equal-budget control behind [when not to](/docs/multi-agent/when-not-to).
+
+### Secondary sources
+
+One entry, listed for completeness rather than because the book relies on it:
+
+- [Complete guide to the 2026 OWASP Top 10 risks for agentic applications](https://nhimg.org/complete-guide-to-the-2026-owasp-top-10-risks-for-agentic-applications): NHI Mgmt Group. Read as a summary while working through the agentic Top 10; every claim the book makes about ASI01–ASI10 is checked against and cited to the OWASP original.
+
+## What has no source
+
+Most of this book. The layering argument, the determinism test, the risk-tier framing, the pattern catalog and its fixed shape, the Atlas running example, the decision tables, and the failure stories are the book's own work. Where a chapter reasons rather than reports, it carries no citation, and that absence is a claim of authorship, not an omission.
+
+The same applies to every judgment call the book records. [`FrameworkCheck`](/docs/how-to-read) exists precisely to mark the places where defensible implementations disagree and the book picked one. Those picks are arguments, and they are answerable to you rather than to a source.
+
+---
+
+Found something misattributed, or a source that should be credited here and isn't? That is a bug, and it is worth reporting as one.
