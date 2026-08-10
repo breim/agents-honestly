@@ -1,0 +1,179 @@
+---
+title: "Structured Scratchpad"
+description: "Move working state out of the transcript and into a typed object the agent edits."
+---
+
+## Problem
+
+At step four the agent computes a credit of $540 on an order where the correct figure is $180. The number goes into the transcript as prose.
+
+At step five it drafts a reply mentioning $540. At step six it checks the authority limit against $540. At step seven, asked to verify, it re-derives $540 from its own earlier sentence and reports higher confidence.
+
+The transcript has **no provenance**. A number the model asserted and a number a tool returned sit in the same conversation, in the same format, with nothing marking which is which. By step seven the false value is simply *something in the context*, indistinguishable from the order total and the policy text.
+
+The same absence causes three other failures: the value is lost when the context is [compacted](/docs/patterns/context/context-compaction), there is nothing to rebuild from when a run is [poisoned](/docs/context/context-poisoning), and there is no place to put a value that must survive a [three-day approval pause](/docs/human-in-the-loop/approval-gates).
+
+## Forces
+
+- **The transcript is the wrong home for facts.** It is unstructured, unversioned, unqueryable, and lossy under compression.
+- **Some values must be exact and durable**: identifiers, amounts, cited document versions, the customer's actual request.
+- **The model must still be able to work.** Reasoning, hypotheses, and dead ends belong in the transcript and should stay there.
+- **Provenance matters more than the value.** "$180 from `get_order`" and "$180 the model said" are different facts.
+- **Writes have to be constrained**, or the scratchpad becomes the transcript with more syntax.
+
+## Solution
+
+Hold working state in a **typed object beside the transcript**, where each field declares what may write it.
+
+<Figure caption="Two stores, two purposes. The transcript holds the thinking; the scratchpad holds what must be true." frame={false}>
+
+```
+   TRANSCRIPT                        SCRATCHPAD  (typed, in graph state)
+   ─────────────────────────         ────────────────────────────────────
+   "the pallet was damaged"          ticket_id      ← the trigger
+   "let me check the policy"         order_id       ← get_order
+   "policy v7 seems to apply"        order_total    ← get_order  (exact)
+   "so the credit would be…"         policy_id      ← search_policies
+                                     policy_version ← search_policies
+   lossy · no provenance             credit_cents   ← compute_credit
+   compacted away                    approval       ← the human
+                                     ────────────────────────────────────
+                                     survives compaction · queryable ·
+                                     each field names its source
+```
+
+</Figure>
+
+Three rules do the work:
+
+**Every field declares its writer.** `order_total_cents` can only be written by `get_order`. A number the model asserted has nowhere to go, so it stays prose, which is exactly right, because prose is what an unverified claim is.
+
+**Store provenance with the value.** Not `540` but `{ value: 540, source: 'compute_credit', at: '…', run_step: 6 }`. This is what makes [grounding checks](/docs/evals/trajectory-evals) mechanical: any number in the final reply that does not appear in the scratchpad is a candidate hallucination, whether or not it happens to be right.
+
+**Read from it before acting, not from the conversation.** The [tool that issues the credit](/docs/tools/idempotency) takes the scratchpad's `order_id` and re-derives the amount server-side. The transcript's opinion about the total never reaches an effect.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/scratchpad.ts"
+export interface Sourced<T> {
+  value: T;
+  source: string;     // the tool call that produced it — never 'model'
+  step: number;
+}
+
+export interface Scratchpad {
+  ticketId: string;                        // from the trigger
+  orderId?: Sourced<string>;               // writer: get_order
+  orderTotalCents?: Sourced<number>;       // writer: get_order
+  policy?: Sourced<{ id: string; version: string }>;  // writer: search_policies
+  creditCents?: Sourced<number>;           // writer: compute_credit
+  approval?: Sourced<{ by: string; at: string }>;     // writer: the human
+}
+
+// Field → the only tool permitted to write it.
+const WRITERS: Record<keyof Scratchpad, string[]> = {
+  ticketId: ['trigger'],
+  orderId: ['get_order'],
+  orderTotalCents: ['get_order'],
+  policy: ['search_policies'],
+  creditCents: ['compute_credit'],
+  approval: ['human_approval'],
+};
+
+export function write<K extends keyof Scratchpad>(
+  pad: Scratchpad, field: K, value: unknown, source: string, step: number,
+): Scratchpad {
+  if (!WRITERS[field].includes(source)) {
+    // Not an error the model can fix — it is a bug in the node that tried.
+    throw new IllegalScratchpadWrite(field, source);
+  }
+  return { ...pad, [field]: { value, source, step } };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/scratchpad.py"
+from dataclasses import dataclass, replace
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+
+
+@dataclass(frozen=True)
+class Sourced(Generic[T]):
+    value: T
+    source: str      # the tool call that produced it — never "model"
+    step: int
+
+
+@dataclass(frozen=True)
+class Scratchpad:
+    ticket_id: str
+    order_id: Sourced[str] | None = None
+    order_total_cents: Sourced[int] | None = None
+    policy: Sourced[dict] | None = None
+    credit_cents: Sourced[int] | None = None
+    approval: Sourced[dict] | None = None
+
+
+# Field → the only tool permitted to write it.
+WRITERS = {
+    "ticket_id": {"trigger"},
+    "order_id": {"get_order"},
+    "order_total_cents": {"get_order"},
+    "policy": {"search_policies"},
+    "credit_cents": {"compute_credit"},
+    "approval": {"human_approval"},
+}
+
+
+def write(pad: Scratchpad, field: str, value, source: str, step: int) -> Scratchpad:
+    if source not in WRITERS[field]:
+        # Not an error the model can fix — a bug in the node that tried.
+        raise IllegalScratchpadWrite(field, source)
+    return replace(pad, **{field: Sourced(value, source, step)})
+```
+
+</Tab>
+</Tabs>
+
+The scratchpad lives in [graph state](/docs/langgraph/reducers-and-state) so it is checkpointed, and its fields are the ones the [reducer](/docs/langgraph/reducers-and-state) must not drop. For a [durable run](/docs/durability/agent-as-workflow) it is workflow state, which is what lets it survive a pause measured in days.
+
+## Trade-offs
+
+**Design cost up front.** You have to know which values matter before the run, which is a real constraint on exploratory agents, and also a useful forcing function, because a field you cannot name a writer for is usually a value you should not be depending on.
+
+**Tokens, modestly.** The scratchpad is rendered into the prompt so the model can see the established facts. It is small, it is stable across turns, and it sits below the [cacheable prefix](/docs/patterns/context/stable-prefix): the cost is far less than re-reading the turns it replaces.
+
+**Rigidity.** A run that discovers it needs a value with no field is stuck with prose. The mitigation is a typed `notes` list for narrative, kept explicitly separate so nothing structured hides in it.
+
+**It does not stop wrong tool results.** A scratchpad faithfully records `order_total_cents` from `get_order` even when `get_order` returned another order's total. That is the [semantic class](/docs/reliability/error-taxonomy), and the defense is the [wrong-result injection test](/docs/reliability/failure-injection) plus server-side re-derivation, not this pattern.
+
+## When not to use it
+
+**Single-turn or read-only work.** A classifier, an extractor, a one-shot answer. There is no accumulating state to protect.
+
+**When the transcript is short and the run is cheap.** Under about five turns with no writes, the transcript is a perfectly good working memory and this is ceremony.
+
+**When the values are genuinely free-form.** A drafting or summarization agent whose output *is* prose has nothing typed to hold. Give it [rolling summary](/docs/patterns/context/rolling-summary) instead.
+
+**When you would use it to store the model's conclusions.** A scratchpad field written by `model` is a transcript with a schema on it, and it inherits every property this pattern exists to avoid. If no tool can produce the value, the value is an opinion. Treat it as one.
+
+<Aside type="note" title="The second reason it exists">
+Compaction and poisoning are usually discussed separately, and the scratchpad is the answer to both because they are the same problem seen twice: **the transcript is not a system of record.**
+
+Which gives the pattern's real test. Ask *if I discarded the entire transcript right now, could the run continue correctly?* If yes, you have a restore point, and [an agent whose only state is its conversation has no recovery mode at all](/docs/context/context-poisoning).
+</Aside>
+
+## Related
+
+- [Rolling Summary](/docs/patterns/context/rolling-summary): the narrative half; the scratchpad holds the facts so the summary does not have to
+- [Context Compaction](/docs/patterns/context/context-compaction): rebuilds the context *from* the scratchpad
+- [Sub-Agent Isolation](/docs/patterns/context/subagent-isolation): the sub-agent returns a value that lands in a field, not a transcript
+- [Context Poisoning](/docs/context/context-poisoning): the failure this pattern is the primary defense against
+- [Reducers and State](/docs/langgraph/reducers-and-state): where the scratchpad lives, and how not to lose it on merge
