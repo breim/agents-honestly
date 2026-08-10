@@ -1,0 +1,124 @@
+---
+title: "Context Poisoning"
+description: "The agent wrote something false into its own history, and now every turn reasons from it."
+---
+
+
+At step four, Atlas misreads a line item and computes a credit of $540 on an order where the correct figure is $180. Nothing errors. The number goes into the transcript.
+
+At step five it drafts a reply mentioning $540. At step six it checks the refund authority limit, against $540. At step seven, asked to double-check, it re-derives $540 from its own earlier statement and reports increased confidence.
+
+By step seven there is no disagreement anywhere in the conversation. Every turn is consistent with every other turn. The transcript reads like careful work, and it is wrong.
+
+## Why it compounds instead of degrading
+
+[Part I](/docs/foundations/context-window) put poisoning alongside overflow and dilution: a wall, a slope, and a feedback loop. Here is the mechanism behind the third.
+
+The transcript has **no provenance**. A sentence the model generated at step four and a fact a tool returned at step four occupy the same conversation, in the same format, with nothing marking which is which. By step seven, "the credit is $540" is simply something in the context, indistinguishable from the order total, the policy text, and the customer's own words.
+
+And then the property that makes models useful turns against you. Research on error propagation in agent trajectories names it directly: **the model persists in early errors for the sake of self-consistency.** It is not being stubborn and it is not lying. It is doing what you selected for, producing output coherent with its context, and its context contains a false premise. Every subsequent statement is generated to agree with $540, which produces more statements agreeing with $540, which makes the premise look better supported.
+
+Coherence is the feature. Poisoning is the feature applied to a bad input.
+
+That is why the failure looks *nothing* like the failures engineers expect. There's no confusion, no hedging, no contradiction to catch. The output quality rises as the error entrenches.
+
+## Three ways it decays
+
+Studies of long-running agents with evolving memory separate three distinct drift modes, and they need different defenses:
+
+| Drift | What happens | Where it comes from |
+| --- | --- | --- |
+| **Semantic** | Meaning shifts a little on each pass | Repeated summarization ([compaction](/docs/context/compaction)) |
+| **Procedural** | A suboptimal workflow gets reinforced as "how we do this" | The agent's own successful-looking runs |
+| **Internalization** | Hallucinated content is treated as validated knowledge | A claim survives long enough to be cited by later claims |
+
+The third is the terminal state, and it is the one that escapes a single run. Once an unverified claim gets written to a [fact store](/docs/context/memory), it stops being a poisoned turn and becomes poisoned data, which is why the previous chapter insisted you never write the model's inferences.
+
+## Where the poison enters
+
+Five entry points, and only the first is what people picture.
+
+| Source | Example |
+| --- | --- |
+| **Self** | A misread number, a hallucinated ID, a wrong intermediate calculation |
+| **Tool result** | The tool returned stale or wrong data, and it's now authoritative in the transcript |
+| **Retrieved content** | A superseded policy document that contradicts the current one |
+| **Compaction** | The summary introduced an error: model output *about* model output |
+| **Injection** | Text in a retrieved document written to be read as instruction ([Part XVII](/docs/security/prompt-injection)) |
+
+Note that three of the five are not the model's fault at all. Poisoning is usually described as a hallucination problem; it is more accurately an **input-integrity** problem, and hallucination is one of several ways bad input arrives.
+
+<Aside type="caution" title="In multi-agent systems, errors cascade rather than cancel">
+The intuition that a second agent will catch the first one's mistake is backwards in practice. When one agent's output becomes another's context, an early false claim gets preserved, softened, amplified, or transformed as it moves down the chain, and each agent that repeats it adds apparent corroboration.
+
+Independent verifiers help only if they are genuinely independent: given the *source data*, not the previous agent's summary of it. A reviewer that reads the poisoned conclusion is not a check, it's a second vote. [Part XIX](/docs/multi-agent/when-not-to) has more on why this makes multi-agent architectures riskier than they look.
+</Aside>
+
+## Prompting cannot fix this
+
+The reflex is to add a line to the system prompt: *be careful not to state things you haven't verified.*
+
+It doesn't work, and the reason is worth being precise about. That instruction targets **generation**, the moment of inventing $540. But at steps five, six, and seven the model is not inventing anything. It is *reading* $540 from its context and using it correctly. The error has moved from the output side to the input side, and no instruction about carefulness applies to a number that is simply present in the prompt.
+
+You cannot prompt your way out of a corrupted input. This is the same lesson as the [invariant-versus-request](/docs/context/system-prompt) distinction, arriving from a different direction: if it must not happen, it has to be structural.
+
+## Structural defenses
+
+Five, in rough order of strength.
+
+**1 · Don't let claims become facts.** The typed scratchpad only accepts values that came from a tool, with the tool call recorded. `credit_cents` is written by the calculation step, but `order_total_cents` can only be written by `get_order`. A number the model asserted has nowhere to go, so it stays prose in the transcript rather than becoming state.
+
+**2 · Re-read instead of recall.** Before an action, fetch the value again rather than reading it out of the conversation. The transcript says the total is $1,845; `get_order` says what it actually is. **Tool results are the source of truth over anything anyone said about them, including the model.** This costs one call and defuses most of this chapter.
+
+**3 · Verify at the boundary, not from history.** The credit tool takes `order_id` and computes the amount itself, rather than accepting an `amount` the model derived. Where a value must be passed in, the tool re-derives and rejects on mismatch. Poison that never reaches an action is a bad sentence rather than a bad refund.
+
+**4 · Isolate noisy work.** Give a messy sub-investigation its own throwaway context and return only its conclusion. Whatever confusion happened inside doesn't enter the main transcript. [Sub-agent isolation](/docs/patterns/context/subagent-isolation) is a context-integrity mechanism at least as much as a budget one.
+
+**5 · Mark provenance.** Where you can, label content by origin: verified tool output, retrieved document with a citation, model conclusion. It doesn't make the model infallible, but it gives the model, and your graders, the distinction the raw transcript lacks.
+
+Notice that four of the five work by **keeping things out of the transcript**, not by improving what's in it. That's the shape of the whole solution.
+
+## Detecting it
+
+You cannot catch this by reading final answers; a poisoned answer is fluent and internally consistent. What you can do is check it against something outside itself.
+
+**Ground claims against tool results.** Decompose the final reply into atomic claims: every number, ID, date, and policy assertion. Check each against what the tools actually returned in that run. This is mechanical and it is exactly what the trace is for. An unsupported claim is a poisoning candidate whether or not it happens to be true.
+
+**Track it as a trajectory, not a score.** The useful research framing here is to follow a claim across steps rather than grading the final output once: where did $540 first appear, and what did it come from? A single output-level score tells you the answer was wrong; a claim-level trajectory tells you *which step* to fix.
+
+**Alert on divergence.** If a value in the reply doesn't appear in any tool result from that run, that is a hard signal, cheap to compute, and worth failing the run over when the value is an amount or an identifier.
+
+## You cannot argue it out
+
+One practical note on recovery, because the instinct is wrong.
+
+Adding *"are you sure? please double-check"* to a poisoned conversation does not help. The model double-checks against its context, finds seven consistent statements, and returns *more* confident. You have asked it to re-derive a conclusion from the evidence that produced it.
+
+The only reliable recovery is to **restart from verified state**: drop the transcript, rebuild from the typed scratchpad, and re-fetch what the scratchpad references. That is the second reason the scratchpad exists: it survives compaction, and it is the clean restore point when the transcript is compromised.
+
+Which means poisoning has a design consequence beyond context engineering: **your agent needs a state it can be rebuilt from.** An agent whose entire state is its conversation has no recovery mode at all.
+
+## Where Part III leaves you
+
+Six chapters on what the model sees: a budget with named claimants, a system prompt that is context rather than incantation, per-request selection of pointers over payloads, three separate things called memory, compaction that keeps decisions rather than evidence, and now integrity of the whole assembly.
+
+The through-line is that every one of these fails silently. Nothing in this part raises an exception. That is not a coincidence. It is what happens when the failure mode of your system is *plausible output*, and it is why the parts of this book on evals and observability are not optional extras.
+
+Part IV takes on the biggest claimant of all, which we have been referring to and deferring for five chapters: where the answer actually lives.
+
+---
+
+Next: [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live), the routing decision that precedes every retrieval choice.
+
+## Takeaways
+
+- The transcript has no provenance. By step twelve, a claim the model made at step four is indistinguishable from a fact a tool returned.
+- Poisoning compounds because the model persists in early errors for the sake of self-consistency. Coherence is the property you wanted; this is that property with a false premise.
+- The output gets *better* as the error entrenches, which is why it evades the checks engineers expect.
+- Three drift modes: semantic from repeated summarization, procedural from reinforced workflows, and internalization when a claim becomes treated as knowledge.
+- Only one of the five entry points is hallucination. Poisoning is an input-integrity problem.
+- Errors cascade rather than cancel across agents. A verifier reading the previous agent's conclusion is a second vote, not a check.
+- Prompting cannot fix it: by the time it matters, the model is reading the error rather than generating it.
+- Four of the five defenses work by keeping things out of the transcript: verified-only state, re-read before acting, verify at the tool boundary, isolate noisy work.
+- Detect by grounding atomic claims against that run's tool results, and follow a claim across steps rather than scoring the final answer.
+- You cannot argue an agent out of a poisoned context. Rebuild from verified state, which requires having one.
