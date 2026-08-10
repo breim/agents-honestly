@@ -1,0 +1,186 @@
+---
+title: "Batch Iterator"
+description: "Walk a dataset larger than any single history can hold."
+---
+
+## Problem
+
+A re-classification job has to walk every ticket Meridian has ever filed, about 340,000 rows, applying the current policy taxonomy to each.
+
+[Fan-out](/docs/patterns/scale/fan-out) does not fit. One parent cannot hold 340,000 children: the default limit is **2,000 pending child workflows or activities per execution**, and the practical recommendation is to keep concurrent operations at 500 or fewer. Long before that, the parent's [event history](/docs/patterns/durability/continue-as-new-memory) crosses its 50 MB ceiling and the execution is terminated.
+
+[A resumable activity](/docs/patterns/durability/resumable-activity) does not fit either. One activity walking 340,000 items is a single unit of work measured in hours, with a checkpoint granularity you have to hand-roll and a retry that re-runs the whole thing.
+
+What is needed is a loop that *processes a page, records where it got to, and forgets everything else*, indefinitely, across any number of pages, with a history that never grows.
+
+## Forces
+
+- **The dataset is unbounded relative to any single execution's limits.**
+- **Order may matter**: a cursor must be walked in sequence, unlike an independent fan-out.
+- **Progress must survive** worker deaths, deploys, and the process itself ending.
+- **History must stay flat.** A loop that appends per item accumulates linearly and dies.
+- **The underlying set can change during the walk**, so an offset is not a position.
+- **Nobody is waiting**, so throughput matters more than latency.
+
+## Solution
+
+**One workflow per page, continuing as new with the cursor.** Each iteration processes a bounded page, then restarts itself with the next cursor and an empty history.
+
+<Figure caption="History resets every page. The cursor is the only thing that crosses, and the loop can run indefinitely." frame={false}>
+
+```
+   RUN 1  (workflow id: reclassify-2026q3)
+   ┌──────────────────────────────────────┐
+   │ fetch page from cursor=null          │
+   │ process 500 items (bounded fan-out)   │
+   │ write results to storage             │
+   │ history: ~1,200 events               │
+   └───────────────┬──────────────────────┘
+                   │ continue-as-new
+                   ▼   carry: { cursor, processed, failed }
+   RUN 2  (same workflow id, new run id)
+   ┌──────────────────────────────────────┐
+   │ fetch page from cursor="tk_00500"    │
+   │ history: 0 → ~1,200 events           │
+   └───────────────┬──────────────────────┘
+                   │
+                   ▼          …680 runs later…
+   RUN 681
+   ┌──────────────────────────────────────┐
+   │ cursor exhausted → write manifest    │
+   │ → complete                           │
+   └──────────────────────────────────────┘
+
+   history is FLAT. 340,000 items, 340,000 items' worth of nothing.
+```
+
+</Figure>
+
+Four rules:
+
+**Carry a cursor, never an offset.** `WHERE id > 'tk_00500' ORDER BY id LIMIT 500` is stable when rows are inserted mid-walk; `OFFSET 500` silently skips or repeats. This is the correctness bug that produces an incomplete job with no error, and it is [the same failure as reporting an index in a resumable activity](/docs/patterns/durability/resumable-activity).
+
+**Size the page from the history budget, not from throughput.** A page of 500 items with a few events each stays comfortably under the limits with room for retries. If a page ever risks the ceiling, the run terminates mid-job, so leave a wide margin and continue more often than feels necessary.
+
+**Fan out *within* the page, bounded.** Each page is a small [fan-out](/docs/patterns/scale/fan-out) with a concurrency window sized from the [token budget](/docs/reliability/backpressure). The outer loop gives you unbounded length; the inner fan-out gives you parallelism.
+
+**Accumulate to storage, not to state.** Counters and the cursor cross the continue-as-new boundary; results do not. A carried accumulator that grows with the dataset defeats the entire pattern by turning a flat history into a growing payload.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/batch-iterator.ts"
+const PAGE = 500;          // sized from the history budget, not throughput
+const CONCURRENCY = 20;    // sized from the token budget
+
+export interface Carry {
+  cursor: string | null;   // a CURSOR, never an offset
+  processed: number;
+  failed: number;
+  manifestKey: string;     // results accumulate in storage, not in state
+}
+
+export async function reclassify(carry: Carry): Promise<BatchResult> {
+  // Stable under concurrent inserts. `OFFSET` would silently skip or repeat.
+  const page = await fetchPage(carry.cursor, PAGE);
+
+  if (page.items.length === 0) {
+    return finalize(carry);                      // cursor exhausted
+  }
+
+  // Inner fan-out: bounded parallelism within the page.
+  const { done, failed } = await processWithWindow(page.items, CONCURRENCY, carry.manifestKey);
+
+  const next: Carry = {
+    cursor: page.nextCursor,
+    processed: carry.processed + done,
+    failed: carry.failed + failed,
+    manifestKey: carry.manifestKey,              // a key, not the results
+  };
+
+  // History resets here. The loop can run for as many pages as it takes.
+  return continueAsNew<typeof reclassify>(next);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/batch_iterator.py"
+PAGE = 500          # sized from the history budget, not throughput
+CONCURRENCY = 20    # sized from the token budget
+
+
+@dataclass
+class Carry:
+    cursor: str | None   # a CURSOR, never an offset
+    processed: int
+    failed: int
+    manifest_key: str    # results accumulate in storage, not in state
+
+
+@workflow.defn
+class Reclassify:
+    @workflow.run
+    async def run(self, carry: Carry) -> BatchResult:
+        # Stable under concurrent inserts. OFFSET would skip or repeat.
+        page = await workflow.execute_activity(fetch_page, carry.cursor, PAGE)
+
+        if not page.items:
+            return await finalize(carry)                 # cursor exhausted
+
+        # Inner fan-out: bounded parallelism within the page.
+        done, failed = await process_with_window(
+            page.items, CONCURRENCY, carry.manifest_key)
+
+        # History resets here. The loop runs for as many pages as it takes.
+        workflow.continue_as_new(Carry(
+            cursor=page.next_cursor,
+            processed=carry.processed + done,
+            failed=carry.failed + failed,
+            manifest_key=carry.manifest_key,             # a key, not results
+        ))
+```
+
+</Tab>
+</Tabs>
+
+Note what does *not* appear in `Carry`: the results. Counters and a storage key cross the boundary; 340,000 classification outputs live in object storage and are joined at the end. A carried list would grow the payload linearly against the same 2 MB cap: at a modest forty bytes per result that ceiling arrives around page one hundred, with five sixths of the job still to run, which is the failure mode this pattern exists to avoid appearing in the pattern itself.
+
+## Trade-offs
+
+**Throughput is capped by page size times concurrency.** With 500 per page and 20 in flight, wall-clock is dominated by the serial page boundary. Bigger pages help until the history budget bites; the honest ceiling is a job measured in hours, and that is usually fine for work nobody is waiting on.
+
+**Debugging spans hundreds of runs.** Run 412 of a 681-run chain is where the failure was, and finding it means following the continuation chain. Carry a stable job ID on every [trace](/docs/observability/what-a-trace-must-answer), or an investigation stops at a run boundary.
+
+**Restarting is all-or-nothing unless you plan for it.** A job stopped at page 400 can resume from its cursor only if the cursor was durably recorded outside the workflow too. Write it to the manifest each page, or a terminated chain means starting over.
+
+**The underlying set changes during a long walk.** New rows arrive after the cursor and get processed; rows before it that changed do not. Decide which semantics you want, snapshot or live, and record it, because "we reclassified everything" means different things under each.
+
+## When not to use it
+
+**When the set fits one execution.** A few thousand items belong in a plain [fan-out](/docs/patterns/scale/fan-out). The continue-as-new loop is machinery for datasets that genuinely exceed the limits.
+
+**When items are independent and order does not matter.** Then a [MapReduce tree](/docs/patterns/scale/mapreduce-tree) parallelizes far better: the batch iterator is inherently serial across pages, which is its cost and the price of a stable cursor.
+
+**When work arrives continuously.** This walks a bounded set to exhaustion. A steady stream wants [a sliding window](/docs/patterns/scale/sliding-window).
+
+**When the job is interactive.** Nobody should be waiting on a 680-page walk. If someone is, the answer is a narrower query, not a faster iterator.
+
+<Aside type="caution" title="Sharing quota with the interactive fleet is the failure that actually happens">
+A 340,000-item job is a large, sustained draw on the same [token quota](/docs/reliability/backpressure) that serves users. Run it with no priority class and you have reproduced the 2am incident: a job with no deadline starving the workload that has customers waiting.
+
+Three things make it safe, and none of them is optional at this size. Put it on the [batch endpoint](/docs/patterns/cost/batch-api-offload), where it is metered separately and costs about half. Give it a [priority share](/docs/patterns/scale/priority-queues) it cannot exceed. And set an [aggregate cost cap](/docs/patterns/cost/token-budget-enforcement) for the whole job, not per page: 680 pages each individually reasonable is how a batch job produces a surprising invoice.
+
+The pattern makes the job *possible*. Those three make it something you can run on a Tuesday afternoon.
+</Aside>
+
+## Related
+
+- [Fan-Out Over Items](/docs/patterns/scale/fan-out): the bounded parallelism used inside each page
+- [MapReduce Tree](/docs/patterns/scale/mapreduce-tree): the parallel alternative when order does not matter
+- [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory): the mechanism that keeps the history flat
+- [Sliding Window](/docs/patterns/scale/sliding-window): continuous arrival rather than a bounded set
+- [Priority Task Queues](/docs/patterns/scale/priority-queues): keeping a job this size away from interactive traffic
