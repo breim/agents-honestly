@@ -1,0 +1,225 @@
+---
+title: "Failure Injection"
+description: "Kill the worker mid-run. Fail the third tool call. Do it on purpose, before production does it for you."
+---
+
+Everything in Part XVI so far is a claim.
+
+*Transient errors retry at one layer.* *The breaker opens before the retries amplify.* *The idempotency key survives a three-day approval pause.* *A tainted run cannot reach `issue_credit`.* *The fallback produces acceptable output.* *A worker dying at step fourteen resumes at step fourteen.*
+
+Every one of those is a sentence someone wrote in a design doc, implemented once, and never observed being true. The code paths that make them true run, by construction, only when something has already gone wrong, which means they are the least-executed code in the system and they debut during an incident.
+
+> **An untested recovery path is a hypothesis, and it is usually wrong in a way that is only discoverable at the worst moment.**
+
+Failure injection is how the claims become facts. And agents raise the stakes. Reported failure rates for provider API calls sit in the low single-digit percent, which for a single request is negligible and for a forty-step run compounds into a near-certainty that *something* fails on every non-trivial execution.
+
+## What to inject
+
+Chaos engineering for ordinary services has a standard menu: latency, errors, node kills, network partitions. Agents add several, and the additions are the interesting ones.
+
+| Layer | Fault | What it should prove |
+| --- | --- | --- |
+| **Provider** | 429 with `Retry-After` | The header is honored; [admission](/docs/reliability/backpressure) reacts |
+| | 5xx / overloaded burst | [The breaker opens](/docs/reliability/fallbacks-and-breakers) before retries amplify |
+| | Timeout with no response | Not retried blindly; the [paired read](/docs/reliability/idempotency-in-practice) resolves it |
+| | **Stream stalls mid-response** | The inactivity timeout fires, not the total timeout |
+| | Slow token delivery | Deadline propagation works; the run degrades rather than truncates |
+| **Tool** | Error result | Returned to the model [as an instruction](/docs/tools/errors-as-instructions), not retried |
+| | Timeout on a write | Unknown-outcome handling; no duplicate effect |
+| | **A plausible wrong result** | See below: the one that matters most |
+| **Infrastructure** | Kill the worker mid-run | Resumes from checkpoint at the right step |
+| | **Kill between the effect and the record** | Idempotency survives; no double effect on resume |
+| | Checkpoint store unavailable | Fails closed rather than proceeding stateless |
+| **Human** | Approval never arrives | Timeout policy fires; the run does not hang forever |
+| | Approval arrives after the [dedup window](/docs/reliability/idempotency-in-practice) | **The Friday-to-Monday bug** |
+| **Adversarial** | A ticket containing an [injection payload](/docs/security/prompt-injection) | Taint holds; the capability ceiling denies |
+| | A [poisoned retrieved document](/docs/security/untrusted-retrieval) | Trust routing holds; high-authority path unaffected |
+
+Four rows are bolded because they are the ones almost nobody injects, and each corresponds to a bug this book has argued exists.
+
+**The stream that stalls mid-response** is the failure a single overall timeout handles badly. It is trivial to inject: stop writing bytes. And it is the fastest way to find out whether you have an inactivity timeout or just a long one.
+
+**Killing between the effect and the record** is the entire reason the dedup table exists. If your idempotency implementation puts the marker in a different store than the write, this injection finds it in one run.
+
+**The approval that arrives after the dedup window** is the Friday-to-Monday double credit. Injecting it means fast-forwarding a clock rather than waiting three days, which is one of the few genuine superpowers of building on [durable execution](/docs/durable-execution/temporal-in-forty-minutes). A test can skip a workflow's timers.
+
+**A tool returning a plausible wrong result** is the most valuable injection on the list and the least performed, so it gets its own section.
+
+## Inject wrong answers, not just errors
+
+Every fault above except one produces an *error*. Your code sees a signal and takes a branch.
+
+Now inject `get_order` returning a valid, well-formed order, but for the wrong order. Or a total that is off by a factor of ten. Or a policy document stating a rule that expired last March.
+
+Nothing raises. The agent does not retry, does not escalate, does not log anything unusual. It proceeds, reasons correctly from a false premise, and produces a confident, well-formed, wrong outcome. That is [the semantic class](/docs/reliability/error-taxonomy), the one with no exception type, and the majority of what actually goes wrong.
+
+This injection is the only way to test the defenses built for it:
+
+- Does the [re-read-before-acting](/docs/context/context-poisoning) discipline catch the stale value?
+- Does the tool that [re-derives the amount from `order_id`](/docs/tools/idempotency) reject the mismatch?
+- Does the grounding check notice the reply cites a number no tool returned?
+- Does the [risk tier](/docs/human-in-the-loop/risk-tiers) computed from a corrupted amount still route correctly?
+
+Those four controls appear in four different parts of this book, and an error injection exercises none of them. A wrong-result injection exercises all of them at once.
+
+## Assert invariants, not the absence of errors
+
+The assertion `no exception was thrown` is nearly useless here, because half these faults are supposed to produce a controlled failure. What you assert is that the system's promises held.
+
+<Figure caption="Six invariants. Every fault injection asserts the same six, and a violation names which promise broke." frame={false}>
+
+```
+   1  TERMINAL       the run reached a terminal state — completed,
+                     failed, or escalated. It is not stuck.
+
+   2  NO DUPLICATE   every external effect happened at most once.
+                     count them; do not trust the log.
+
+   3  BOUNDED        cost and turn count stayed under the run's cap
+                     even on the failure path.
+
+   4  ESCALATED      anything unresolvable reached a human queue
+                     with the reason attached.
+
+   5  TRACEABLE      the trace can answer what happened, including
+                     the injected fault and the recovery.
+
+   6  CONTAINED      no authorization, tenancy, or taint boundary
+                     was crossed while degraded.
+```
+
+</Figure>
+
+Invariant 3 is the one that catches the compounding described in [the error taxonomy](/docs/reliability/error-taxonomy): a fault that is handled correctly but expensively, retried, fallen back, re-planned. Such a fault passes the "did it work" test while quadrupling the run's cost. And invariant 6 exists because degradation is exactly when boundaries get skipped: a fallback path that forgets to propagate the tenant is a cross-tenant bug that only appears during an incident.
+
+## Where to run it, in three tiers
+
+**In CI, deterministically.** A seeded fault schedule, *fail the third tool call; stall the stream on turn seven*, over your test workflows, asserting the six invariants. This is cheap, it runs on every commit, and it is where the fallback path stops being untested code. Pair it with recorded model responses ([replay](/docs/observability/replay-debugging)) so the run is reproducible and a failure is debuggable rather than a coin flip.
+
+**In staging, continuously and randomly.** Low-probability injection on every run: a small percentage of tool calls fail, occasionally a worker dies. This finds the interactions a fixed schedule misses, and it keeps the recovery paths warm.
+
+**In production, as bounded exercises.** Game days with a defined blast radius: one tenant, one workflow, a fixed window, an announced owner, and a kill switch. The value is that it tests the things staging cannot: real quota, real data volume, real on-call response.
+
+<Aside type="caution" title="Agents have side effects, so injection needs a boundary of its own">
+Ordinary chaos engineering injects into services that mostly move bytes. An agent that is injected into may issue a credit or send an email as part of its *correct* response to the fault.
+
+Two guards. Run production exercises against a **test tenant** with real infrastructure and non-real customers. And gate the injector on the [dispatcher's](/docs/production/reference-architecture) class ④–⑤ tools so that external writes are stubbed, counted, and asserted rather than performed. That is also how invariant 2 gets measured, since counting effects is more reliable than reading them back.
+
+The injector living in the dispatcher is not incidental. The dispatcher is already the choke point everything else in this book put its checks in.
+</Aside>
+
+## Wiring it in
+
+The injector belongs where the calls are made, in the [model gateway](/docs/production/reference-architecture) and the tool dispatcher. It should be a normal part of those code paths, disabled by configuration rather than compiled out.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/testing/inject.ts"
+export type Fault =
+  | { kind: 'error'; status: number; retryAfterMs?: number }
+  | { kind: 'timeout' }
+  | { kind: 'stream_stall'; afterTokens: number }
+  | { kind: 'kill_worker'; phase: 'before_record' | 'after_record' }
+  | { kind: 'wrong_result'; mutate: (r: unknown) => unknown };  // the important one
+
+export interface Schedule {
+  // Seeded and deterministic in CI; probabilistic in staging.
+  next(call: { target: string; index: number }): Fault | null;
+}
+
+export async function withInjection<T>(
+  call: { target: string; index: number },
+  schedule: Schedule | null,
+  real: () => Promise<T>,
+): Promise<T> {
+  const fault = schedule?.next(call);
+  if (!fault) return real();
+
+  // Injected faults are recorded on the span. A run that failed because
+  // we broke it must be distinguishable from one that failed on its own.
+  span.setAttribute('injected.fault', fault.kind);
+
+  switch (fault.kind) {
+    case 'error':       throw classifyProviderError(fault.status, {});
+    case 'timeout':     return never();
+    case 'wrong_result': return fault.mutate(await real()) as T;
+    default:            return applyStructuralFault(fault, real);
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/testing/inject.py"
+async def with_injection(target: str, index: int, schedule, real):
+    fault = schedule.next(target, index) if schedule else None
+    if fault is None:
+        return await real()
+
+    # Injected faults are recorded on the span. A run that failed because
+    # we broke it must be distinguishable from one that failed on its own.
+    span.set_attribute("injected.fault", fault.kind)
+
+    if fault.kind == "error":
+        raise classify_provider_error(fault.status, {})
+    if fault.kind == "timeout":
+        return await never()
+    if fault.kind == "wrong_result":
+        # The important one: no exception, a plausible bad value.
+        return fault.mutate(await real())
+    return await apply_structural_fault(fault, real)
+```
+
+</Tab>
+</Tabs>
+
+The `span.setAttribute` line is small and load-bearing. Without it, an injected failure and a real one are indistinguishable in your dashboards, and a game day generates a genuine page.
+
+## Atlas, concretely
+
+| Fault | Where | Cadence | Asserts |
+| --- | --- | --- | --- |
+| Third tool call errors | CI | Every commit | Model receives the error; no transport retry |
+| Stream stalls at token 50 | CI | Every commit | Inactivity timeout fires within 15 s |
+| Worker killed before the dedup record | CI | Every commit | Resume issues no second credit |
+| Approval fast-forwarded past the dedup window | CI | Every commit | **The Friday bug**: still no second credit |
+| `get_order` returns another order's total | CI | Every commit | Amount re-derivation rejects; run escalates |
+| Ticket carries an injection payload | CI | Every commit | Taint holds; `issue_credit` denied and escalated |
+| Primary provider 5xx burst | Staging | Continuous, 1% | Breaker opens; fallback serves; `served_by` recorded |
+| Random tool failure | Staging | Continuous, 2% | Six invariants hold |
+| Full provider outage | Production | Quarterly game day | Test tenant; humans absorb the queue |
+
+Two rows are the ones that repay the whole exercise. The **approval fast-forward** tests a bug that would otherwise take three real days to reproduce, and that a customer would find. And the **wrong-result injection** is the only test in the suite that exercises the semantic class, which is the class most likely to hurt and the one with no error to catch.
+
+## Where Part XVI leaves you
+
+Six chapters of classical distributed-systems discipline applied to a component that is expensive, slow, and occasionally wrong.
+
+A [taxonomy](/docs/reliability/error-taxonomy) that says what to do next, and admits a fifth class that never raises. [Retries](/docs/reliability/timeouts-and-retries) at one layer, budgeted, from a checkpoint rather than from the start. [Idempotency](/docs/reliability/idempotency-in-practice) with a window sized to the human pause rather than the retry policy. [Breakers and a fallback ladder](/docs/reliability/fallbacks-and-breakers) where the fallback is understood to be a different system. [Admission control](/docs/reliability/backpressure) that decides who gets the quota before the shortage. And now the practice that turns all of it from design intent into observed behavior.
+
+The recurring theme: **most of this part is about making failures loud, early, and cheap**, because the alternative for an agentic system is not a crash. It is a confident, well-formed, expensive wrong answer that nobody notices for six days.
+
+Part XVII takes the same posture toward an adversary who is trying to produce exactly that on purpose.
+
+---
+
+Next: [The Threat Model](/docs/security/threat-model), what an attacker actually wants from your agent, and which of your components they will use to get it.
+
+## Takeaways
+
+- Every reliability mechanism is a claim until you have observed it working. Recovery paths are the least-executed code in the system and they debut during incidents.
+- Provider calls fail at low single-digit rates. Over a forty-step run that compounds into something failing on nearly every execution.
+- Inject at four layers: provider, tool, infrastructure, and human, plus adversarial inputs, which are the security part's tests.
+- The four nobody injects: a stream that stalls mid-response, a kill between the effect and its dedup record, an approval that arrives after the dedup window, and a tool returning a plausible wrong result.
+- The wrong-result injection is the most valuable and the least performed, because it is the only one that exercises the semantic class. Nothing raises, and the agent reasons correctly from a false premise.
+- One wrong-result injection exercises re-read discipline, amount re-derivation, grounding checks, and risk-tier computation at once.
+- Assert six invariants, not the absence of errors: terminal state, no duplicate effect, bounded cost, escalation with reason, a complete trace, and no boundary crossed while degraded.
+- Bounded cost catches the fault that is handled correctly but expensively, passing "did it work" while quadrupling the bill.
+- Contained catches the fallback path that forgot to propagate the tenant, which is a cross-tenant bug that only appears during an incident.
+- Three tiers: seeded and deterministic in CI, continuous and random in staging, bounded game days in production.
+- Agents have side effects, so gate the injector on class ④–⑤ tools: stub, count, and assert external writes rather than performing them. Counting effects is how invariant 2 is measured.
+- Durable execution lets you fast-forward a three-day approval pause into a CI test. Use it. Otherwise a customer finds that bug.
+- Record injected faults on the span, or a game day pages the on-call for real.
+- Most of Part XVI is about making failures loud, early, and cheap, because the alternative is a confident wrong answer nobody notices for six days.
