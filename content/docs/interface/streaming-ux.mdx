@@ -1,0 +1,159 @@
+---
+title: "Streaming UX"
+description: "Token streaming, tool-call streaming, cancellation, and streams that survive a page refresh."
+---
+
+[Part VII covered what to emit](/docs/langgraph/streaming-and-control) and when to stop. This chapter is the other end of the wire: what the browser does with it, and the two properties that only exist at the client edge. Surviving a refresh, and knowing what a closed tab means.
+
+## Streaming does not make anything faster
+
+The mechanism is worth understanding precisely, because it explains what to optimise.
+
+Reported findings put it plainly: once the first token appears, users shift their attention from *"is this working?"* to *"what is it saying?"*, and the perceived wait collapses. Nothing about the total duration changed. The **question the person is asking themselves** changed.
+
+The thresholds map onto the classic response-time research and have held up unusually well:
+
+| | Feels like |
+| --- | --- |
+| ~0.1s | Instantaneous |
+| ~1s | Flow of thought intact |
+| ~10s | Attention lost |
+
+For time-to-first-token specifically, under **200ms** reads as nearly instant and over **one second** feels sluggish, even if the model then streams at 150 tokens per second afterwards.
+
+Which produces a result that decides where to spend effort:
+
+> **0.4s to first token at 100 tokens/sec feels faster than 1.2s at 200 tokens/sec**, even though the second one finishes sooner.
+
+Which makes one implementation detail decide the whole budget on a reasoning model. Thinking streams as its own delta type, and **thinking always arrives before text**. So the first token off the wire is a reasoning token, not an answer token. A client that renders it hits the budget above. A client that filters for the answer and drops the rest has silently redefined time-to-first-token as *time-to-first-token-after-the-model-finishes-thinking*, which at [the default effort level](/docs/production/cost-engineering) is seconds rather than milliseconds. The stream was fast; the renderer threw the fast part away.
+
+That is a choice worth making deliberately rather than by omission, and it is the same choice as everywhere else in this chapter: showing the work is what buys the perception. If you would rather not show reasoning to a customer, the honest fix is a lower effort setting or a rendered placeholder, not a spinner in front of a stream that was already arriving.
+
+TTFT dominates the impression; throughput barely registers. That is why [the previous part](/docs/durability/latency) said the entry path is the only place milliseconds are worth engineering, and it is why optimising tokens-per-second is usually the wrong project.
+
+## What the first token has to be
+
+Here is the complication for agents. A support agent's first genuine token might be twenty seconds away, because it is going to call three tools before it has anything to say.
+
+So the first thing on the wire is not prose. [Part VII's rule](/docs/langgraph/streaming-and-control), *progress beats prose*, is what fills the perceptual budget:
+
+```
+   0.2s   Reading ticket #8823                    ← the "first token"
+   1.4s   Looking up order 4921
+   2.1s   Checking policy RET-14
+   4.8s   Found it — drafting a reply
+   5.1s   The RB-400 relays are covered under…    ← the actual first token
+```
+
+At 200 milliseconds the user has already switched from *is it working* to *what is it doing*, which is the entire benefit, five seconds before any prose exists. **A status line inside the perceptual budget is worth more than a token stream outside it.**
+
+## The transport, and what it does not give you
+
+Server-sent events are the right default for this shape: one direction, plain HTTP, survives proxies, has reconnection built into the browser. WebSockets earn their place when the client needs to speak mid-stream: steering, live approvals. They cost you a connection lifecycle to manage.
+
+But the honest limitation, and it is one people discover late:
+
+> **SSE carries no session identity, no reconnect protocol, and no fan-out.** These are not gaps a library update closes.
+
+The browser's automatic reconnection *reconnects*. It does not *resume*. Left alone, a reconnect gets you whatever the server sends next, with a hole where the tokens you missed used to be.
+
+## Streams that survive a refresh
+
+The SSE spec does provide the hook: give every event a unique ID, and the client sends `Last-Event-ID` on reconnection so the server knows where to continue from. What it does not provide is the thing that remembers those events, which is yours to build.
+
+<Figure caption="The stream is a projection of the run. Reconnecting re-attaches to the projection; it does not restart anything." frame={false}>
+
+```
+   workflow (running, 8 minutes)
+        │  emits events
+        ▼
+   ┌──────────────────────────────────────┐
+   │  buffer, keyed by streamId           │  ← Redis or equivalent
+   │  [12][13][14][15][16][17][18]        │
+   └──────────────────────────────────────┘
+        ▲                    ▲
+        │ Last-Event-ID: 14  │ new client, from 0
+        │                    │
+   browser (refreshed)   second device
+```
+
+</Figure>
+
+Four things are required, and skipping any one produces a stream that mostly works:
+
+**A persistent connection**, **server-side buffering** of what was emitted, **session tracking that survives a server restart**, and **ordered delivery** so replayed events do not arrive twice or out of sequence.
+
+The common implementation is the one to copy: the server mints a `streamId` when the run starts, writes the stream into a buffer as it emits, and on reconnection looks up that ID and re-attaches the client at its last position.
+
+<Aside type="caution" title="The stream is not the run">
+The architectural point that this whole chapter depends on, and the one that goes wrong quietly.
+
+[Part XI established](/docs/durability/not-a-background-job) that the run is a durable workflow with a business identity. The stream is a **projection** of that run: a view, buffered separately, reconnectable independently.
+
+If you conflate the two, a page refresh does not resume a view; it starts a second agent. The user now has two runs against one ticket, both spending money, and the one they are watching is not necessarily the one that will write the answer.
+
+The tell is a route handler that starts work. If refreshing the page can cause an action, the stream and the run are the same object and they should not be.
+</Aside>
+
+## What a closed tab means
+
+Nothing. That is the rule.
+
+A dropped connection is ambiguous between *refreshing*, *switched tabs*, *went to lunch*, *train entered a tunnel*, and *changed their mind*. Only the last one is a cancellation. Three distinct events need three distinct handlings:
+
+| Event | What it means | What to do |
+| --- | --- | --- |
+| Connection drops | Nothing knowable | Keep running. Keep buffering. |
+| User clicks Stop | An explicit decision | [Signal the workflow](/docs/durable-execution/signals-and-children) |
+| Nobody returns for N minutes | Possibly abandoned | A timeout policy, decided in advance |
+
+**Never infer intent from a disconnect.** The failure in the other direction is worse than it sounds: an agent that cancels on disconnect will abandon a refund halfway through because someone's laptop slept, and the [compensation](/docs/durability/compensation) it needs was never written for a cancellation nobody made.
+
+Real cancellation, when it does arrive, goes all the way down: [the heartbeating model activity receives it](/docs/durability/agent-as-workflow) and aborts the in-flight call rather than generating tokens nobody will read.
+
+## Rendering, briefly
+
+Four things that are all learned the same expensive way:
+
+**Buffer a few tokens before painting.** Rendering per token thrashes layout and reads as jitter rather than speed.
+
+**Do not re-parse markdown on every chunk.** Incremental parsing of half-finished syntax produces flicker: a heading that is briefly a bullet, a code fence that opens and closes. Parse on boundaries, or render text until the block completes.
+
+**Tool calls are structured elements, not text.** *"Looking up order 4921"* should be a component with a state, not a string the model wrote. That is [the next chapter's subject](/docs/interface/generative-ui-and-approvals).
+
+**Anything you show, you have said.** [Part VII's commitment rule](/docs/langgraph/streaming-and-control) lands hardest here, because a streamed intermediate that later turns out wrong is not an internal detail. The user read it. Streaming a draft answer that a policy check subsequently overturns is a worse experience than five silent seconds.
+
+## Atlas, concretely
+
+| | Choice |
+| --- | --- |
+| Transport | SSE, with per-event IDs |
+| First emission | A status line within 200ms of the request, before any model token |
+| Buffer | Keyed by `streamId`, retained for the life of the run plus an hour |
+| Refresh | Reconnects with `Last-Event-ID`; the workflow is untouched |
+| Second device | Attaches to the same buffer from event 0 |
+| Disconnect | Ignored |
+| Stop button | An update to the workflow, which cancels the in-flight activity |
+| Streamed | Progress, tool names, final prose |
+| Not streamed | Draft answers before the policy check |
+
+The last two rows are the same decision seen twice. Atlas streams what it is *doing* freely and what it *concludes* only once, because the first is provisional by nature and the second is a commitment the customer will hold it to.
+
+---
+
+Next: [Generative UI and Tool Approvals](/docs/interface/generative-ui-and-approvals), rendering tool calls as interface, and putting the approval gate where the user actually is.
+
+## Takeaways
+
+- Streaming does not reduce duration. It changes the question the user is asking from "is it working" to "what is it saying," and the perceived wait collapses.
+- Thresholds: ~0.1s instantaneous, ~1s keeps flow intact, ~10s loses attention. Under 200ms to first token reads as instant; over a second feels sluggish.
+- 0.4s to first token at 100 tokens/sec feels faster than 1.2s at 200. TTFT dominates, throughput barely registers. Optimise the wrong one and nobody notices.
+- On a reasoning model, thinking streams first and text follows. Render the thinking and you meet the budget; drop it and your first *visible* token waits for the whole reasoning phase, which the default effort level makes long.
+- An agent's first genuine token may be twenty seconds away, so the first emission is progress, not prose. A status line inside the perceptual budget beats a token stream outside it.
+- SSE is the right default. It carries no session identity, no reconnect protocol, and no fan-out. The browser reconnects, it does not resume.
+- Resumability needs a persistent connection, server-side buffering, session tracking across restarts, and ordered delivery. Mint a `streamId`, buffer as you emit, re-attach on `Last-Event-ID`.
+- The stream is a projection of the run, not the run. If a refresh can start work, the two are the same object and a refresh spawns a second agent.
+- A dropped connection means nothing. Never infer cancellation from it: an agent that does will abandon a half-finished refund because a laptop slept.
+- Explicit stop is a signal to the workflow, and it propagates to the heartbeating activity so the model call actually aborts.
+- Buffer a few tokens before painting, do not re-parse markdown per chunk, and render tool calls as components rather than text.
+- Anything you show, you have said. Stream what the agent is doing freely; stream what it concludes once.
