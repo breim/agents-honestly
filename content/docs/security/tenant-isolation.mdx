@@ -1,0 +1,212 @@
+---
+title: "Multi-Tenant Isolation"
+description: "RBAC, ABAC, row-level security, and retrieval filters as an authorization boundary."
+---
+
+Atlas serves eleven customers from one deployment. The retrieval filter is correct, and [Part IV spent a chapter on why](/docs/retrieval/metadata-and-authorization): `tenant_id` on every chunk, the principal from the live token, the model unable to touch the parameter.
+
+The leak comes from somewhere else.
+
+A support engineer opens a run to debug it and pastes the thread ID from a ticket. The checkpointer loads the thread: full conversation, retrieved documents, tool results. It belongs to a different customer. The thread ID was a UUID; the loader took it as an argument; nothing anywhere asked which tenant was allowed to read it.
+
+Every store in your system needs the boundary. Getting it right in the one place the security review looks at is the failure mode of multi-tenant agents, because agents have more stores than the architecture diagram shows.
+
+## Count your stores honestly
+
+The vector index is the store everyone secures. Here is the actual list for a normal agentic deployment, with the leak each one produces:
+
+| Store | Holds | Leak if unscoped |
+| --- | --- | --- |
+| Application database | Orders, tickets, accounts | The classical breach |
+| Vector index | Corpus chunks | [Covered in Part IV](/docs/retrieval/metadata-and-authorization) |
+| **Checkpointer / thread store** | Whole conversations, tool results | The opening scene |
+| **Durable workflow history** | Every argument and result, replayable | Same, and it persists for the retention period |
+| **Memory / fact store** | Extracted facts across sessions | A fact learned from A [surfaces for B](/docs/context/memory) |
+| **Caches** | Answers, embeddings, tool results | Keyed without a tenant, served to the next asker |
+| Object storage | Uploads, generated files | A predictable path is an enumeration |
+| **Traces and logs** | Prompts and results verbatim | Your observability tool is now a copy of the corpus |
+| **Eval datasets** | Real production runs | Customer A's data in a fixture repository forever |
+| Queues | Pending work | Cross-tenant work stealing |
+
+The bolded rows are the agent-specific ones, and they share a property: **they were introduced to solve a durability or quality problem, by someone thinking about neither authorization nor tenancy.** A checkpointer is state management. A trace is debugging. An eval set is quality. Each is also a full-fidelity copy of tenant data, and none of them arrived through the door the security review watches.
+
+The two that surprise teams most:
+
+**The trace store.** Prompts and tool results contain everything the run touched, shipped to a third-party observability vendor, retained by default, and searchable by every engineer. If your corpus is confidential, your traces are your corpus.
+
+**The eval set.** [Datasets built from production runs](/docs/evals/datasets) are exactly the right practice, and they turn one customer's data into a permanent artifact in a repository with different access rules than the system it came from. Sample deliberately, scrub, and record consent. Not because the eval is dangerous, but because it outlives everything around it.
+
+## Three enforcement layers, and the middle one is not a boundary
+
+<Figure caption="Enforcement below the application survives application bugs. Enforcement in the application survives nothing but careful review." frame={false}>
+
+```
+   ┌──────────────────────────────────────────────┐
+   │  SEPARATION      separate database, index,   │  a bug cannot
+   │                  namespace, or bucket        │  cross it
+   ├──────────────────────────────────────────────┤
+   │  ENGINE          row-level security, a       │  a missed WHERE
+   │                  policy engine, a proxy      │  is denied, not leaked
+   ├──────────────────────────────────────────────┤
+   │  APPLICATION     WHERE tenant_id = $1        │  correct until
+   │                  in your query builder       │  someone forgets
+   └──────────────────────────────────────────────┘
+```
+
+</Figure>
+
+Almost every implementation lives entirely in the bottom layer, and the bottom layer has a specific, predictable failure: it is correct in the ten places you wrote carefully and absent in the eleventh, which is a background job, a migration script, an admin endpoint, a cache warmer, or an eval harness written in a hurry on a Friday.
+
+**The middle layer is the highest-leverage change available to most teams.** Postgres row-level security is the concrete form: the policy lives on the table, the connection sets the tenant, and a query that forgets the predicate returns *nothing* rather than everything. The failure mode inverts from silent leak to visible emptiness, and that inversion is worth more than any amount of review discipline.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/db/tenant.ts"
+// The policy lives on the table, not in the query builder.
+//
+//   ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+//   CREATE POLICY tenant_isolation ON tickets
+//     USING (tenant_id = current_setting('app.tenant_id', true));
+//
+// A query that forgets the predicate now returns zero rows.
+
+export async function withTenant<T>(
+  tenantId: string,
+  fn: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    // set_config with local=true — scoped to this transaction, so a
+    // pooled connection cannot carry the setting to the next caller.
+    await tx.execute(`SELECT set_config('app.tenant_id', $1, true)`, [tenantId]);
+    return fn(tx);
+  });
+}
+
+// Every store gets the same treatment. The checkpointer's namespace is
+// derived, never accepted as an argument:
+export const threadKey = (tenantId: string, threadId: string) =>
+  `${tenantId}:${threadId}`;
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/db/tenant.py"
+from contextlib import asynccontextmanager
+
+# The policy lives on the table, not in the query builder:
+#
+#   ALTER TABLE tickets ENABLE ROW LEVEL SECURITY;
+#   CREATE POLICY tenant_isolation ON tickets
+#     USING (tenant_id = current_setting('app.tenant_id', true));
+#
+# A query that forgets the predicate now returns zero rows.
+
+
+@asynccontextmanager
+async def with_tenant(tenant_id: str):
+    async with db.transaction() as tx:
+        # local=true — scoped to this transaction, so a pooled connection
+        # cannot carry the setting to the next caller.
+        await tx.execute(
+            "SELECT set_config('app.tenant_id', $1, true)", tenant_id
+        )
+        yield tx
+
+
+def thread_key(tenant_id: str, thread_id: str) -> str:
+    # The checkpointer's namespace is derived, never an argument.
+    return f"{tenant_id}:{thread_id}"
+```
+
+</Tab>
+</Tabs>
+
+Two details are the whole control. **`local = true`** scopes the setting to the transaction. Without it, a pooled connection hands the previous caller's tenant to the next one, which is a cross-tenant bug that only appears under load and is nearly impossible to reproduce. And **the thread key is derived, not accepted**, which is the fix for the opening scene: there is no way to name another tenant's thread because the caller does not supply that part of the key.
+
+The top layer, a separate database, index, or namespace per tenant, is what you use when the boundary is a contract rather than a preference. It costs operational complexity and it is the only layer that survives your own mistakes.
+
+## RBAC, ABAC, and why agents push you down the list
+
+Tenancy is one dimension. Inside a tenant there is a second question: which *user* may do what. Agents change the calculus about how to answer it.
+
+| Model | Decides from | Fits |
+| --- | --- | --- |
+| **RBAC** | The role you hold | Coarse, stable permissions: staff vs. admin |
+| **ABAC** | Attributes of principal, resource, action, and context | Rules involving amount, region, time, data class |
+| **ReBAC** | Relationships in a graph | "Members of the team that owns this ticket" |
+
+RBAC alone runs out fast here, and the reason is the one [least privilege](/docs/security/least-privilege) established: the interesting agent permissions are *argument-scoped*. "May issue credits" is a role. "May issue credits up to the tier-0 cap, on accounts named by the current ticket, in the requester's region" is a sentence about attributes, and encoding it as roles produces a role explosion that nobody can audit.
+
+So most production agents end up at ABAC, usually as an externalized policy engine: a decision function that takes principal, action, resource, and context, and returns allow or deny with a reason. Two properties make that worth the extra component:
+
+**Policy becomes reviewable.** It is a file, in version control, with a diff. Authorization logic scattered through tool handlers is neither.
+
+**The reason is returned.** A deny carrying *"account not in the ticket's scope"* is [an escalation](/docs/human-in-the-loop/approval-gates) rather than an error, which is the difference between a control operators work with and one they route around.
+
+<Aside type="caution" title="One decision point, or none">
+The value of an externalized policy engine is entirely that it is the *only* place decisions are made. A deployment where the policy engine handles tool calls while retrieval filters live in the query builder and the checkpointer trusts its arguments has three authorization systems and the security properties of the weakest.
+
+If you adopt one, migrate everything to it. A partial migration mostly buys you the illusion of coverage.
+</Aside>
+
+## The tenant has to survive the async gap
+
+The agent-specific hard part, and the one that produces the strangest bugs.
+
+Tenancy propagates fine through a synchronous request. Agents are not synchronous. A run [pauses for approval](/docs/human-in-the-loop/interrupts-vs-signals), resumes on a different worker in a different process days later, calls out to a [Temporal activity](/docs/durability/agent-as-workflow) that retries on a third machine, and emits a trace from a background exporter. Every one of those hops is a place the tenant can be lost. Losing it usually means falling back to a default, which means falling back to *no filter*.
+
+Three rules keep it attached:
+
+**Tenant is part of the run's identity, not its context.** It goes in the workflow ID and the thread key, where it is structurally present, rather than in a mutable state field that a [reducer](/docs/langgraph/reducers-and-state) could drop.
+
+**Resumption re-derives, never restores.** On resume, the tenant comes from the run's identity and the [delegation is re-minted](/docs/security/identity). A checkpoint is data; treating the tenant in it as authoritative means a corrupted or hand-edited checkpoint is an authorization bypass.
+
+**Every fan-out carries it explicitly.** A [sub-agent](/docs/patterns/context/subagent-isolation), a parallel tool call, a background summarizer, a trace exporter: each gets the tenant as a required argument. Ambient context propagation via thread-locals or async-locals works until an executor boundary, and then it silently doesn't.
+
+## Test the boundary, not the feature
+
+Isolation is one of the few properties in agentic systems that admits a hard, deterministic test, and [the retrieval chapter's negative sets](/docs/retrieval/metadata-and-authorization) generalize to every store on the list.
+
+**A cross-tenant suite per store.** For each store, one test that asks for another tenant's identifier with a valid session and asserts empty-or-denied. Thread IDs, memory keys, cache keys, object paths, workflow IDs, trace queries. Ten tests, and they are the ones that would have caught the opening scene.
+
+**A missing-filter canary.** A test that runs a query *without* setting the tenant and asserts it returns zero rows. That test passing is your proof the engine layer is actually enforcing rather than decorating.
+
+**Fault injection with a wrong tenant.** [Failure injection](/docs/reliability/failure-injection) applied to authorization: resume a checkpoint under a different tenant and assert the run refuses to continue. This is the one that catches restored-rather-than-re-derived resumption.
+
+**A store inventory in CI.** The list at the top of this chapter, as a checked file. New store, new row, new test. Otherwise the eleventh store ships the way the first ten did.
+
+## Atlas, concretely
+
+| Store | Boundary | Enforced by |
+| --- | --- | --- |
+| Application tables | `tenant_id` | Row-level security; app never writes the predicate |
+| Vector index | Namespace per tenant | Separation: a filter bug cannot cross |
+| Checkpointer | `tenant:thread` composite key | Key derived from the run's identity, never an argument |
+| Temporal workflows | Tenant in the workflow ID | Structural; also gives per-tenant [queue routing](/docs/patterns/scale/tenant-fairness) |
+| Memory store | Namespaced per tenant *and* per user | Two levels, because a fact about one user is not a tenant-wide fact |
+| Caches | Tenant in the key, always | Key builder is the only constructor |
+| Traces | Tenant attribute on every span | Retention and access reviewed like the database |
+| Eval datasets | Scrubbed at extraction | Sampling records provenance and consent |
+
+The vector index gets full separation rather than a filter, and it is worth saying why the inconsistency is deliberate: it is the store where a single missing predicate returns the *most* content, ranked by relevance, to a question that was designed to find the good parts. Where the blast radius of one bug is highest, buy the layer that survives your own bugs.
+
+---
+
+Next: [Sandboxing and Credential Boundaries](/docs/security/sandboxing), where code runs, where secrets live, and making sure those are never the same place.
+
+## Takeaways
+
+- Securing the vector index is the part everyone does. The leak comes from the checkpointer, the workflow history, the memory store, the cache, the trace, or the eval set.
+- The agent-specific stores were all introduced to solve durability or quality problems, by people thinking about neither authorization nor tenancy.
+- If your corpus is confidential, your traces are your corpus: full-fidelity, third-party hosted, and searchable by every engineer.
+- Eval datasets built from production runs outlive the system they came from. Sample deliberately, scrub, record provenance.
+- Three layers: separation survives your bugs, an engine turns a forgotten predicate into empty results, and application-level filtering is correct until the eleventh caller.
+- Row-level security is the highest-leverage change for most teams: it inverts the failure mode from silent leak to visible emptiness.
+- Scope the connection setting to the transaction. A pooled connection carrying the previous caller's tenant is a load-dependent cross-tenant bug.
+- Derive keys, don't accept them. A thread ID supplied as an argument is an authorization decision delegated to the caller.
+- RBAC runs out because the interesting agent permissions are argument-scoped. ABAC with an externalized policy engine makes policy reviewable and denials explainable.
+- One decision point or none. Three partial authorization systems have the security of the weakest.
+- Tenancy must survive pauses, resumption, retries on other machines, and fan-out. Put it in the run's identity, re-derive on resume, and pass it explicitly across every boundary.
+- Isolation admits deterministic tests. Cross-tenant negative suites per store, a missing-filter canary, wrong-tenant resumption, and a store inventory checked in CI.
