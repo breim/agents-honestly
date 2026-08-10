@@ -1,0 +1,166 @@
+---
+title: "Entity Resolution"
+description: "\"OpenAI\", \"Open AI\", \"OpenAI, Inc.\": the unglamorous work that decides whether the graph is usable."
+---
+
+
+The [last chapter](/docs/graphs/modeling-entities) decided what a Customer *is*. This one decides which records *are* a given Customer, and those are completely different problems.
+
+Meridian's CRM has "Acme Industrial Ltd." Billing has "ACME INDUSTRIAL LIMITED" with a different address, because billing uses the registered office. A ticket says "Acme." The warehouse has `cust_4471`. An email came from `procurement@acme-ind.com`.
+
+Same company. Five records. Until something decides that, the graph has five disconnected nodes and the Acme question has no answer. Not a wrong answer, no answer, because the tickets are attached to one node and the renewal date to another.
+
+This is the line item I've flagged twice and it deserves the emphasis: **entity resolution is most of the project, and it never finishes.** New data arrives with new spellings forever.
+
+## Two errors, wildly asymmetric
+
+Everything about how you tune this follows from one observation.
+
+<Figure caption="Both are errors. Only one of them is an incident." frame={false}>
+
+```
+   FALSE MERGE                          FALSE SPLIT
+   two entities collapsed into one      one entity kept as two
+
+   Acme Industrial ─┐                   Acme Industrial ──▶ 4 tickets
+                    ├──▶ one node       ACME INDUSTRIAL ──▶ 3 tickets
+   Acme Logistics  ─┘                   (same company)
+
+   • one customer's tickets now         • the account looks healthier
+     hang off another's account           than it is — half its
+   • a query scoped to one customer       signal is on the other node
+     returns the other's data           • answers are quietly worse
+   • hard to undo once downstream
+     systems reference the merged ID    degradation, invisible
+
+   an incident
+```
+
+</Figure>
+
+A false merge is not a data-quality issue. It is a **correctness and possibly a confidentiality failure**: a traversal scoped to one customer now reaches another's tickets, which is precisely the boundary [Part IV insisted](/docs/retrieval/metadata-and-authorization) must never be crossed by a ranking decision. And it is sticky: once other systems have referenced the merged identifier, unpicking it is a migration.
+
+A false split degrades answers quietly. Acme's health looks fine because three of its seven escalations are on the other node.
+
+Hence the operational stance, and it is the opposite of most matching intuition:
+
+> **Tune for precision on merges.** When uncertain, leave them apart. A split you can fix later; a merge you may not be able to.
+
+## The pipeline, and a shape you've seen four times
+
+Comparing every record to every other record is quadratic and impossible at any real size. So the standard pipeline is staged:
+
+```
+   ①  BLOCK      cheap, wide     — generate candidate pairs that
+                                   could plausibly match
+   ②  COMPARE    expensive,      — score each candidate pair on
+                 narrow            multiple field-level features
+   ③  DECIDE     threshold       — match / no-match / review
+   ④  CLUSTER    resolve         — turn pairwise decisions into
+                                   entities
+```
+
+Blocking is what makes it tractable: group records by a cheap key, such as the first three characters of the name, a postcode, or an email domain, and only compare within blocks. Modern implementations often use approximate nearest neighbours over record embeddings as the blocking key, which handles spelling variation that a literal key misses.
+
+And note the shape of ① → ②. Cast wide with something cheap, then apply something expensive to a small candidate set. That is now the **fifth** appearance of this pattern in this book: [ANN then rescore](/docs/retrieval/ann-indexes), [select then rerank](/docs/context/dynamic-selection), [retrieve then cross-encode](/docs/retrieval/hybrid-and-reranking), block then match. It is not a coincidence; it is the general answer whenever an accurate operation is too expensive to run everywhere.
+
+One consequence of blocking worth stating plainly: **anything blocking misses can never be matched.** A recall failure at stage ① is invisible to every metric computed at stages ② through ④, because those only ever see candidate pairs. If your entity resolution has a mysterious ceiling, look at blocking first.
+
+## Strong identifiers beat clever matching
+
+The single most useful practical rule, and the one teams skip because it's boring.
+
+| Signal | Strength |
+| --- | --- |
+| Tax ID, company registration number, DUNS | **Decisive.** Match and stop. |
+| Verified email domain | Very strong for B2B |
+| Normalized phone, bank account | Strong |
+| Address after standardization | Moderate; shared offices, PO boxes |
+| Name similarity | **Weak.** The last resort, not the first. |
+
+Teams reach for fuzzy name matching immediately because it's the interesting problem. It is also the worst signal available: "Acme Industrial" and "Acme Industries" may be the same company or two competitors, and no edit distance distinguishes those cases.
+
+Before building a matcher, **go get an identifier.** Ask billing for the tax ID, capture the email domain at ticket creation, add a field to the CRM. An hour spent making a strong identifier available beats a month of tuning similarity thresholds, and it is the version of this problem that stays solved.
+
+## The transitivity trap
+
+The failure that turns a bad matcher into a catastrophe, and it's worth understanding precisely.
+
+Your matcher produces *pairwise* decisions. Entities are *clusters*. The naive way to get from one to the other is connected components: if A matches B and B matches C, they're all one entity.
+
+But matching is not transitive. `Acme Industrial` matches `Acme Industries`. `Acme Industries` matches `Acme Industries UK`. `Acme Industrial` and `Acme Industries UK` may be entirely different companies, and connected components merges all three anyway.
+
+Now scale it. In a corpus of similarly-named entities, a single spurious edge chains two clusters together, and then another, and the failure is not gradual:
+
+```
+   400 records ──▶ one entity called "Ltd"
+```
+
+That is a real and common outcome, and it is why rigid transitivity in clustering is a known flaw of the standard pipeline rather than a detail. Three defenses:
+
+**Raise the merge threshold.** That is the precision stance above, applied where it matters most.
+**Use clustering that can reject edges**, weighing evidence across the whole cluster rather than accepting any path.
+**Alarm on cluster size.** A cluster of 400 records is a bug, always. This is the cheapest possible monitor and it catches the catastrophic case immediately.
+
+## Where an LLM belongs
+
+Models are genuinely good at the hard comparisons. They know that "Acme Industrial Ltd" and "ACME INDUSTRIAL LIMITED" are the same and that "Acme Logistics" probably isn't. Current practice puts them exactly where the two-stage shape says they go: **in the expensive, narrow stage**, adjudicating the ambiguous pairs that cheap signals couldn't settle.
+
+Two cautions.
+
+**Not in the blocking stage.** Running a model over quadratic pairs is a budget incident, and blocking is a recall problem that cheap methods solve well.
+
+**Their failure mode is plausibility.** A model asked "are these the same company?" will produce a confident, well-reasoned answer either way, including for pairs a human would flag as genuinely undecidable. Ask it for a decision *and* a confidence, route the low-confidence ones to a human, and never let it auto-merge on its own judgment alone. See the asymmetry above.
+
+## Three bands, not one threshold
+
+The design that makes this operable:
+
+| Score | Action |
+| --- | --- |
+| Above the high threshold | Auto-merge |
+| Between | **Human review queue** |
+| Below the low threshold | Auto-reject |
+
+Do not try to automate the middle. The middle is where the genuinely ambiguous cases live, and there is no threshold that resolves them correctly, which is what makes them ambiguous. A review queue with a few dozen items a week is a functioning system; a single threshold tuned to make the queue disappear is a system quietly making both kinds of error.
+
+<Aside type="caution" title="Merges must be reversible">
+Never destructively rewrite source records. A merge is an **assertion** that these five records refer to one entity, with a source, a timestamp, and an author, stored alongside the originals rather than replacing them.
+
+That gives you three things: you can undo a bad merge without a data-recovery project, you can audit why two records were joined, and, connecting to [bitemporal modelling](/docs/graphs/modeling-entities), the merge itself is a fact with a validity window, which is exactly what you need when two companies actually do merge in the real world and the records *should* join as of a date.
+</Aside>
+
+## Measuring it
+
+**Pairwise precision and recall** on a human-labelled sample. Sample from the *hard* region, meaning pairs near the threshold, rather than uniformly, or you'll measure how well you handle the easy cases you already handle.
+
+**Cluster size distribution.** The operational alarm. Plot it; a long tail is your bug list, sorted by severity.
+
+**Unresolved rate.** What fraction of incoming records fail to attach to any known entity? A rising number means the source changed format or a new data feed arrived unnormalized.
+
+**Downstream sanity checks.** Does any account have two current owners? Does a cluster span two tax IDs? These are ontology violations from [last chapter](/docs/graphs/modeling-entities), and they catch merge errors that pairwise metrics miss.
+
+## Atlas, concretely
+
+Blocking on normalized name trigrams plus email domain. Comparison on five features, with tax ID as a decisive override in both directions: matching tax IDs merge regardless of name distance, and *differing* tax IDs block a merge regardless of how similar everything else looks. That negative rule prevents more damage than the positive one.
+
+High threshold auto-merges, low threshold auto-rejects, and the middle band, about forty pairs a week, goes to the support operations lead, who knows these customers. Merges stored as reversible assertions with provenance. Alarm at any cluster above twenty records.
+
+And the honest note for the plan: this is roughly two-thirds of the effort of Atlas's graph, which is the ratio that should have been in the estimate from the beginning.
+
+---
+
+Next: [Graph Retrieval](/docs/graphs/graph-retrieval), on traversal, neighbourhoods, and returning a subgraph small enough to fit in a prompt.
+
+## Takeaways
+
+- Defining what a Customer is and identifying which records are one are different problems. The second is most of the work and never finishes.
+- False merges are incidents: cross-customer data in a scoped traversal, hard to undo. False splits are quiet degradation. Tune for precision on merges.
+- The pipeline is block, compare, decide, cluster: cheap-and-wide then expensive-and-narrow, the same shape as ANN rescoring, reranking, and context selection.
+- Anything blocking misses can never be matched, and no downstream metric can see it.
+- Strong identifiers beat clever matching. Spend the hour getting a tax ID rather than the month tuning name similarity.
+- Matching isn't transitive. Naive connected components will eventually merge four hundred records into one entity, so alarm on cluster size.
+- Put the model in the narrow stage, never over quadratic pairs, and never let it auto-merge on confidence alone.
+- Use three bands with a human review queue in the middle. There is no threshold that resolves genuinely ambiguous pairs.
+- Merges are reversible assertions with provenance, not destructive rewrites, and they have validity windows, because companies really do merge.
+- Sample near the threshold when measuring, and watch cluster size, unresolved rate, and ontology violations.
