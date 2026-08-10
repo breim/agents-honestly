@@ -1,0 +1,193 @@
+---
+title: "Escalation Ladder"
+description: "Defined rungs from autonomous to assisted to human-owned."
+---
+
+## Problem
+
+An agent has two states: it handled the ticket, or it did not.
+
+That binary produces two bad outcomes and no good ones. When it cannot finish, the customer gets *"I'm unable to help with this"* and a human gets a ticket with none of the work attached, [an escalation that followed the rule and failed the contract](/docs/first-agent/the-problem). When it can *almost* finish, it finishes anyway, because the alternative is giving up entirely.
+
+The same binary shows up on the other side. The system is either fully autonomous on a path or fully gated, so the response to any doubt is to add an approval, and [approvals spend a finite budget of attention](/docs/human-in-the-loop/risk-tiers) that an adversary can also draw against.
+
+What is missing is the middle: an agent that does the parts it can, hands over the parts it cannot, and degrades one rung at a time rather than falling off a cliff.
+
+## Forces
+
+- **Confidence is continuous** and the response to it usually is not.
+- **Partial work has real value**, the retrieval, the computed amount, the drafted reply, and it is discarded by a binary failure.
+- **Each rung up costs human attention**, which is the scarcest resource in the system.
+- **Different triggers mean different rungs.** Running out of budget is not the same problem as reading a hostile document.
+- **Handing over needs a package**, not a notification.
+- **Rungs nobody services are hangs**, so every rung needs an owner.
+
+## Solution
+
+Define **named rungs with explicit triggers**, and let any bound, guard, or check move the run to a specific one rather than to failure.
+
+<Figure caption="Five rungs. Each names who owns the outcome and what the agent still contributes." frame={false}>
+
+```
+   ┌───────────────────────────────────────────────────────────────┐
+   │ 0 · AUTONOMOUS   agent acts, no one is told                   │
+   │                  tier 0 · reversible · within scope           │
+   ├───────────────────────────────────────────────────────────────┤
+   │ 1 · NOTIFY       agent acts, a person is told after           │
+   │                  tier 1 · reversible, wider · they can undo   │
+   ├───────────────────────────────────────────────────────────────┤
+   │ 2 · ASSISTED     agent drafts, a person sends                 │
+   │                  the work is done; the judgement is not       │
+   ├───────────────────────────────────────────────────────────────┤
+   │ 3 · APPROVAL     agent proposes, a person authorizes          │
+   │                  tier 2 · irreversible · card + wait          │
+   ├───────────────────────────────────────────────────────────────┤
+   │ 4 · HUMAN-OWNED  person owns it; agent supplies the package   │
+   │                  unroutable · hostile · no progress · policy  │
+   └───────────────────────────────────────────────────────────────┘
+
+   triggers move a run UP the ladder — never silently down
+```
+
+</Figure>
+
+Four rules:
+
+**Rung 2 is the one that pays for the ladder.** *Assisted*, the agent does the retrieval, the computation, and the draft, and a person presses send. It converts an eight-minute human task into a twenty-second review, it needs no approval infrastructure, and it is the rung most systems skip on the way from autonomous to escalation.
+
+**Every rung carries the work forward.** Whatever rung a run lands on, the human receives the original request, everything retrieved with citations, every tool call and result, and the reason for the rung. A rung that hands over a bare ticket has thrown away the run.
+
+**Map triggers to rungs deliberately.** [Budget exhaustion](/docs/patterns/control/bounded-autonomy) and *no progress* are different failures and belong on different rungs: the first has usable partial work and goes to assisted; the second is stuck and goes to human-owned. A [taint ceiling](/docs/security/prompt-injection) or a [policy refusal](/docs/reliability/error-taxonomy) goes straight to approval or human-owned regardless of how much work was done.
+
+**Never move down silently.** A run may be promoted to a higher rung mid-flight; it may not lower its own rung. The rung is set by code from the run's state, and the model has no way to argue itself into more autonomy.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/ladder.ts"
+export enum Rung { Autonomous = 0, Notify = 1, Assisted = 2, Approval = 3, HumanOwned = 4 }
+
+// Triggers map to rungs deliberately. Budget-exhausted still has usable
+// work; no-progress does not; a policy refusal skips both.
+const TRIGGER_RUNG: Record<string, Rung> = {
+  tier_1:            Rung.Notify,
+  budget_soft:       Rung.Assisted,
+  budget_exhausted:  Rung.Assisted,
+  turn_cap:          Rung.Assisted,
+  tier_2:            Rung.Approval,
+  taint_ceiling:     Rung.Approval,
+  no_progress:       Rung.HumanOwned,
+  policy_refusal:    Rung.HumanOwned,
+  unroutable:        Rung.HumanOwned,
+};
+
+export function promote(state: RunState, trigger: string): Rung {
+  const target = TRIGGER_RUNG[trigger] ?? Rung.HumanOwned;   // unknown → highest
+  // Monotonic: a run climbs, never descends. The model cannot argue
+  // its way back down to more autonomy.
+  state.rung = Math.max(state.rung, target);
+  state.rungReasons.push(trigger);
+  return state.rung;
+}
+
+// Every rung above 0 hands over the SAME package. The rung decides who
+// acts; it never decides how much work is thrown away.
+export function handover(state: RunState, ctx: RunContext): Handover {
+  return {
+    rung: state.rung,
+    reasons: state.rungReasons,
+    originalRequest: ctx.ticket.body,
+    retrieved: ctx.retrievedIds.map(id => ({ id, cite: citeFor(id) })),
+    toolCalls: state.toolHistory,
+    established: state.scratchpad.values(),   // with provenance
+    draft: state.draft,                       // rung 2 sends this as-is
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/ladder.py"
+class Rung(IntEnum):
+    AUTONOMOUS = 0; NOTIFY = 1; ASSISTED = 2; APPROVAL = 3; HUMAN_OWNED = 4
+
+
+# Triggers map to rungs deliberately. Budget-exhausted still has usable
+# work; no-progress does not; a policy refusal skips both.
+TRIGGER_RUNG = {
+    "tier_1": Rung.NOTIFY,
+    "budget_soft": Rung.ASSISTED,
+    "budget_exhausted": Rung.ASSISTED,
+    "turn_cap": Rung.ASSISTED,
+    "tier_2": Rung.APPROVAL,
+    "taint_ceiling": Rung.APPROVAL,
+    "no_progress": Rung.HUMAN_OWNED,
+    "policy_refusal": Rung.HUMAN_OWNED,
+    "unroutable": Rung.HUMAN_OWNED,
+}
+
+
+def promote(state: RunState, trigger: str) -> Rung:
+    target = TRIGGER_RUNG.get(trigger, Rung.HUMAN_OWNED)   # unknown → highest
+    # Monotonic: a run climbs, never descends.
+    state.rung = max(state.rung, target)
+    state.rung_reasons.append(trigger)
+    return state.rung
+
+
+def handover(state: RunState, ctx) -> dict:
+    # Every rung above 0 hands over the SAME package.
+    return {
+        "rung": state.rung,
+        "reasons": state.rung_reasons,
+        "original_request": ctx.ticket.body,
+        "retrieved": [{"id": i, "cite": cite_for(i)} for i in ctx.retrieved_ids],
+        "tool_calls": state.tool_history,
+        "established": state.scratchpad.values(),   # with provenance
+        "draft": state.draft,                       # rung 2 sends this as-is
+    }
+```
+
+</Tab>
+</Tabs>
+
+The unknown-trigger default is `HumanOwned`. A trigger nobody mapped is a situation nobody anticipated, and the safe rung for an unanticipated situation is the one where a person owns the outcome.
+
+## Trade-offs
+
+**Every rung needs an owner and an SLA.** Rung 2 with no queue and rung 3 with no approver are both hangs. This is organizational work, and it is the part that determines whether the ladder functions, [the capstone's first month](/docs/capstone/operating-it) found six of eight backlog items were about exactly this.
+
+**The middle rungs shift load rather than removing it.** Assisted work still costs a person twenty seconds. At high volume that is a real headcount number, and it is the honest comparison: twenty seconds of review against eight minutes of doing it, not against zero.
+
+**Rung distribution is a metric that must be watched.** A system where 40% of runs land on rung 4 is not automating anything; one where 99% land on rung 0 may have thresholds set too loosely. Track the distribution by route, and treat a shift as a signal.
+
+**More rungs is more to explain.** Five is already a lot to hold in your head. Three, autonomous, assisted, human-owned, covers most systems and is easier to operate correctly than five that nobody can distinguish.
+
+## When not to use it
+
+**When there is nowhere to escalate to.** A consumer product with no support team has no rungs above the agent. The available controls are a lower autonomous cap and an honest "I can't help with this," and building a ladder into a queue nobody reads is worse, because it looks like oversight.
+
+**When every action is tier 0.** A read-only assistant needs a way to say it does not know and nothing else.
+
+**When partial work has no value.** If the deliverable is atomic, it either happened or it did not, rung 2 has nothing to hand over and the ladder collapses to autonomous or not.
+
+**When the rungs cannot be distinguished in practice.** If nobody can tell you the difference between rung 1 and rung 2 in your product, you have four rungs and two behaviors. Collapse them.
+
+<Aside type="note" title="Two different ladders, and they are easy to conflate">
+[The map has an escalation ladder too](/docs/the-map), and it answers a different question. That one is about **architecture**: function, workflow, rules, agent, multi-agent, each rung more capable and less predictable, chosen once at design time.
+
+This one is about **autonomy at runtime**: how much of this particular run's outcome the agent owns, decided per run from what actually happened.
+
+They interact in one place worth noticing. A system that cannot build the runtime ladder, no queue, no reviewers, no approval surface, usually should not climb the architecture ladder either, because the rungs above *workflow* all produce outcomes that sometimes need a person. Autonomy you cannot hand back is autonomy you cannot safely grant.
+</Aside>
+
+## Related
+
+- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): the tier of a call, which is one of the triggers that sets a rung
+- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the caps whose exhaustion promotes a run
+- [Approval Gate](/docs/patterns/durability/approval-gate): the mechanism behind rung 3
+- [Escalation and Audit](/docs/human-in-the-loop/escalation-and-audit): what the handover package must contain
+- [Fallbacks and Circuit Breakers](/docs/reliability/fallbacks-and-breakers): the human rung as a fallback when infrastructure degrades
