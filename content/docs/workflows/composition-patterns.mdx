@@ -1,0 +1,143 @@
+---
+title: "Sequential, Parallel, Fan-Out"
+description: "The composition shapes that cover most of what people reach for an agent to do."
+---
+
+The [last chapter](/docs/workflows/the-determinism-test) placed each step in a column. This one connects them, and the claim of Part VI is that a handful of composition shapes cover most of what teams reach for an agent to do.
+
+None of what follows hands control flow to a model. You write the composition; the model fills specific slots in it.
+
+## Chaining: decompose, then simplify
+
+The first shape, and the most under-used. Take a step that one model call does mediocrely, and split it into two calls that each do one thing well.
+
+```
+   ✗  one call:  "read this ticket, look up the policy,
+                  decide if a credit applies, and draft a reply"
+
+   ✓  a chain:   extract facts ──▶ classify against policy ──▶ draft reply
+                 (typed output)     (enum + reason)            (prose)
+```
+
+The gain is not that the model is smarter in three pieces. It's that **each step is separately testable, separately debuggable, and separately fixable**, and each has a narrower job, which improves what it produces.
+
+You also get a place to put a **gate**: a cheap deterministic check between steps that stops the chain early. If extraction found no order ID and the category requires one, don't spend the next two calls. Return and ask. Gates are the cheapest quality mechanism in this part, because the best way to handle a bad input is to not process it.
+
+The costs are real and worth naming. **Latency sums.** Three sequential calls is three round trips. And **errors compound**: if extraction is 95% correct and classification is 95% correct on good input, the chain is not 95%.
+
+So chain when the sub-steps are genuinely different jobs. Don't chain a task that one call handles well, because you've bought two round trips and an extra failure mode for nothing.
+
+## Parallel, in three flavours
+
+The shape people skip, and the one that most often turns an unacceptable latency into an acceptable one.
+
+<Figure caption="Three parallel shapes. They look alike and answer different questions." frame={false}>
+
+```
+   SECTIONING                 FAN-OUT (map)              VOTING
+   one task, N aspects        N items, one task          one task, N times
+
+        task                    item ─┐                      task
+       ╱ │ ╲                     item ─┼─▶ same op          ╱ │ ╲
+   tone risk facts               item ─┘   each            run run run
+       ╲ │ ╱                       │                        ╲ │ ╱
+        merge                     collect                   aggregate
+
+   "check this reply for       "summarize each of        "classify this
+    tone, policy risk,          these 40 tickets"         three times and
+    and factual support"                                  take the majority"
+```
+
+</Figure>
+
+**Sectioning** splits one task into independent *aspects*. Each call gets a narrow job and a clean context, which is why it usually beats asking one call to do all three. The model isn't juggling three objectives, and each result is separately gradeable.
+
+**Fan-out** applies the same operation to many *items*. Ordinary map, with the ordinary concerns: concurrency limits, rate limits, and a retry policy per item rather than for the batch.
+
+**Voting** runs the same task repeatedly and aggregates. This is the shape that turns [nondeterminism](/docs/foundations/nondeterminism) from a liability into a mechanism: if the same input gives a different answer sometimes, sample it three times and take the majority. It's expensive, since you pay 3×, and worth it exactly where a wrong answer costs more than three calls. For "does this reply contain a policy claim we can't support," that's an easy trade.
+
+## The arithmetic
+
+| | Latency | Cost |
+| --- | --- | --- |
+| Chain of 3 | sum of all three | 3 calls |
+| Sectioning ×3 | **slowest branch + merge** | 3 calls |
+| Fan-out ×40 | slowest item + merge (subject to concurrency cap) | 40 calls |
+| Voting ×3 | slowest of three + aggregate | 3 calls |
+
+One line to internalize: **parallelism buys latency, never cost.** Three parallel calls cost exactly what three sequential calls cost. If your problem is the bill, parallelism won't help. [Fewer or smaller calls](/docs/foundations/tokens) will.
+
+And the second-order effect people forget: latency is the slowest branch *plus the merge*. A merge implemented as another model call adds a full round trip, which can erase the parallel gain on short branches.
+
+## The join is where the design lives
+
+Most treatments cover the fan-out and stop. The interesting decision is what you do with N results, and there are four answers with very different properties.
+
+| Join | How | Watch out |
+| --- | --- | --- |
+| **Concatenate** | Put all N results in one context | [Context explosion](/docs/context/context-as-budget); 40 summaries is a new budget problem |
+| **Aggregate structurally** | Count, group, min/max in code | Best when results are typed. Cheap, exact, no extra call. |
+| **Rank and select** | Score the N, keep the best k | Needs a scoring function or a reranker |
+| **Synthesize** | A model call that reads all N and writes one answer | Adds latency and a place to lose information |
+
+The default should be **aggregate structurally**, and it's available far more often than people assume. If each branch returned [structured output](/docs/foundations/structured-output), the join is `filter`, `groupBy`, and `count` rather than another model call. Forty ticket classifications don't need a model to combine them; they need a `GROUP BY`.
+
+Reach for synthesis when the branches produced prose that genuinely has to become one piece of prose. And when you do, remember it is a model call reading model output, [a place where errors get laundered into confident summary](/docs/context/context-poisoning), so pass the underlying facts through rather than only the branch conclusions.
+
+## Partial failure is a design decision
+
+With one call, failure is simple. With forty, you have to decide something:
+
+**All-or-nothing.** One branch fails, the whole operation fails. Correct when the result is only meaningful complete, as in "summarize all forty tickets" where a missing one changes the conclusion.
+
+**Best-effort with disclosure.** Return what succeeded, and say what didn't. Correct for most analysis. The critical part is the disclosure: `{ results: [...37], failed: 3, reason: "timeout" }` is honest; returning 37 results as though the set were complete is the [silent truncation](/docs/graphs/graph-retrieval) failure that this book keeps finding in new places.
+
+**Retry the stragglers.** Fan-out with a per-item retry and a deadline, then fall back to best-effort. Usually the right production shape, and it needs a concurrency cap so retries don't stampede.
+
+Pick one deliberately. Most codebases default to `Promise.all`, which fails everything if anything fails. That is a choice nobody made.
+
+<Aside type="caution" title="Parallel calls with the same prefix all miss the cache">
+A detail from [prompt caching](/docs/foundations/prompt-caching) that bites exactly here. A cache entry becomes readable only once the first response *begins streaming*. So firing forty identical-prefix calls simultaneously means all forty pay full price. None can read what the others are still writing.
+
+The fix is one line of orchestration: send one call, await its first token, then release the remaining thirty-nine. On a large shared prefix this is a substantial saving for a trivial change, and it is invisible unless you look at `cache_read_input_tokens`.
+</Aside>
+
+## When each shape is wrong
+
+**Chaining is wrong** when one call already does the job, or when a later step needs information only obtainable after seeing an earlier *result you didn't anticipate*. That's [an agent](/docs/workflows/the-determinism-test), not a chain.
+
+**Sectioning is wrong** when the aspects aren't actually independent. If the tone check needs to know what the policy check concluded, you have a chain wearing a fan-out costume, and running them in parallel just means one of them is working with less information.
+
+**Fan-out is wrong** when the items interact: deduplicating across items, ranking them against each other, or anything where item 12's treatment depends on item 3. Those need a join that sees everything, or a different shape entirely.
+
+**Voting is wrong** when the task has no majority-answerable form. You can vote on a classification; you cannot meaningfully vote on three different drafts of a paragraph. And it's wrong when the errors are *correlated*. Three samples of a model that misreads the same ambiguous sentence the same way give you three identical wrong answers and false confidence.
+
+That last point deserves emphasis. Voting works because the errors are independent. Where they aren't, you have bought a more expensive version of the same mistake.
+
+## Atlas, concretely
+
+**Sectioning** on the outbound reply: three parallel checks. Does every policy claim have a citation, does the tone match the customer's register, does the credit amount match what the tools returned. Independent aspects, joined structurally, and any failure blocks the send.
+
+**Fan-out** in the nightly account-health job: the same health computation across ten thousand accounts, concurrency-capped, best-effort with disclosure, per-item retries.
+
+**Voting** on exactly one step: the escalate-or-answer decision, sampled three times. It's a binary with asymmetric costs, since [the acceptance spec](/docs/first-agent/the-problem) holds escalation recall higher than answer accuracy. Three calls to reduce missed escalations is the cheapest insurance in the system.
+
+**Chaining** everywhere else, with gates between steps.
+
+Note that the agent loop is still exactly one step in the middle of all this. Everything in this chapter is the machinery around it, and the machinery is where most of the reliability lives.
+
+---
+
+Next: [Routing and Orchestration](/docs/workflows/routing-and-orchestration), classify first then dispatch. Orchestrator/worker without handing control flow to a model.
+
+## Takeaways
+
+- Chaining wins because each step is separately testable and has a narrower job, not because the model is smarter in pieces. It costs summed latency and compounding error.
+- Put deterministic gates between chain steps. Not processing a bad input is the cheapest quality mechanism available.
+- Three parallel shapes: sectioning (one task, N aspects), fan-out (N items, one task), and voting (one task, N times).
+- Voting converts nondeterminism into a mechanism, but only when errors are independent. Correlated errors give you the same mistake, three times, with more confidence.
+- Parallelism buys latency, never cost. And latency is the slowest branch *plus* the merge, so a model-call merge can erase the gain.
+- The join is the real design decision. Default to aggregating structurally. If branches return typed output, the join is `groupBy`, not another model call.
+- Decide partial-failure policy deliberately. Returning 37 of 40 results as though there were 37 is silent truncation.
+- Fire one call, await its first token, then fan out. Otherwise every parallel call misses the shared prefix cache.
+- Sectioning where aspects aren't independent is a chain in disguise, running with less information.
