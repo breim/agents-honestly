@@ -1,0 +1,194 @@
+---
+title: "Read Tools and Write Tools"
+description: "Different risk, different permissions, different review. Treating them alike is how agents cause incidents."
+---
+
+So far Part VIII has treated tools as one kind of thing with one set of design rules. They are two kinds of thing, and the line between them is the most consequential one in the catalogue.
+
+> **A wrong read costs a turn. A wrong write costs an incident.**
+
+That sentence is easy to nod at and expensive to actually design around, because the difference is not a matter of degree. It changes which of this book's mechanisms still apply.
+
+## What reads let you get away with
+
+| | Read | Write |
+| --- | --- | --- |
+| Retry on failure | Freely | Only if [idempotent](/docs/tools/idempotency) |
+| Run several at once | Yes, and you should | **No** |
+| Cache the result | Yes | Meaningless |
+| Re-execute on graph replay | Harmless | Repeats the effect |
+| Undo | Nothing to undo | Needs a [compensation](/docs/durability/compensation) you wrote |
+| Wrong argument | A wasted turn and some tokens | Money moved, mail sent |
+
+Read the middle rows carefully, because they are load-bearing for everything built so far. [Node retry policies](/docs/langgraph/node-or-function), [replay from a checkpoint](/docs/langgraph/persistence), [parallel tool calls in one turn](/docs/first-agent/first-tools), and, in Part X, durable execution's habit of re-running an activity after a crash. **Every one of those mechanisms assumes safe repetition.** They are correct for reads by default and correct for writes only when you have done additional work.
+
+The rule that follows is the one this chapter exists for: *the safe-repetition machinery you adopted in Part VII was purchased on the assumption that most of your tools are reads.* That assumption is usually true. It is never automatically true.
+
+## Five classes, not two
+
+"Read or write" is the shorthand. The real classification has five rungs, and the axis is not whether bytes changed. It is **who else has seen the result.**
+
+<Figure caption="The axis is reversibility, and reversibility ends where someone else's system begins." frame={false}>
+
+```
+   ①  PURE READ            get_order(4921)
+      no trace, no effect, no clock started
+              │
+   ②  OBSERVED READ        query_warehouse({...})
+      logs a row, burns quota, marks something "viewed"
+              │
+   ③  REVERSIBLE WRITE     escalate_to_human(ticket)
+      you own the undo
+              │
+   ④  IRREVERSIBLE WRITE   issue_credit(4471, 420000)
+      ledger appended; only a compensating entry, never an erasure
+              │
+   ⑤  EXTERNAL WRITE       send_reply(ticket, body)
+      someone else has it now. there is no undo to write.
+```
+
+</Figure>
+
+Class ⑤ is different in kind rather than in severity. A compensating transaction can reverse a ledger entry; nothing you can write reaches into a customer's inbox and removes an email. The design question for class ⑤ is never "how do we undo it." It is "what has to be true before it leaves."
+
+Class ② deserves its own line because it is the one people misfile. A lookup that writes an audit row, decrements a quota, or stamps a ticket as *viewed*, thereby starting an SLA clock, is not a pure read. It is safe to get wrong and **not** safe to repeat a thousand times, which is exactly the distinction a retry policy cares about.
+
+## The actual defect is the disguise
+
+Write tools are not dangerous. Write tools wearing read names are dangerous, because whoever glances at the catalogue assigns every safety property in the table above:
+
+```
+get_or_create_customer(email)      ← "get" — creates a row
+search_and_log(query)              ← "search" — writes, and it has a quota
+resolve_ticket_status(ticket_id)   ← "resolve" reads like a lookup; it starts a clock
+refresh_account_cache(account_id)  ← "refresh" — writes to shared state
+```
+
+Every one of those is a real shape, and the last two arrive most often by [wrapping an existing endpoint 1:1](/docs/tools/tools-are-apis-for-models), because HTTP `GET` handlers with side effects are common and nobody minded until the caller became a model with a retry policy.
+
+**The class is a property of the handler, not of the name.** Which means the audit is: read the handlers, not the schemas. Anything that touches a database, a queue, a counter, or a third party is at least class ②, whatever it is called. Then rename it so the catalogue tells the truth.
+
+## Four rules for anything above class ②
+
+**1 · A write tool takes identifiers, never a filter.**
+
+```
+cancel_order(order_id: string)              ✓
+cancel_orders(filter: {status, before})     ✗
+```
+
+A filter is a program, [rung ① from the previous chapter](/docs/tools/schema-and-granularity) wearing an object literal instead of a SQL string. And a filter that matches more rows than the author pictured is, essentially, the entire incident category. If a bulk operation is genuinely required, the tool returns the matching IDs and a second call acts on an explicit list, which puts the count in front of a human before it is a fact.
+
+**2 · Bound the magnitude in the handler.** The previous chapter established that `maximum` is not enforced in a strict schema. It becomes prose the model reads. So the ceiling on `amount_cents` lives in code, next to the entitlement check, and a request above it is [an error message written for the model](/docs/tools/errors-as-instructions) rather than an exception.
+
+**3 · Never run write tools in parallel.** Part II established that one assistant turn can carry several `tool_use` blocks, that you run them concurrently, and that returning results one at a time quietly trains the model out of parallel calls. All of that is advice about reads. For writes, dispatch serially and stop at the first failure, because three parallel writes where the second fails leaves a state that no `tool_result` describes and no retry can safely resolve.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/dispatch.ts"
+const calls = response.content.filter((b) => b.type === 'tool_use');
+
+// Reads: concurrently, all results, one user message.
+const reads = calls.filter((c) => classOf(c.name) <= 2);
+const results = await Promise.all(reads.map(runRead));
+
+// Writes: one at a time, in order, stopping at the first failure.
+for (const call of calls.filter((c) => classOf(c.name) > 2)) {
+  const result = await runWrite(call, requester);
+  results.push(result);
+  if (result.is_error) break; // remaining writes are not attempted
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/dispatch.py"
+calls = [b for b in response.content if b.type == "tool_use"]
+
+# Reads: concurrently, all results, one user message.
+reads = [c for c in calls if class_of(c.name) <= 2]
+results = await asyncio.gather(*(run_read(c) for c in reads))
+results = list(results)
+
+# Writes: one at a time, in order, stopping at the first failure.
+for call in (c for c in calls if class_of(c.name) > 2):
+    result = await run_write(call, requester)
+    results.append(result)
+    if result.get("is_error"):
+        break  # remaining writes are not attempted
+```
+
+</Tab>
+</Tabs>
+
+Note that `classOf` is a lookup against your own catalogue, not a guess from the name. That only works if you followed rule zero, above.
+
+**4 · Preview before execute, from class ③ up.** A dry-run that returns what *would* happen, rendered for a human. This is what makes an approval gate mean anything: approving `issue_credit` is approving a tool name, while approving *"credit $4,200.00 to Acme Industrial against invoice 88213, leaving $1,180.00 outstanding"* is approving an action. [Part XII](/docs/human-in-the-loop/approval-gates) builds the gate; the preview is what you must have built here for the gate to be more than a speed bump.
+
+## Reads are only safe in isolation
+
+Everything above treats reads as the cheap case. That holds right up until you notice which reads and which writes coexist in the same agent.
+
+The framing that has become standard names three capabilities:
+
+> **Access to private data · exposure to untrusted content · the ability to communicate externally.**
+
+Any two are manageable. All three together mean a single poisoned document can instruct the agent to fetch something private and send it somewhere, with no bug in your code, because the attack vector is the language itself rather than a flaw in the parser. One assessment found the combination present in **98% of agents examined**, which says less about carelessness than about how naturally the three accumulate.
+
+Atlas has all three, and it acquired them for good reasons:
+
+| Leg | Where Atlas got it |
+| --- | --- |
+| Private data | The CRM, the warehouse, the invoice ledger |
+| Untrusted content | Ticket bodies, since anyone can email support, and the [policy corpus](/docs/security/untrusted-retrieval) |
+| External communication | `send_reply`, a class ⑤ tool |
+
+The mitigation is architectural, because prompt instructions cannot fix it: **break one leg for the paths where all three meet.** For Atlas that is the reply path, and the options are the ordinary ones: the outbound message goes through a human gate, or it is assembled from templates with no model-authored free text, or the untrusted document never shares a context window with the private data. [Prompt Injection](/docs/security/prompt-injection) dissects the attack and [Threat Model](/docs/security/threat-model) is where you make the choice properly; the part that belongs *here* is that it is a **tool-catalogue property**. You can read your own catalogue today and see whether you have all three.
+
+## What the incidents keep proving
+
+There is a genre of postmortem now, and they rhyme. A coding agent working in a test environment hit a credentials problem, decided that deleting a storage volume would resolve it, and removed a production database and its backups in about nine seconds. It then wrote a clear account of every safety rule it had violated.
+
+The interesting part is not the deletion. It is the last sentence: the agent could enumerate the rules, because **the rules were in its system prompt.** A system prompt is advisory. It is a sign on the server-room door, and the model is free to reason its way past it when the goal seems to require that.
+
+This book has a name for that already: [invariants versus requests](/docs/first-agent/the-problem). Every incident in this genre is that distinction, restated as a bill. The specific corollaries worth carrying:
+
+- **A capability the agent inherits is a capability the agent has.** Several of these incidents involve an agent running with a human operator's elevated permissions, which is how one of them passed a two-person approval gate: it was not bypassed, it was *satisfied*, by a principal that should never have held both roles.
+- **A restriction that lives in the prompt is documentation.** The same restriction in the credential is an invariant, because it is enforced somewhere the model cannot reach. If the read tools and the write tools share one database role, the only thing separating them is prose.
+
+## Atlas, concretely
+
+The catalogue with its class, its credential, and its dispatch rule:
+
+| Tool | Class | Credential | Parallel | Gate |
+| --- | --- | --- | --- | --- |
+| `get_order` | ① read | `atlas_ro` | Yes | — |
+| `crm_account_risk_profile` | ① read | `atlas_ro` | Yes | — |
+| `erp_list_unpaid_invoices` | ① read | `atlas_ro` | Yes | — |
+| `search_policies` | ① read | corpus, read-only | Yes | — |
+| `query_warehouse` | ② observed | `atlas_ro`, separate pool | Yes | — |
+| `escalate_to_human` | ③ reversible | `atlas_rw` | No | — |
+| `issue_credit` | ④ irreversible | `atlas_credit`, ceiling in handler | No | Human, with preview |
+| `send_reply` | ⑤ external | outbound service | No | Template or human |
+
+Three credentials, not one. The distinction that matters is not that `get_order` *should not* issue a credit. It is that, holding `atlas_ro`, it **cannot**. That is the difference between a rule and a control, and it is the only form of the rule that survives a model reasoning about whether the rule applies right now.
+
+---
+
+Next: [Idempotency](/docs/tools/idempotency), the refund call timed out. Did it happen? Design so the answer never matters.
+
+## Takeaways
+
+- A wrong read costs a turn; a wrong write costs an incident. The difference is not degree. It decides which mechanisms still apply.
+- Retry policies, graph replay, parallel dispatch, and durable re-execution all assume safe repetition. That assumption holds for reads and must be earned for writes.
+- Five classes, not two: pure read, observed read, reversible write, irreversible write, external write. The axis is who else has seen the result.
+- External writes are different in kind. No compensating transaction reaches into someone's inbox; the only question is what must be true before it leaves.
+- The defect is the disguise. `get_or_create_customer` is a write with a read's name, and the class is a property of the handler. Audit handlers, then rename.
+- A write tool takes identifiers, never a filter. A filter is a program, and a filter matching more rows than intended is the whole incident category.
+- Magnitude ceilings live in the handler, because strict schemas do not enforce `maximum`.
+- Dispatch reads concurrently and writes serially, stopping at the first failure. Parallel writes leave partial states no `tool_result` describes.
+- Preview before execute from class ③ up. Approving a tool name is not approving an action.
+- Private data, untrusted content, and external communication: any two are manageable, all three are exploitable by a single poisoned document. Reported present in 98% of assessed agents. Atlas has all three, and the fix is architectural.
+- A restriction in the prompt is documentation; the same restriction in the credential is an invariant. A capability the agent inherits is a capability it has, including the one that satisfies a two-person gate by itself.
