@@ -1,0 +1,125 @@
+---
+title: "The Discipline of Evals"
+description: "Why \"it looks good in the demo\" fails, and what an eval strategy looks like when it is doing real work."
+---
+
+Thirteen parts have made Atlas survive crashes, wait for people, respect quotas, and explain itself. None of them can tell you whether it is right.
+
+That is not a gap in the engineering. It is a property of the failure mode: [a retry policy cannot detect a wrong answer](/docs/durable-execution/everything-that-breaks), because from the machine's point of view nothing failed. This part is the only one that can.
+
+## The demo is not an easy test. It is a selected one.
+
+Every agent demo is built on clean inputs, cooperative users, defined scenarios, and a controlled environment where the known strengths are on display and the failure modes are out of frame. The demo is not a weaker version of production. It is a **sample chosen by the person who built the thing**, which is the one sampling method guaranteed to miss what they did not anticipate.
+
+Then the arithmetic makes it worse. [Part X's compounding](/docs/durable-execution/everything-that-breaks) applies within a run, and it applies again across a pipeline: three components at 70% each succeed together **34%** of the time. Evaluating a component in isolation does not predict the system, and a demo evaluates one path through one component on one input.
+
+## The benchmarks are not a rescue
+
+The instinct is to reach for a published benchmark instead. This book has now hit the same wall three times: [tool-selection benchmarks averaging three candidate tools](/docs/first-agent/first-tools), [recall benchmarks measured without filters](/docs/retrieval/ann-indexes), [text-to-SQL measured on small clean schemas](/docs/retrieval/sql-is-still-the-answer). The general figure is consistent with all of them: a reported **37% gap** between controlled benchmark performance and real enterprise deployment.
+
+There is a second problem, and it is worse because it undermines the instrument rather than the reading. A 2026 survey of static benchmark datasets found **invalid or flawed test items at rates up to 42%.**
+
+So: the published number is measured in a regime you will never deploy in, *and* close to half of the items producing it may not be measuring what they claim. A benchmark is a useful floor and a bad target.
+
+> **The only measurement that matters is the one taken on your cases, by your definition of success.**
+
+## The failure is usually not the model
+
+The most reallocating fact in this chapter. A 2026 review of enterprise deployments attributed **about 60% of production failures to data quality, context gaps, or governance**, not to the underlying model.
+
+Which means an eval that scores only the model's output is scoring the minority of the failure surface. The wrong document was retrieved; the tool returned a truncated result; the requester check let something through; the policy version was stale. Every one of those produces a fluent, plausible answer that a model-output score marks as fine.
+
+That is why Part XIV is seven chapters rather than one, and why it includes [the path](/docs/evals/trajectory-evals) and [the cost](/docs/evals/cost-and-latency-evals) alongside the answer.
+
+## Discipline starts by reading your failures, not by writing tests
+
+The single most consequential practice, and it inverts what most teams do:
+
+> **Error analysis comes first. The eval suite emerges from observed failure modes rather than imagined ones.**
+
+The usual sequence is to sit down and write evaluators for everything that could go wrong. That produces a suite which measures the team's imagination: thorough about the failures they pictured, silent about the ones they did not.
+
+The working sequence is the opposite:
+
+<Figure caption="The suite is an output of error analysis, not an input to it." frame={false}>
+
+```
+   ①  sample real failures from traces
+   ②  cluster them — by input shape, by failure kind
+   ③  open each cluster and label the ROOT CAUSE
+   ④  count: cluster size × severity
+   ⑤  fix the top one to three
+   ⑥  write the eval that would have caught them
+        │
+        └──▶ repeat. the suite grows from evidence.
+```
+
+</Figure>
+
+Steps three and four are where the value is. A cluster of forty failures that all trace to one stale policy document is one fix and one eval; forty individually-written test cases about wrong answers would have been forty guesses.
+
+<Aside type="note" title="The budget signal">
+Teams that scaled agents successfully spent **proportionally more** on evaluation infrastructure, monitoring, and operational staffing, and **proportionally less** on model selection and prompt engineering.
+
+That is uncomfortable, because model selection and prompt tweaking are the parts that feel like the work. They are also the parts with the fastest feedback and the least durable payoff: a better prompt improves the cases you looked at, while an eval suite tells you about the ones you did not.
+</Aside>
+
+## What a strategy answers
+
+An eval strategy doing real work answers five questions. The last four each get a chapter in this part; the first does not, and that is the point:
+
+| Question | Where |
+| --- | --- |
+| What counts as success? | [The acceptance spec](/docs/first-agent/the-problem), written before any code |
+| On which cases? | [Building a Dataset](/docs/evals/datasets) |
+| Scored how? | [Scoring](/docs/evals/scoring) |
+| Gating what? | [CI for Agents](/docs/evals/ci-for-agents) |
+| Watched where? | [Online Evals](/docs/evals/online-evals) |
+
+Notice that the first was answered in Part II. **An eval is a measurement against a definition of done that already existed**. If you are inventing the definition while writing the eval, you are choosing the target after seeing the arrows.
+
+The shape the industry has converged on assembles those into one loop: instrument every model and tool call with tracing, score the traces automatically, gate releases in CI against an offline suite, simulate the hard scenarios, sample live traffic for online scoring, and feed the failures back into the next round of changes. Nothing in it is exotic. All of it is work.
+
+Each piece of that loop has a catalog entry carrying the code: [Golden Set](/docs/patterns/evaluation/golden-set) for the fixtures, [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion) for grading the path rather than the answer, [Judge with Rubric](/docs/patterns/evaluation/judge-with-rubric) for what only a model can score, [Shadow Run](/docs/patterns/evaluation/shadow-run) and [Canary Eval](/docs/patterns/evaluation/canary-eval) for the rungs between fixtures and full traffic, and [Online Guardrail](/docs/patterns/evaluation/online-guardrail) for the check that is deliberately not an eval.
+
+## What an eval cannot do
+
+Being precise, because eval suites acquire an unearned authority quickly:
+
+**It cannot tell you about a case you did not include.** Coverage is a property you maintain, and it decays as production drifts away from the day you built the set.
+
+**It cannot make a stochastic system deterministic.** A pass is a sample, not a proof, and [treating a single green run as a guarantee](/docs/foundations/nondeterminism) is how a flaky suite gets trusted.
+
+**It can be wrong.** This is the one nothing else checks: [the measurement-validity failure cluster](/docs/durable-execution/everything-that-breaks), and the reason [scoring](/docs/evals/scoring) spends its length on calibrating a judge rather than on picking one.
+
+**And a number that never changes a decision is a dashboard, not an eval.** If no threshold blocks a release and no result reopens a design question, the suite is decoration with a green tick.
+
+## Atlas, concretely
+
+Atlas has had an eval set since Part II: twenty tickets, with known-correct outcomes, scored on the acceptance spec's bar of 60% resolved without a human.
+
+That set has done real work: it produced the [scores at every version](/docs/first-agent/the-loop-by-hand), it caught the two wrong-but-confident answers, and it is why the resolution numbers in this book are numbers rather than impressions.
+
+It is also, honestly, too small. Twenty cases will catch a catastrophe and will not detect a five-point regression, because at that sample size a five-point move is noise. Knowing *which* claims a set can support is [the subject of the CI chapter](/docs/evals/ci-for-agents), and pretending a small set supports large claims is the most common way an eval program produces false confidence rather than less of it.
+
+The next chapter is where twenty becomes a set that can carry weight.
+
+---
+
+Next: [The Testing Pyramid for Agentic Systems](/docs/evals/testing-pyramid), where exact tests, contracts, replay, statistical evals, fault injection, and red teams each belong.
+
+## Takeaways
+
+- Nothing built so far can detect a wrong answer, because from the machine's point of view nothing failed. This part is the only one that can.
+- A demo is not an easy test; it is a sample selected by the person who built the system, the sampling method guaranteed to miss what they did not anticipate.
+- Compounding applies across components too: three at 70% succeed together 34% of the time. Evaluating a component in isolation does not predict the system.
+- Reported gap between benchmark and enterprise deployment: about 37%. And static benchmark datasets have been found to contain invalid or flawed items at rates up to 42%. That is the instrument, not just the reading.
+- The only measurement that matters is on your cases, by your definition of success.
+- About 60% of production failures trace to data quality, context gaps, or governance rather than the model. An eval that scores only model output covers the minority of the failure surface.
+- Error analysis comes first. Sample real failures, cluster them, label root causes, rank by size times severity, fix the top few, then write the eval that would have caught them.
+- Writing evaluators before reading failures produces a suite that measures your imagination.
+- Teams that scaled spent proportionally more on eval infrastructure and monitoring, and less on model selection and prompt engineering.
+- A strategy answers five questions: what is success, on which cases, scored how, gating what, watched where. The first was answered before any code was written.
+- An eval cannot cover a case you omitted, cannot make a stochastic system deterministic, and can itself be wrong: the one failure nothing else checks.
+- A number that never changes a decision is a dashboard, not an eval.
+- Twenty cases catch catastrophes and cannot detect a five-point regression. Knowing which claims a set supports is the difference between an eval program and false confidence.
