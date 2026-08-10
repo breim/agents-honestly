@@ -1,0 +1,252 @@
+---
+title: "Servers, Clients, Transports"
+description: "Building one, consuming one, and the auth story in between."
+---
+
+[The previous chapter](/docs/mcp/what-mcp-is) deferred three things here: transports, authorization, and version skew. They look like three topics and they are one, because a single decision determines all of them.
+
+## The only decision that matters: where the server runs
+
+| | **stdio** | **Streamable HTTP** |
+| --- | --- | --- |
+| Runs as | A subprocess your client spawns | A service you deploy |
+| Who can reach it | Whoever started it | Anyone who can route to it |
+| Authentication | None at the transport. Credentials come from the environment | OAuth 2.1 |
+| Users | One, by construction | Many, and keeping them apart is your job |
+| Scaling | Not a question | Plain HTTP, round-robin, no session affinity |
+| Failure mode | The process dies | The network |
+
+The row that explains the rest is authentication, and the spec is explicit about it: **stdio implementations pull credentials from the environment rather than from an OAuth flow.** That is not an oversight. A stdio server's security model is *the user already had these credentials*. It runs as them, on their machine, with their environment. For a developer's laptop that is exactly right and pleasantly simple.
+
+It is also the source of most "MCP is insecure" arguments, which on inspection are usually about someone taking a stdio-shaped trust model and exposing it over a network. The transport did not fail; the trust model was never designed to leave the machine.
+
+<Aside type="caution" title="HTTP+SSE is deprecated; check what you're reading">
+The original remote transport used two endpoints, one for POSTing messages and one for the SSE stream. It was deprecated in the **2025-03-26** revision in favour of Streamable HTTP's single endpoint.
+
+Existing SSE servers keep working, but if a tutorial has you configuring two URLs, it predates the current transport and probably predates the auth story below as well.
+
+Do not read the replacement as the resumable one, either. **2026-07-28 removed stream resumability from Streamable HTTP too**: no `Last-Event-ID`, no SSE event IDs, no message redelivery. A broken response stream loses the in-flight request, and the client must re-issue it as a *new* request with a new ID. Which is the same trade as the rest of that revision: the transport stopped remembering things, and what it forgets you retry. Note that this is the MCP transport, not [the SSE stream your own UI serves](/docs/interface/streaming-ux). That one still resumes, because you are the one buffering it.
+</Aside>
+
+## Building one
+
+The tool definitions are unchanged from Part VIII: same names, same descriptions, same schemas. The SDK handles transport; it does not do design.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/mcp-server/index.ts"
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { z } from 'zod';
+
+const server = new McpServer({ name: 'meridian-crm', version: '1.4.0' });
+
+server.registerTool(
+  'crm_account_risk_profile',
+  {
+    description:
+      'Everything needed to judge whether one account is at renewal risk: ' +
+      'tier, renewal date, contract entitlements, open ticket count with the ' +
+      'oldest age, and escalation count over the last 90 days. …',
+    inputSchema: z.object({
+      account_id: z.string().describe('Meridian account ID, digits only, e.g. "4471".'),
+    }),
+  },
+  async ({ account_id }, { authInfo }) => {
+    // authInfo carries the validated token — the requester comes from here,
+    // never from the arguments. Same rule as every in-process tool.
+    const data = await riskProfile(account_id, authInfo.subject);
+    return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+  },
+);
+
+const transport = new StreamableHTTPServerTransport({
+  enableDnsRebindingProtection: true,
+  allowedHosts: ['mcp.meridian.example'],
+});
+await server.connect(transport);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/mcp_server/main.py"
+# SDK surfaces are moving fast — the v2 line targets the 2026-07-28 stateless
+# spec and takes handlers as constructor parameters rather than decorators.
+# Pin the version and check the SDK docs before copying any shape.
+from mcp.server import Server, Tool
+from mcp.server.streamable_http import StreamableHTTPTransport
+
+
+async def account_risk_profile(args, ctx):
+    # ctx carries the validated token — the requester comes from here,
+    # never from the arguments. Same rule as every in-process tool.
+    data = await risk_profile(args["account_id"], ctx.auth.subject)
+    return {"content": [{"type": "text", "text": json.dumps(data)}]}
+
+
+server = Server(
+    name="meridian-crm",
+    version="1.4.0",
+    tools=[
+        Tool(
+            name="crm_account_risk_profile",
+            description=(
+                "Everything needed to judge whether one account is at renewal "
+                "risk: tier, renewal date, contract entitlements, open ticket "
+                "count with the oldest age, and escalation count over 90 days. …"
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "account_id": {
+                        "type": "string",
+                        "description": 'Meridian account ID, digits only, e.g. "4471".',
+                    }
+                },
+                "required": ["account_id"],
+                "additionalProperties": False,
+            },
+            handler=account_risk_profile,
+        )
+    ],
+)
+```
+
+</Tab>
+</Tabs>
+
+Two things in there matter more than the syntax.
+
+**`authInfo` / `ctx.auth` is where the requester comes from.** Not the arguments. This is [the same rule as every in-process tool](/docs/tools/tools-are-apis-for-models): the model chooses the subject, your code supplies the requester. The difference is that the requester now arrives as a validated token claim instead of a session variable. The rule did not change; its source did.
+
+**Publishing a server publishes your Part VIII work to strangers.** Descriptions, [namespacing](/docs/tools/tools-are-apis-for-models), [result shaping](/docs/tools/result-design), [error text](/docs/tools/errors-as-instructions): all of it now reaches consumers whose prompts you will never see and cannot fix. A vague description is a support ticket from someone else's product.
+
+## What stateless changed for whoever operates it
+
+The 2026-07-28 revision removed protocol sessions, and the operational consequence is the good kind of boring: **you can scale an MCP server behind a round-robin load balancer with no sticky routing and no shared session store.** Progress and log notifications stream inside the same POST exchange rather than requiring a connection to stay open.
+
+Cross-call state, where a server genuinely needs it, becomes an explicit server-issued handle passed back as an ordinary tool argument. That is [the parameterized-tool discipline](/docs/tools/schema-and-granularity) the protocol arrived at independently.
+
+The same revision removed the other thing that needed a live connection: **the server calling the client.** Where a server used to send `sampling/createMessage` or `elicitation/create` down an open channel, it now returns an ordinary result marked `input_required`, carrying the requests in an `inputRequests` field. The client gathers the answers and **retries the original request** with `inputResponses` attached. That is Multi Round-Trip Requests, and its operational point is the same one as the rest of this section: every exchange is now a plain request-response that any load balancer can route, and a dropped stream costs you a retry rather than a session.
+
+That gives you a concrete acceptance test, and it is worth running before you believe any of the above:
+
+> Deploy two replicas, disable sticky routing, replay a representative trace across both, and run the conformance suite that ships with the official SDK as a CLI.
+
+If it breaks, you have hidden state: a cache, an in-memory map, a connection-scoped variable. And you found it before your first traffic spike did.
+
+## The auth story
+
+Only Streamable HTTP has one, and it is assembled from ordinary OAuth pieces rather than anything MCP-specific.
+
+<Figure caption="The discovery chain. Every step is an existing RFC; MCP's contribution is requiring them in a fixed order." frame={false}>
+
+```
+   ①  client calls the server with no token
+              ▼
+       401 + WWW-Authenticate  ──▶  /.well-known/oauth-protected-resource
+              │
+   ②  Protected Resource Metadata          (RFC 9728, MUST)
+       "here are my authorization servers, here are my scopes"
+              ▼
+   ③  Authorization Server Metadata        (RFC 8414)
+       token endpoint, authorize endpoint — nothing hardcoded
+              ▼
+   ④  Client identity — needed for clients you don't ship
+       Client ID Metadata Documents            (preferred)
+       Dynamic Client Registration             (RFC 7591, deprecated)
+              ▼
+   ⑤  OAuth 2.1 + PKCE, with resource indicators   (RFC 8707)
+       the token is bound to THIS server
+              ▼
+   ⑥  server validates audience + scopes, then serves the call
+```
+
+</Figure>
+
+Two of those steps carry the weight.
+
+**Step ② is what makes a server self-describing.** Publishing `/.well-known/oauth-protected-resource` is mandatory for remote servers, and it is what lets a client that has never seen you figure out how to authenticate without configuration.
+
+**Step ⑤–⑥ is the one people skip, and it is the one that matters.** A token that is not bound to your server, and whose audience you do not check, is a token some *other* server can accept, or replay against you. That is the confused-deputy problem, and resource indicators plus an audience check are the fix.
+
+<Aside type="note" title="Your MCP server is a resource server, not an identity provider">
+The single most useful framing for implementing this: MCP servers **validate** tokens, they do not **issue** them. Delegate to an authorization server you already run or already buy.
+
+Teams that read the auth spec and start building login flows have misread which half of OAuth they are on, and they are about to own an identity provider they did not want. Related: [Identity](/docs/security/identity) and [Least Privilege](/docs/security/least-privilege).
+</Aside>
+
+There is an agent-specific wrinkle the spec does not solve for you. The token represents a **user**, but the caller is an agent acting on that user's behalf, possibly hours later, possibly after [a run paused three days waiting for an approval](/docs/human-in-the-loop/approval-gates). Token lifetimes and agent run lifetimes are not the same clock, and the same mismatch shows up in [dedup windows](/docs/tools/idempotency). Decide deliberately whether a resumed run re-authenticates or carries a refreshable credential.
+
+And where the token lives: **not in the model's context.** Tool results and arguments are prompt text; a credential placed there is durably persisted in the transcript. It belongs in your client's credential store, injected at the transport layer, invisible to the model. That is the same separation as every other secret in this book.
+
+## Consuming one
+
+The client half is two declarations that must agree, and a credential that travels separately:
+
+```ts
+// Declare the server — no auth here.
+mcp_servers: [{ type: 'url', name: 'carrier', url: 'https://mcp.carrier.example/mcp' }],
+
+// Reference it, or its tools never load.
+tools: [{ type: 'mcp_toolset', mcp_server_name: 'carrier' }],
+```
+
+Declaring the server without referencing it in `tools` is the most common first-run failure: the connection is configured, nothing is exposed, and there is no error to read. Credentials attach separately, by design, so a reusable server declaration never carries a secret.
+
+Then the operational discipline, which is [the previous part's](/docs/tools/tool-discovery) rather than the protocol's: allowlist each server down to the tools you actually use, and treat a server version bump like any other dependency upgrade, because a reworded description changes your selection accuracy without changing a line of your code.
+
+## Version skew, concretely
+
+The revisions that matter, and what each one moved:
+
+| Revision | What changed |
+| --- | --- |
+| 2024-11-05 | Original HTTP+SSE transport, two endpoints |
+| 2025-03-26 | Streamable HTTP; HTTP+SSE deprecated |
+| 2025-06-18 | OAuth 2.1 becomes the authorization basis |
+| 2025-11-25 | Last of the handshake-based line |
+| **2026-07-28** | Stateless core, sessions removed, MRTR, routing headers, cacheable lists |
+
+The practical hazard is that framework support lags the spec, and not uniformly. At the time of writing, a widely used Python MCP framework still targets the handshake-based revisions and not the current stateless one, while the official SDK v2 lines answer both revisions from a single endpoint. That will move. The point is not which library is behind today, it is that **"we use MCP" does not identify a protocol version**, and the mismatch surfaces as behaviour rather than as an error.
+
+Check the revision each side implements before debugging anything else. It is a two-minute check that regularly saves an afternoon.
+
+## Atlas, concretely
+
+**Publishing.** Meridian runs one Streamable HTTP server. OAuth 2.1 with audience binding, and scopes split along [the read/write line](/docs/tools/read-and-write-tools): a `crm.read` scope that the sales agent gets, and a `erp.credit` scope that it does not. Stateless, so it sits behind the ordinary load balancer with no special routing.
+
+**Consuming.** The freight carrier's server, over Streamable HTTP, with a stored refreshable credential and an allowlist of the four tracking tools Atlas actually calls.
+
+**Not deploying.** Nothing runs over stdio in production. stdio is how a Meridian engineer runs the server against their own laptop credentials while developing it, and that is the whole of its role here.
+
+## References
+
+- [MCP server](https://modelcontextprotocol.io/specification/2025-06-18/server) and [client](https://modelcontextprotocol.io/specification/2025-06-18/client) sections, the primitives each side owns.
+- [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728), protected resource metadata. Mandatory in the MCP authorization chain.
+- [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414), authorization server metadata discovery.
+- [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707), resource indicators binding a token to its intended audience.
+- [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591), dynamic client registration. Still functional, and deprecated for this use.
+
+---
+
+Next: [When a Plain Function Is Better](/docs/mcp/when-a-function-is-better), a protocol boundary you do not need is a protocol boundary that can fail.
+
+## Takeaways
+
+- Where the server runs decides everything else. stdio is a local subprocess with no transport auth; Streamable HTTP is a service with OAuth 2.1.
+- stdio's security model is "the user already had these credentials." Correct on a laptop, disqualifying across a network. Most "MCP is insecure" claims are really about that model being exposed remotely.
+- HTTP+SSE was deprecated in 2025-03-26. Two configured URLs means you are reading something out of date.
+- Streamable HTTP is not the resumable one either: 2026-07-28 removed `Last-Event-ID`, event IDs, and redelivery. A broken stream costs a fresh request with a new ID, not a resume.
+- The requester arrives as a validated token claim rather than a session variable. The rule is unchanged: the model chooses the subject, your code supplies the requester.
+- Publishing a server publishes your tool-design work to consumers whose prompts you cannot fix.
+- Stateless means round-robin load balancing with no sticky sessions. Verify it: two replicas, no sticky routing, replay a trace, run the SDK's conformance suite.
+- The auth chain is existing RFCs in a fixed order: 9728 protected resource metadata (mandatory), 8414 server metadata, client identity, OAuth 2.1 with PKCE, 8707 resource indicators. For client identity prefer Client ID Metadata Documents; RFC 7591 dynamic registration still works and is deprecated.
+- Audience binding is the step people skip and the one that prevents a token being replayed against you by another server.
+- Your MCP server validates tokens; it does not issue them. Reading the auth spec and building a login flow means owning an identity provider you did not want.
+- Token lifetime and agent run lifetime are different clocks. Decide what a resumed run does before it happens.
+- Credentials never enter the model's context. They live in the client's credential store and are injected at the transport layer.
+- Declaring a server without referencing it in the toolset exposes nothing and raises no error.
+- "We use MCP" does not identify a protocol version. Check the revision on both sides first.
