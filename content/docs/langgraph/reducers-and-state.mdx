@@ -1,0 +1,169 @@
+---
+title: "Reducers and State Schemas"
+description: "What flows along an edge, what must not, and why this is where graphs get subtly wrong."
+---
+
+In the [last chapter](/docs/langgraph/state-nodes-edges), nodes return partial updates, and the framework merges them into state. This chapter is about that merge, because it is where a graph stops being obvious.
+
+The merge rule for a key is its **reducer**. By default it's overwrite, so the update replaces the value. That's right for scalars and wrong for anything that accumulates. A `messages` list that gets overwritten rather than appended loses the conversation, which is why the append reducer is the first one everybody learns.
+
+That much is mechanical. The interesting part starts when two nodes run at once.
+
+## Parallel writes, and a framework that fails loudly
+
+Two nodes in the same superstep both write `results`. What happens?
+
+Not a silent overwrite. The graph **raises**:
+
+```
+InvalidUpdateError: At key 'results': Can receive only one value per step.
+Use an Annotated key to handle multiple values.
+```
+
+Stop and appreciate that, because this book has spent thirty-nine chapters cataloguing failures that don't raise. The graph catches a concurrent write to an unmerged key at run time, by name, with the fix in the message. That is exactly the right design, and it's worth saying so.
+
+The fix is to declare how the key merges:
+
+```python
+class AtlasState(TypedDict):
+    findings: Annotated[list[Finding], operator.add]   # appends
+    category: str                                       # overwrite (default)
+```
+
+Now both branches' findings end up in the list, and nothing errors.
+
+## Where it gets subtly wrong
+
+Here is the chapter's actual subject, and it's the thing the error message can't tell you:
+
+> **A reducer silences the error. It does not make the result deterministic.**
+
+`operator.add` on a list appends both updates, but in what order? In the order the parallel branches happened to complete, which is a race. Run the same graph twice on the same input and `findings` may be `[A, B]` or `[B, A]`.
+
+For a list you'll later count or filter, that's harmless. For anything downstream that is **order-sensitive**, you've replaced a loud failure with a quiet one:
+
+| Downstream use | Order matters? |
+| --- | --- |
+| Count, sum, group, filter | No, safe |
+| "The first finding" / `findings[0]` | **Yes**, now nondeterministic |
+| Concatenated into a prompt | **Yes**, different prompt, different [cache prefix](/docs/foundations/prompt-caching) |
+| Last-write-wins on a scalar | **Yes**, and this is the worst case |
+
+That last row deserves its own warning.
+
+<Aside type="caution" title="A `max`-style reducer hides a race; a `last` reducer *is* one">
+Two parallel nodes both write `confidence`. You add a reducer to stop the error. Which one?
+
+`max` or `min` are **commutative**. The answer doesn't depend on arrival order, so the race is genuinely resolved. `sum` and set-union likewise.
+
+A reducer like "take the most recent" or "prefer the non-null one" is **order-dependent**. It compiles, it never errors, and it returns whichever branch finished first. That will be one value in testing and the other under production latency. You have encoded a race condition as a state schema.
+
+The rule: **for any key written by parallel branches, the reducer must be commutative.** If you can't make it commutative, the two branches shouldn't both be writing that key. Merge them explicitly in a join node instead, where the ordering is yours to decide.
+</Aside>
+
+Two smaller reducer rules, both learned the hard way:
+
+**Reducers run on every update, so keep them cheap and pure.** A reducer that does a model call, hits a database, or logs runs far more often than the node count suggests. It's a merge function, not a step.
+
+**Reducers must be total.** The graph calls them with an empty or missing left side on the first write, and with whatever a node returns, including `None` if a node returned a key conditionally. A reducer that assumes both sides are populated fails on the first run of an unusual path.
+
+## What must not flow through state
+
+The prescriptive half of the chapter, and the one that prevents incidents rather than bugs. State is **serialized and checkpointed on every superstep**, so everything in it gets written to durable storage, appears in replay views, and is visible to anyone who can read your checkpoints.
+
+| Never in state | Why | Instead |
+| --- | --- | --- |
+| **Secrets, tokens, keys** | Checkpointed to a database, forever, in plaintext-ish | Read from config inside the node |
+| **Large blobs**: documents, images, full tool payloads | Every superstep re-serializes them; checkpoints balloon | A reference: an ID, a URI, a hash |
+| **Open connections, clients, file handles** | Not serializable; breaks resumption in a different process | Construct inside the node |
+| **The world's state**: live order status, current inventory | It's a stale copy the moment it's written | Re-fetch when you need it |
+| **Another tenant's anything** | State crosses node boundaries freely | [Filter before it enters](/docs/retrieval/metadata-and-authorization) |
+
+The fourth row is [the map's question](/docs/the-map) reappearing: *who owns this state?* Graph state holds **the run's** state: position, decisions, accumulated findings. It does not hold facts the business owns. An order total in graph state is a value that was true when a node read it and is now an assertion your system will keep repeating.
+
+And the second row is the one that quietly ruins things. A node that puts twelve retrieved documents into state has made every subsequent checkpoint carry twelve documents. With ten supersteps, you've written them ten times. Put the document *IDs* in state and re-fetch. Better still, put the [conclusion](/docs/graphs/graph-retrieval) in state and let the documents stay where they were.
+
+## Checkpoint size is a state-schema problem
+
+That follows directly. Your checkpoint size is roughly **state size × supersteps**, and state size is monotonic if anything in it accumulates.
+
+The `messages` list is the usual culprit. It grows every turn by design, it's checkpointed every superstep, and the resulting storage curve is the same quadratic that [Part I](/docs/foundations/context-window) drew for context, because it's the same list.
+
+Which means the levers are the same ones: cap it, compact it, or externalize it. [Compaction](/docs/context/compaction) applied to graph state is a storage and latency move as much as a context-budget one, because every checkpoint write serializes whatever is there.
+
+## Design the schema in two halves
+
+The single most useful structural habit, and it resolves a lot of the above at once.
+
+Most graph states end up as one flat bag that mixes two very different things:
+
+<Figure caption="Two kinds of state, with different lifetimes and different needs. Mixing them is why schemas grow unmanageable." frame={false}>
+
+```
+   DECISION STATE                    TRANSCRIPT
+   small, typed, durable             large, append-only, disposable
+
+   ticket_id: 8823                   messages: [ ...40 turns... ]
+   category: "action_required"
+   order_verified: true              grows without bound
+   credit_cents: 54_000              needed by the model
+   policy: "POL-114@7"               not needed by your logic
+   step: 4
+
+   this is what your edges           this is what the LLM node
+   read, what you assert on,         reads, and the thing to
+   what you'd restore from           cap, compact, or externalize
+```
+
+</Figure>
+
+Your conditional edges should read **only** from the left column. A routing function that has to parse the last message to decide where to go is a routing function you cannot unit-test. Feed it a typed state and it's three lines with obvious test cases.
+
+And notice what the left column is: it's [the typed scratchpad](/docs/patterns/context/structured-scratchpad) from Part III, arriving as the graph's state schema. That's a genuine convergence rather than a coincidence. The argument there was that verified state should live in a typed object your code owns rather than in the transcript, and a graph gives that object a first-class home with persistence attached.
+
+It also gives you the [poisoning defense](/docs/context/context-poisoning) structurally: only the node that calls `get_order` can write `order_total_cents`. A number the model asserted has nowhere to go.
+
+## Atlas, concretely
+
+```python
+class AtlasState(TypedDict):
+    # decision state — small, typed, what edges read
+    ticket_id: int
+    tenant_id: str                                    # never model-writable
+    category: NotRequired[str]
+    entities: NotRequired[Entities]
+    order: NotRequired[VerifiedOrder]                 # only get_order writes this
+    policy_ref: NotRequired[str]                      # "POL-114@7"
+    credit_cents: NotRequired[int]
+    findings: Annotated[list[Finding], operator.add]  # commutative: parallel checks
+    step: Annotated[int, operator.add]                # commutative: counts
+    outcome: NotRequired[Literal["answered", "escalated", "halted"]]
+
+    # transcript — capped, compacted, not read by edges
+    messages: Annotated[list[Message], add_messages]
+```
+
+Three decisions in there worth stealing.
+
+**`findings` and `step` are the only parallel-written keys**, and both reducers are commutative. The three [outbound checks](/docs/workflows/evaluator-optimizer) run in parallel and each appends. No ordering assumption anywhere downstream: findings are filtered by criterion, never indexed.
+
+**`tenant_id` is set once at `START` and never appears in any node's return value.** Nodes aren't trusted not to write it; none of them do, and a test asserts the compiled graph's node signatures don't. Authorization does not travel as mutable state.
+
+**`outcome` is the [union from Part II](/docs/first-agent/the-loop-by-hand)**, now a state field. `finalize` asserts it is set, which makes "fell out of the graph without deciding anything" a caught error rather than a ticket marked resolved.
+
+---
+
+Next: [Conditional Edges and Subgraphs](/docs/langgraph/routing-and-subgraphs). Branching, loops, and composing graphs into reusable components.
+
+## Takeaways
+
+- The merge rule for a state key is its reducer. Default is overwrite, which is right for scalars and wrong for anything accumulating.
+- Concurrent writes to a key with no reducer raise a named error with the fix in the message. A rare loud failure in this field, and good design.
+- A reducer silences the error without making the result deterministic. Parallel appends land in completion order.
+- For any key written by parallel branches, the reducer must be commutative. An order-dependent reducer encodes a race condition as a schema.
+- Keep reducers cheap, pure, and total. They run on every update and get called with missing sides.
+- State is serialized every superstep. No secrets, no blobs, no connections, no world-state, nothing from another tenant.
+- Put IDs and conclusions in state, not payloads. Checkpoint size is state size × supersteps.
+- Split the schema into decision state and transcript. Conditional edges should read only the former, which makes them unit-testable.
+- The decision half is the typed scratchpad from Part III with persistence attached, and it gives you the poisoning defense structurally, because only the tool node can write the verified value.
+- Set tenancy once at START, and let no node return it.
