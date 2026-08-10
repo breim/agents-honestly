@@ -1,0 +1,250 @@
+---
+title: "Realtime Voice Agents"
+description: "Duplex audio, turn detection, interruption, latency budgets, consent, transcripts, and keeping spoken actions inside the same authority model."
+---
+
+A chat user can inspect an approval card for thirty seconds. A caller hears "I can issue a credit of four hundred" and says "yes" while the agent is still talking. The microphone catches background speech. The transcript later reads "issue a credit of fourteen hundred."
+
+Voice adds timing and ambiguity to the same authority problem. It does not relax it.
+
+## The interface is a duplex state machine
+
+```text
+idle
+  |
+  v
+listening ---> speech detected ---> user turn provisional
+  ^                                      |
+  |                                      v
+  |                               user turn committed
+  |                                      |
+  |                                      v
+  +<--- interruption <--- speaking <--- responding
+                             |
+                             +--> tool pending
+                             +--> approval pending
+```
+
+Track these states explicitly. A single `isSpeaking` boolean cannot tell you whether the user interrupted, whether a transcript is final, or whether a tool effect is waiting for confirmation.
+
+```ts
+type VoiceTurn = {
+  id: string;
+  source: 'user' | 'agent';
+  transcript: string;
+  transcriptStatus: 'provisional' | 'committed';
+  startedAt: string;
+  endedAt?: string;
+  interruptedAt?: string;
+  audioArtifactId?: string;
+};
+```
+
+Only committed user turns may enter the durable conversation record or authorize the next decision. Provisional text is an interface hint.
+
+## Latency is a budget across several stages
+
+Measure first-response latency as a decomposition:
+
+```text
+end-of-turn detection
+  + audio transport
+  + transcription or audio understanding
+  + model first token
+  + tool wait before speech
+  + speech synthesis buffer
+  = time until the user hears a useful response
+```
+
+Report each segment. "The model is slow" is often a turn detector waiting too long or a tool call blocking speech that could have begun with a truthful status.
+
+Optimize perceived latency without lying:
+
+- acknowledge a committed request before a slow read;
+- stream speech only after wording is stable enough to hear;
+- speak a status while a tool runs;
+- never announce an effect before the backend accepts it;
+- cache fixed disclosure and navigation phrases;
+- cancel synthesis promptly when the user interrupts.
+
+## Turn detection is a policy
+
+Voice activity detection guesses when speech starts and stops. Silence length, background noise, accent, assistive speech patterns, and network jitter all affect it.
+
+Offer more than one mode:
+
+| Mode | Best for | Cost |
+| --- | --- | --- |
+| Automatic turn detection | Natural low-risk conversation | False cuts and slow commits |
+| Push to talk | Noisy settings, precise commands | More effort |
+| Explicit finish control | Long dictation or accessibility need | Less conversational |
+| Telephony keypad confirmation | High-risk fixed choices | Narrow interaction |
+
+Never use a silence timeout as approval. Approval requires an affirmative, scoped input after the system presents the exact action.
+
+## Interruption cancels speech, not work
+
+When the user speaks over the agent:
+
+1. stop or duck audio output;
+2. record which agent words were actually played;
+3. commit the user's new turn;
+4. decide whether the current model generation should cancel;
+5. decide separately whether any tool or workflow may cancel;
+6. resume from durable state.
+
+A browser can stop text generation while the credit workflow continues. The same split applies to voice. Cutting audio is an interface event. Canceling business work is an authorized workflow command.
+
+<Aside type="caution" title="The audit record needs what the user heard">
+Storing the intended response is not enough when playback was interrupted. Record the played segment boundary or audio artifact. Consent and approval disputes concern the conversation delivered to the user, not the text the model would have finished.
+</Aside>
+
+## Spoken approval needs read-back
+
+For a meaningful action, use a closed protocol:
+
+```text
+agent: "Approve a 420 euro credit to account Acme for order 481?"
+user:  "Yes."
+agent: "I heard: approve 420 EUR to Acme for order 481. Is that correct?"
+user:  "Confirm."
+```
+
+The confirmation object contains canonical values:
+
+```json
+{
+  "approval_id": "appr-8823",
+  "action": "issue_credit",
+  "account_id": "acct-acme",
+  "order_id": "ord-481",
+  "amount_minor": 42000,
+  "currency": "EUR",
+  "expires_at": "2026-08-09T15:00:00Z"
+}
+```
+
+The model may phrase the read-back. Deterministic code builds the approval object, validates expiry and identity, and executes the tool. For high-impact actions, move the final approval to a visual or authenticated secondary channel.
+
+## Tools must not listen to background speech
+
+Bind a tool call to one committed turn ID. If new speech arrives during tool argument generation, cancel the proposal and re-evaluate. Do not merge provisional transcript changes into arguments already under review.
+
+```text
+committed turn t17
+      |
+      v
+proposal p44, bound to t17
+      |
+new user turn t18 arrives
+      |
+      +--> p44 invalidated before execution
+```
+
+This is optimistic concurrency control applied to conversation. The user changed the input version, so an action derived from the old version cannot proceed silently.
+
+## Consent and retention start before capture
+
+Before activating the microphone, disclose:
+
+- that the user is interacting with an AI system;
+- whether audio or transcript is stored;
+- purpose and retention;
+- who can access recordings;
+- how to switch to text or a person;
+- whether a third-party speech or model provider receives data.
+
+Separate artifacts and schedules:
+
+| Artifact | Possible purpose | Retention decision |
+| --- | --- | --- |
+| Raw audio | Dispute or quality review | Shortest, often unnecessary |
+| Committed transcript | Conversation record | Product and legal purpose |
+| Provisional transcript | UI only | Delete after turn commit |
+| Approval record | Evidence of scoped decision | Policy-defined |
+| Voice features | Turn detection | Avoid retaining identity-bearing features unless required |
+
+The system should work in text without penalizing the user. Voice cannot be the only route to review an action, inspect evidence, correct a transcript, or reach support.
+
+## Transport and recovery
+
+WebRTC provides browser APIs for real-time audio, video, and data. It also introduces NAT traversal, device permission, connection state, and media security concerns. The current W3C recommendation defines the browser API and points to the related IETF security model. [WebRTC recommendation](https://www.w3.org/TR/webrtc/)
+
+Design for:
+
+- microphone permission denied or revoked;
+- device change mid-call;
+- network handoff and reconnect;
+- duplicated or late transcript events;
+- audio continuing after UI disconnect;
+- multiple tabs or devices joining one run;
+- fallback to text without losing workflow identity;
+- telephony callbacks arriving after the web session ended.
+
+The durable run remains independent of the media connection. Reconnect with the business run ID, query current state, then resume the interface. Never rebuild authority from the audio session alone.
+
+## Evaluate conversations, not transcripts
+
+A transcript drops timing, interruption, noise, synthesis, and what was actually heard. Voice evals need audio and event timelines.
+
+Test:
+
+- accents, speech differences, background noise, and code-switching;
+- short and long pauses;
+- interruption at every agent phase;
+- corrections of names, amounts, and identifiers;
+- transcript alternatives with similar confidence;
+- tool proposal invalidation after a new turn;
+- reconnect during speech and during approval;
+- consent withdrawal;
+- audio injection played by another device;
+- latency per pipeline stage;
+- human handoff with the full evidence package.
+
+Score task outcome, semantic understanding, incorrect effect rate, interruption recovery, correction success, latency, and whether the system abstained when audio was ambiguous.
+
+<FrameworkCheck decision="Atlas uses voice for intake, lookup, explanation, and low-risk navigation. Credits require a canonical read-back and authenticated visual confirmation.">
+<FrameworkOption name="plain">
+
+**Realtime session.** Own audio capture, turn state, transcripts, synthesis, accessibility, and reconnect behavior.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+**AI SDK interface layer.** Carries events and renders the synchronized text and approval experience. It does not own business authority.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal.** Own effects, approval expiry, callbacks, human handoff, and work that outlives the media connection.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Voice is an optional interface over the same ticket workflow. A call creates or resumes a run, stores committed turns, and exposes a synchronized transcript. Provisional transcripts never reach tools.
+
+Atlas can read order status aloud. A credit proposal pauses the call workflow and sends an accessible approval card to the authenticated console. If the call disconnects, the business run continues and the user can resume in text.
+
+## References
+
+- [WebRTC: Real-Time Communication in Browsers](https://www.w3.org/TR/webrtc/), current W3C recommendation for real-time media and data APIs.
+- [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/), browser media-device access and track lifecycle.
+- [RFC 8827: WebRTC Security Architecture](https://www.rfc-editor.org/rfc/rfc8827), IETF security model for WebRTC deployments.
+- [WCAG 2.2](https://www.w3.org/TR/WCAG22/), accessible alternatives, input, status, focus, and interaction requirements that also apply to the synchronized web interface.
+
+---
+
+Next: [Two Durable Runtimes, One System](/docs/interface/two-durable-runtimes), choosing which runtime owns work that must survive the voice or browser session.
+
+## Takeaways
+
+- Model voice as a duplex state machine with provisional and committed turns.
+- Measure latency by pipeline stage so turn detection and tools do not get blamed on the model.
+- Offer automatic, push-to-talk, and explicit turn controls where users need them.
+- An interruption stops playback. It does not automatically cancel tools or business work.
+- Use a scoped read-back protocol for spoken approval and deterministic code for execution.
+- Bind every tool proposal to one committed turn and invalidate it when the user changes the input.
+- Separate raw audio, provisional text, committed transcript, and approval records by purpose and retention.
+- Evaluate audio, timing, interruption, correction, reconnect, and effects, not only transcript text.
