@@ -1,0 +1,141 @@
+---
+title: "Online Evals and Guardrails"
+description: "Scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery."
+---
+
+[The previous chapter](/docs/evals/ci-for-agents) ended on a debt: detecting a two-point regression needs roughly 8,400 cases per arm, which no CI budget will buy, so something else has to catch that class of change.
+
+Production is that something else, and the reason is volume.
+
+## Production has the sample size CI cannot afford
+
+A 10% mirror of a busy route produces on the order of **a hundred thousand scored pairs in twenty-four hours**, more than enough for most rubrics to converge, and roughly twelve times the sample the CI chapter said was unaffordable.
+
+So the division of labour is not that offline is rigorous and online is soft. They see different things:
+
+| | **Offline (CI)** | **Online** |
+| --- | --- | --- |
+| Answers | Did this change break something? | Is it working, on today's traffic? |
+| Sample | Hundreds to a thousand, fixed | Thousands per day, live |
+| Detects | Regressions ≥ ~5 points | Regressions of 1–2 points |
+| Latency of answer | Minutes | Hours |
+| Blocks a release | Yes | No, it is already shipped |
+| **Cannot see** | **Distribution shift** | Anything before deployment |
+
+The last row is the structural one. **A golden set cannot detect that the inputs changed**, because the golden set *is* the old distribution. When customers start asking a new kind of question, or a competitor's outage sends you a different mix of tickets, every offline score stays green while production quality falls. Only live scoring sees it.
+
+## Four stages, four different questions
+
+Rolling out a change to an agent is a gate with four positions, and each one is asking something distinct:
+
+| Stage | Traffic | The question |
+| --- | --- | --- |
+| **Shadow** | Mirrored, no user impact | Does the candidate behave wildly differently on the real distribution? |
+| **Canary** | 1–5%, stratified by tenant tier | Is it at least as good with users in the loop? |
+| **Percentage** | Ramping | Does it hold as volume grows? |
+| **Full** | All | — |
+
+Mirror at 10–25% by default; go to full shadow on safety-critical routes where the cost of missing something exceeds the cost of the duplicate inference.
+
+And one rule that decides whether shadow is worth running at all:
+
+> **Wire the evaluator into the same pipeline that ingests the shadow trace, or do not run shadow.**
+
+Shadow traffic that nobody scores is duplicate inference spend that produces no information. It is a surprisingly common configuration, because the mirroring is a gateway setting and the scoring is a project.
+
+<Aside type="caution" title="Shadowing an agent is not shadowing a classifier">
+The general guidance assumes the shadowed system is a function: same input, compare outputs, no consequences. An agent has [side effects](/docs/tools/read-and-write-tools).
+
+A shadowed agent must run with writes disabled, which means **you are shadowing a different system than the one you will ship.** It proves the reads, the tool selection, and the decisions. It does not prove `issue_credit`, and it cannot, because the whole point of shadow is that nothing happens.
+
+Be explicit about that boundary. The write path is validated by canary, with real consequences and a small blast radius, not by shadow. That makes canary non-optional for any agent that moves money, however clean the shadow results look.
+</Aside>
+
+## Scoring production is a sampling problem
+
+You cannot judge every turn, because [the judge cost arithmetic](/docs/evals/datasets) that capped golden sets applies with more force to unbounded traffic. So online scoring is stratified sampling, and the stratification is where the value is.
+
+Sample a baseline percentage of everything, and then **deliberately oversample the places failures live**:
+
+- Runs that ended in [escalation](/docs/human-in-the-loop/escalation-and-audit)
+- Runs that hit a retry, or a [repeated identical error](/docs/evals/trajectory-evals)
+- Runs in the long tail of duration or cost
+- Runs where the agent [stated uncertainty](/docs/interface/trust-patterns)
+- Every run on a route that changed this week
+
+Then close the loop: the failures you find become [the production and replay buckets](/docs/evals/datasets) of the golden set. **Online evals are the mechanism by which the offline suite learns**, and a team doing one without the other has either a suite that stops improving or a stream of findings nothing regresses against.
+
+## A guardrail is not an eval
+
+The distinction that keeps this chapter's second half honest:
+
+| | Eval | Guardrail |
+| --- | --- | --- |
+| When | After the fact | **Inline, before delivery** |
+| On what | A sample | **Every request** |
+| Effect of being wrong | A misleading number | **A customer is refused a correct answer** |
+| Budget | Whatever the batch allows | Milliseconds |
+
+The budgets are not close. Rule-based and classifier guardrails add roughly **10–50ms**; an LLM-based judge on the output path adds **200–1000ms**. Against [the sub-second time-to-first-token target](/docs/interface/streaming-ux), a model-based output guard can consume the entire perceptual budget on its own. That is a design constraint, not a tuning detail.
+
+## The false positive is the cost nobody prices
+
+Reported guardrail frameworks catch **60–85%** of what a human would classify as serious, and produce false positives on **5–15% of turns**.
+
+Sit with the second number. At the top of that range, **roughly one in seven legitimate requests is being turned away**, by a component added to improve quality, against a resolution rate the team fought to raise by five points. The guardrail can easily cost more than every optimisation in Part XIV combined, and it will not appear in any of their scores.
+
+> **A guardrail is a component with an accuracy, and it needs a gate like everything else.**
+
+Measure its false-positive rate on the golden set, where the correct answer is known and a block is unambiguously wrong. Treat that rate as a gated score. This is the same argument [the scoring chapter made about the judge](/docs/evals/scoring): the components doing the measuring and the blocking are the ones teams routinely exempt from measurement.
+
+## Guard the input where you can
+
+Two reasons input guards beat output guards when the check can be done at either end.
+
+**They are cheaper.** Detecting [an injection attempt](/docs/security/prompt-injection) in the input saves the entire model call: the tokens, the latency, and the tool calls that would have followed.
+
+**They cannot leak.** An output guard is deciding whether to suppress something that has already been generated; if it is streaming, some of it may already be on screen. Nothing generated is nothing exposed.
+
+Reported detection rates on injection: regex filters catch **60–70%**, model-based classifiers **89–94%**. Which sets the shape of a workable stack:
+
+> **Cheap, fast validators on every turn. Expensive validators on a subset.**
+
+## Atlas, concretely
+
+| | Setting |
+| --- | --- |
+| Shadow | 25% mirror, writes disabled, scored in the same pipeline |
+| Canary | 3% of tickets, stratified by tenant tier, writes **enabled** |
+| Online sampling | 5% baseline, plus 100% of escalations, retries, and cost outliers |
+| Judged online | Two rubrics only: answered-the-question and citation-correct |
+| Input guards | Injection classifier and PII detector, every turn |
+| Output guards | Policy-claim check on replies containing a citation, every reply |
+| Guardrail FP rate | Gated at < 2% on the golden set |
+| Loop | Sampled failures land in the replay bucket weekly |
+
+Two rows carry the design. **Canary has writes enabled and shadow does not**, because the write path is the part shadow structurally cannot validate. And **the guardrail's false-positive rate is gated at 2%**, which is far below the reported 5–15% band. That is an explicit choice to accept catching less rather than to refuse one ticket in ten.
+
+Part XIV closes here. Atlas can now be measured before release, gated on what the measurement can actually detect, watched in production at a sample size CI cannot buy, and stopped inline when it is about to say something it should not.
+
+What none of it explains is **why** a particular run did what it did. That is the next part.
+
+---
+
+Next: [Learning From Production Feedback](/docs/evals/learning-from-production-feedback), turning corrections, overrides, and complaints into evidence without treating every click as truth.
+
+## Takeaways
+
+- A 10% mirror of a busy route yields on the order of 100,000 scored pairs a day. That is the sample size CI said was unaffordable, arriving for free.
+- Offline detects regressions of about five points and blocks releases; online detects one to two points and cannot block. They are not rigorous versus soft, they see different things.
+- Only online sees distribution shift. A golden set cannot detect that the inputs changed, because it *is* the old distribution.
+- Four rollout stages, four questions: shadow (does it behave differently), canary (is it as good with users), percentage (does it hold), full.
+- Wire the evaluator into the pipeline that ingests shadow traces, or do not run shadow. Unscored mirroring is duplicate spend with no information.
+- Shadowing an agent means disabling writes, so you are shadowing a different system. Shadow validates reads and decisions; only canary validates the write path.
+- Online scoring is stratified sampling. Oversample escalations, retries, repeated errors, cost outliers, stated uncertainty, and recently changed routes.
+- Online evals are how the offline suite learns. One without the other gives you a stalled suite or findings nothing regresses against.
+- A guardrail is inline and blocks; an eval is after the fact and measures. Being wrong costs a misleading number in one case and a refused customer in the other.
+- Rule-based guards add 10–50ms; a model-based output judge adds 200–1000ms and can consume the whole time-to-first-token budget.
+- Guardrails catch 60–85% of serious problems and produce false positives on 5–15% of turns. That is up to one in seven legitimate requests refused, which can cost more than every optimisation in this part combined.
+- Measure the guardrail's false-positive rate on the golden set and gate it. The components doing the blocking and the judging are the ones teams exempt from measurement.
+- Guard the input where you can: it saves the whole model call and cannot leak what was never generated.
+- Cheap fast validators on every turn; expensive validators on a subset.
