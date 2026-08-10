@@ -1,0 +1,186 @@
+---
+title: "Output Guardrail"
+description: "A cheap check between the agent and the outside world."
+---
+
+## Problem
+
+Everything upstream can be correct and the last step can still be wrong.
+
+The retrieval was right, the tool calls were authorized, the credit was within scope, and the drafted reply quotes a policy version that was superseded, or includes another customer's order number that appeared in a retrieved chunk, or contains the internal note about the account being at risk of churn.
+
+None of this is a [security boundary failure](/docs/patterns/security/tool-permission-boundary). The agent did what it was permitted to do. The problem is that the *output* is about to leave the perimeter, and the perimeter is where somebody should look one more time.
+
+The trap is what teams do with this. A check on the way out is cheap and catches real mistakes, so it starts absorbing responsibilities it cannot carry, and a system whose injection defense is "the output guardrail will catch it" has a detector standing where a boundary should be.
+
+## Forces
+
+- **The last step is the last chance.** [Class ⑤ writes cannot be undone](/docs/tools/read-and-write-tools).
+- **Some checks are deterministic and total**: does every cited ID exist, does the amount match the record.
+- **Some are classifiers**, with a false-negative rate an adversary can search against.
+- **False positives are expensive**: a guardrail that blocks correct output gets disabled within a week.
+- **It sits on the latency path** of every response.
+- **It is the wrong layer for injection**, which must be handled by capability constraints upstream.
+
+## Solution
+
+A check between the agent and the outside world, built in **two tiers that are never confused**: deterministic assertions that gate, and classifiers that flag.
+
+<Figure caption="Tier 1 blocks and is total. Tier 2 flags and is probabilistic. Conflating them is how a detector ends up standing in for a boundary." frame={false}>
+
+```
+   agent output
+        │
+   ┌────▼──────────────────────────────────────────────┐
+   │  TIER 1 · DETERMINISTIC — gates, fails closed      │
+   │   · every cited chunk id was retrieved this run    │
+   │   · and none of them has been superseded since     │
+   │   · every amount matches a tool result             │
+   │   · no identifier absent from the scratchpad       │
+   │   · no remote images or reference links            │
+   │   · recipient equals the ticket contact record     │
+   │  microseconds · no false negatives · BLOCKS        │
+   └────┬──────────────────────────────────────────────┘
+        │ pass
+   ┌────▼──────────────────────────────────────────────┐
+   │  TIER 2 · CLASSIFIERS — flag, sample, never gate   │
+   │   · PII shapes that should have been handles       │
+   │   · tone, refusal, policy-language detectors       │
+   │   · faithfulness score on a sample                 │
+   │  ms to seconds · has a miss rate · ROUTES/LOGS     │
+   └────┬──────────────────────────────────────────────┘
+        │
+   send · or escalate with the reason attached
+```
+
+</Figure>
+
+Four rules:
+
+**Tier 1 assertions must be checkable against state, not judged.** *"Does this chunk ID appear in `ctx.retrievedIds`"* is a set membership test. *"Does this look like a leak"* is not. Only the first kind may block, because only the first kind has no false negatives.
+
+**Ground numbers and identifiers against the [scratchpad](/docs/patterns/context/structured-scratchpad).** Any amount, order ID, or date in the reply that does not appear in a tool result is a fabrication candidate, mechanical to compute, and it catches the most expensive class of wrong answer.
+
+**A block is an escalation, not an error.** The reply goes to a human with the failed assertion attached. A guardrail that returns a generic failure to the customer has converted a caught mistake into a visible one.
+
+**Tier 2 never gates.** It routes to review, samples for measurement, and feeds the [quality alert](/docs/production/operating-manual). The moment a classifier blocks, its false-positive rate becomes a product outage and its false-negative rate becomes a security claim you cannot support.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/security/output-guardrail.ts"
+export interface GuardResult {
+  action: 'send' | 'escalate' | 'review';
+  reasons: string[];
+}
+
+export function guardOutput(reply: Reply, ctx: RunContext): GuardResult {
+  const hard: string[] = [];
+
+  // ── TIER 1 · deterministic. Every one is a set or equality test. ──
+  for (const id of citedChunkIds(reply.body)) {
+    if (!ctx.retrievedIds.has(id)) hard.push(`cites ${id}, not retrieved this run`);
+    // Retrieved is not the same as current: a chunk can be superseded
+    // between the retrieval and the reply. `supersededAt` is recorded
+    // on the chunk, so this stays a set test rather than a judgement.
+    else if (ctx.retrieved.get(id)?.supersededAt) hard.push(`cites ${id}, superseded`);
+  }
+  for (const n of extractAmounts(reply.body)) {
+    if (!ctx.scratchpad.hasValue(n)) hard.push(`amount ${n} matches no tool result`);
+  }
+  if (hasRemoteResources(reply.body)) hard.push('output contains remote resources');
+  if (reply.to !== ctx.ticket.contact) hard.push('recipient is not the ticket contact');
+
+  // Fails closed, and hands a human the reason rather than the customer.
+  if (hard.length) return { action: 'escalate', reasons: hard };
+
+  // ── TIER 2 · classifiers. These FLAG. They never block. ──
+  const soft = [
+    ...piiShapes(reply.body),           // values that should have been handles
+    ...toneFlags(reply.body),
+  ];
+  if (soft.length) return { action: 'review', reasons: soft };
+
+  return { action: 'send', reasons: [] };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/security/output_guardrail.py"
+def guard_output(reply: Reply, ctx) -> tuple[str, list[str]]:
+    hard: list[str] = []
+
+    # ── TIER 1 · deterministic. Every one is a set or equality test. ──
+    for cid in cited_chunk_ids(reply.body):
+        if cid not in ctx.retrieved_ids:
+            hard.append(f"cites {cid}, not retrieved this run")
+        # Retrieved is not the same as current: a chunk can be superseded
+        # between the retrieval and the reply. superseded_at is recorded on
+        # the chunk, so this stays a set test rather than a judgement.
+        elif ctx.retrieved[cid].superseded_at:
+            hard.append(f"cites {cid}, superseded")
+    for n in extract_amounts(reply.body):
+        if not ctx.scratchpad.has_value(n):
+            hard.append(f"amount {n} matches no tool result")
+    if has_remote_resources(reply.body):
+        hard.append("output contains remote resources")
+    if reply.to != ctx.ticket.contact:
+        hard.append("recipient is not the ticket contact")
+
+    # Fails closed, and hands a human the reason rather than the customer.
+    if hard:
+        return "escalate", hard
+
+    # ── TIER 2 · classifiers. These FLAG. They never block. ──
+    soft = [*pii_shapes(reply.body), *tone_flags(reply.body)]
+    if soft:
+        return "review", soft
+
+    return "send", []
+```
+
+</Tab>
+</Tabs>
+
+Every tier-1 check reads state the agent could not influence: `retrievedIds` was recorded by the retriever, `scratchpad` only accepts [tool-written values](/docs/patterns/context/structured-scratchpad), and `ticket.contact` came from the record. That is what makes them assertions rather than opinions.
+
+## Trade-offs
+
+**Latency on every response.** Tier 1 is microseconds. Tier 2 is milliseconds to seconds, which is why faithfulness scoring [samples rather than gates](/docs/patterns/retrieval/grounded-citations).
+
+**False positives erode the control.** A guardrail firing on correct output teaches operators to click through, and then it is worse than nothing because everyone believes it works. Tune toward under-flagging, measure the false-positive rate deliberately, and treat a rising one as an incident.
+
+**Escalation volume is a real cost.** Every block spends a [withdrawal from the same finite attention account](/docs/human-in-the-loop/risk-tiers) as approvals. A guardrail that escalates 15% of replies has doubled the support team's queue.
+
+**It cannot see what it was not given.** Grounding against the scratchpad catches invented numbers and misses a plausible-but-wrong sentence with no numbers in it. The guardrail bounds a class of failure, not the class.
+
+## When not to use it
+
+**As an injection defense.** This is the misuse the pattern exists to warn against. An injected instruction produces a well-formed, in-policy action: `issue_credit(4471, 250000)` is not a harmful *output*. [Capability constraints](/docs/patterns/security/tool-permission-boundary) stop it; a check on the reply text never sees it.
+
+**When the output is not customer-facing.** An internal draft that a human will read and edit already has a reviewer. Adding a gate in front of a human is friction without a boundary.
+
+**When the assertions are not available.** Without recorded chunk IDs and a typed scratchpad, tier 1 has nothing to check against and you are left with classifiers alone, which is a flagging system, and should be described as one.
+
+**As a substitute for evals.** A guardrail is a runtime check on one response. It cannot tell you whether quality is drifting, and a team watching guardrail block rates instead of [sampled quality scores](/docs/evals/online-evals) is measuring their filter rather than their product.
+
+<Aside type="caution" title="The name does most of the damage">
+"Guardrail" suggests something that keeps you on the road. In practice this is a check with a miss rate, placed at the last possible moment, on the output of a system whose failures are [confident and well-formed](/docs/reliability/error-taxonomy).
+
+The distinction worth holding: an **invariant** is enforced in code the model cannot route around, has no false negatives, and is the reason an action is impossible. A **guardrail** is a check that catches some mistakes on the way out. [A prompt instruction is neither.](/docs/first-agent/the-problem)
+
+Deploy the guardrail: the deterministic tier genuinely prevents customer-visible errors, and it is cheap. Just never let its existence justify a capability, and never write a threat model whose mitigation column says *the output guardrail will catch it*.
+</Aside>
+
+## Related
+
+- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): the three-layer version of the grounding checks in tier 1
+- [Egress Allowlist](/docs/patterns/security/egress-allowlist): the remote-resource check, as a boundary rather than a filter
+- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): the state tier 1 asserts against
+- [Online Guardrail](/docs/patterns/evaluation/online-guardrail): the same mechanism catalogued from the measurement side, where the block rate is itself the metric
+- [Online Evals](/docs/evals/online-evals): why a guardrail is not an eval, and what to measure instead
+- [Prompt Injection](/docs/security/prompt-injection): why this layer cannot be the injection defense
