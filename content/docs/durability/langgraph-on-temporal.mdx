@@ -1,0 +1,134 @@
+---
+title: "LangGraph on Temporal"
+description: "The official plugin: choosing `execute_in` per node, what may run inside a workflow, and what must not."
+---
+
+[Part VII built Atlas as a graph](/docs/langgraph/state-nodes-edges). [The previous chapter](/docs/durability/agent-as-workflow) rebuilt it as a workflow. The obvious question is whether you have to choose, and the answer is no. There is an official integration that runs a LangGraph graph *as* a Temporal workflow, with each node able to execute as an activity.
+
+What makes it worth a chapter is not that it exists. It is the one thing its design refuses to do for you.
+
+<Aside type="caution" title="Python only, and in public preview">
+This integration ships as `temporalio.contrib.langgraph`, installed with `pip install "temporalio[langgraph]"`, and requires the Temporal Python SDK 1.27 or later.
+
+**Python 3.11 is a harder floor than it looks.** It gates three things, not one: the functional API, **`interrupt()`**, and streaming from a node running in the workflow. The cause is that LangGraph depends on contextvars propagating through `asyncio.create_task()`, which older versions do not do. And on 3.10 the plugin still *loads*, with a warning. So what you get is [the failure this book keeps naming](/docs/durable-execution/everything-that-breaks): your human-in-the-loop pause quietly does not exist, and the only signal is a log line nobody read.
+
+**There is no TypeScript equivalent**, so this chapter has no dual-track sample. [How to Read This Book](/docs/how-to-read) promised that where an ecosystem genuinely differs the difference gets called out rather than papered over. This is one of those places, and inventing a TypeScript listing would be worse than admitting the gap. TypeScript teams wanting both properties write [the previous chapter's port](/docs/durability/agent-as-workflow) by hand, which is roughly forty lines.
+
+It is also labelled **public preview**. Pin your versions and expect the surface to move.
+</Aside>
+
+## What it actually does
+
+The graph becomes a workflow. Each node either runs inline in that workflow or is dispatched as an activity. Temporal's event history checkpoints execution at every node, rather than a LangGraph checkpointer.
+
+The plugin supports both LangGraph APIs: the `StateGraph` graph API and the `@entrypoint`/`@task` functional API, along with interrupts, `Send`, and continue-as-new. So the topology you designed in Part VII transfers rather than being rewritten.
+
+## The decision it will not make for you
+
+Every node must declare where it runs. There is no default, and the plugin **raises an error if you omit it**:
+
+```python
+from temporalio.contrib import langgraph as tlg
+
+g = StateGraph(AtlasState)
+
+g.add_node("triage",   triage,       metadata={"execute_in": "activity"})
+g.add_node("gather",   gather,       metadata={"execute_in": "activity"})
+g.add_node("check",    check_policy, metadata={"execute_in": "workflow"})
+g.add_node("compose",  compose,      metadata={"execute_in": "activity"})
+g.add_node("escalate", escalate,     metadata={"execute_in": "activity"})
+g.add_node("finalize", finalize,     metadata={"execute_in": "activity"})
+```
+
+Stronger still: **`execute_in` cannot be set in `default_activity_options`.** It is per node, or per task in the functional API, and the documented reason is to mitigate determinism bugs. A project-wide default is exactly how a nondeterministic node ends up inside a workflow because nobody looked.
+
+That is a design choice worth admiring. The most consequential decision in an agentic durable system is which half of the machinery each piece of code belongs to, and it is the one thing the tool refuses to let you skip. The previous chapter made you answer it by hand for every call; here it is a required field.
+
+## Where each node goes
+
+The rule is [the same one Part X gave](/docs/durable-execution/temporal-in-forty-minutes): *if it could return a different answer on a second call, it is an activity*. The plugin's documentation lands in the same place:
+
+| `execute_in: "activity"` | `execute_in: "workflow"` |
+| --- | --- |
+| Model requests | Pure state transformations |
+| Network and database calls | Lightweight routing logic |
+| Anything nondeterministic | Orchestrating subgraphs |
+| Long work needing retries and timeouts | — |
+| `interrupt()` calls | — |
+
+Activity nodes get what activities get: configurable timeouts, retry policies, and results that are journalled rather than re-executed. Workflow nodes run inline and carry the full determinism obligation.
+
+Notice how few nodes qualify for the right column. In Atlas, exactly one does: `check_policy`, the credit-limit invariant, which is [pure code by design](/docs/langgraph/state-nodes-edges). That ratio is typical and worth internalising: **in a real agent graph, almost everything touches the world.**
+
+## Four constraints that will bite
+
+**Conditional edges always run in the workflow, and must be `async def`.** They are also bound by determinism, which is fine. [Part VII already argued](/docs/langgraph/state-nodes-edges) that a conditional edge should be a plain deterministic function of state, and this makes that a requirement rather than advice. The migration cost is real though: `should_continue` from Part VII is a synchronous function, and it does not work here until it is async.
+
+**LangGraph's `Store` is inaccessible from activity nodes.** If your graph reached for the store to read long-term memory, that access has to move: into the node's arguments, or into an explicit call the activity makes itself. Worth checking before you port, because it fails at the point of use rather than at construction.
+
+**Streaming is at-least-once.** Subscribers can receive the same event twice and must handle duplicates. This is the book's recurring theme arriving in the streaming layer: the same `tool_use_id`-style dedup discipline as everywhere else, now applied to a UI feed rather than to effects.
+
+**Two determinism models are now live at once.** LangGraph has [reducers and a state schema](/docs/langgraph/reducers-and-state) with their own merge semantics; Temporal has replay determinism. Both are satisfied simultaneously or neither is, and a misbehaving run can be a bug in either. That is a genuine cognitive cost and the strongest argument against reaching for this by default.
+
+## What each side is contributing
+
+| From LangGraph | From Temporal |
+| --- | --- |
+| The graph model and topology | Durability across crashes and deploys |
+| Reducers and state schema | Retries and timeouts as policy |
+| A generated diagram of the system | Durable timers and long waits |
+| The surrounding ecosystem | The event history as the record |
+
+Which also makes clear what is *not* additive. [Part VII's checkpointer](/docs/langgraph/persistence) is replaced rather than complemented. Temporal's history is now the persistence layer, and the graph-level time travel you had becomes [replay debugging](/docs/observability/replay-debugging) instead. Same capability, different instrument.
+
+## Should you?
+
+Two roads reach the same destination, and the honest comparison is short.
+
+**Reach for the plugin when** the graph already exists and represents real work, when the topology is genuinely branching rather than a loop with a couple of exits, or when the team is fluent in LangGraph and would be learning Temporal anyway. Keeping the topology and gaining durability without a rewrite is a real win.
+
+**Write the workflow directly when** you are starting fresh and the shape is a bounded loop. As [Part VII's own audit found](/docs/langgraph/node-or-function), that describes most agents. The previous chapter's port is forty lines, has no preview-status dependency, and leaves you one determinism model to reason about instead of two.
+
+The question to ask is the one [Node or Function](/docs/langgraph/node-or-function) asked: *how many run shapes does this system actually have?* If the answer is one loop and two exits, the graph was ceremony before durability entered the picture, and adding an integration on top does not retire that question. It just makes it more expensive to revisit.
+
+## Atlas, concretely
+
+Six nodes, five in activities and one in the workflow:
+
+| Node | `execute_in` | Why |
+| --- | --- | --- |
+| `triage` | `activity` | A model call |
+| `gather` | `activity` | The agent loop: model calls and tools |
+| `check_policy` | **`workflow`** | Pure code, and the invariant nothing may skip |
+| `compose` | `activity` | A model call |
+| `escalate` | `activity` | A side effect |
+| `finalize` | `activity` | Side effects: cite, log, send |
+
+Plus `route`, `should_continue`, and `need_human` as conditional edges: inline in the workflow, async, deterministic, and unchanged in logic from Part VII.
+
+The one thing to notice: `check_policy` being the sole workflow node is not a coincidence or an optimisation. It is the same fact Part VII surfaced when it observed that four of six Atlas nodes contain no model call, seen from the other side. **The invariant is the only thing in the system that is purely a decision.** Everything else is a request to the world about something the system does not already know.
+
+## References
+
+- [LangGraph integration for the Temporal Python SDK](https://docs.temporal.io/develop/python/integrations/langgraph), plugin setup and where graph execution lands between workflow and activity.
+- [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), the checkpointing model the plugin has to compose with.
+
+---
+
+Next: [Long-Lived Agents](/docs/durability/long-lived-agents). One workflow per case, alive for weeks: entity workflows, signals for inbound events, continue-as-new as history grows.
+
+## Takeaways
+
+- The integration runs a LangGraph graph as a Temporal workflow with per-node activity dispatch and checkpointing at every node. It supports both the graph and functional APIs, plus interrupts, `Send`, and continue-as-new.
+- It is Python-only and in public preview. TypeScript teams write the workflow by hand, about forty lines.
+- Python 3.11 gates the functional API, `interrupt()`, and in-workflow streaming. Below it the plugin loads with a warning rather than failing, so the pause you built silently is not there.
+- Every node must declare `execute_in`, and the plugin errors if it is missing. It cannot be set as a project-wide default, explicitly to prevent determinism bugs.
+- The most consequential decision in the system is the one the tool refuses to let you skip. That is the right design.
+- Activities take model calls, I/O, anything nondeterministic, long work needing retries, and `interrupt()`. Workflow nodes take pure transforms, routing, and subgraph orchestration.
+- In a real agent graph, almost every node is an activity. In Atlas exactly one is not: the policy invariant.
+- Conditional edges always run in the workflow and must be `async def`, so synchronous edge functions need porting.
+- LangGraph's `Store` is unreachable from activity nodes, and it fails at the point of use rather than at construction.
+- Streaming is at-least-once; subscribers must dedupe.
+- Temporal's history replaces the LangGraph checkpointer rather than complementing it, and graph time travel becomes replay debugging.
+- You are now satisfying two determinism models at once, and a bad run can be a bug in either. That is the main argument against adopting it reflexively.
+- Use it when a real graph already exists. Write the workflow directly when the shape is one loop with two exits, which is most agents.
