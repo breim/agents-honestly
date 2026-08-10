@@ -1,0 +1,123 @@
+---
+title: "Two Durable Runtimes, One System"
+description: "The AI SDK's WorkflowAgent and Temporal both claim durability and do not compose. Choosing deliberately."
+---
+
+[The AI SDK chapter](/docs/interface/ai-sdk) ended on a rule: one loop, and it lives wherever your durability lives. This chapter is the case where that rule gets hard, because the AI SDK now ships a durability runtime of its own.
+
+## The distinction that gets lost first
+
+Start here, because conflating these two things causes most of the confusion:
+
+> **The AI SDK composes with Temporal perfectly well. `WorkflowAgent` does not, because it is not part of the generation layer. It is a durability runtime that arrives through the same import path.**
+
+Temporal publishes an integration for building durable agents with the AI SDK, and it works exactly as you would expect: the SDK generates, streams, and renders; the workflow owns the steps. Nothing about adopting `generateText`, `streamText`, or `useChat` conflicts with a durable backend.
+
+`WorkflowAgent` is a different proposition. It journals steps, replays, and resumes, which is what Temporal does. Two systems doing that to the same run is the subject of the rest of this chapter.
+
+<Aside type="note" title="Names and versions are moving here">
+This area is renaming itself faster than anything else in Part XIII: the durable agent loop appeared as the Workflow DevKit's `DurableAgent` before becoming `WorkflowAgent` in the AI SDK, and the surrounding packages are still settling.
+
+Treat the names as a snapshot and the **architecture** as the durable part. The question this chapter asks, *which system owns replay*, does not change when the imports do.
+</Aside>
+
+## What each one is
+
+**`WorkflowAgent`** runs the same agent loop as the non-durable version, with each tool call marked as a durable step. A crash, a deploy, or a restart resumes from the last completed step rather than from the beginning. Tools declared with an approval flag can suspend the run for hours or days. And a writable stream handle gives you output that multiple clients can attach to, disconnect from, and reattach to later. The run continues even when the browser closes.
+
+Read that list against [the previous two chapters](/docs/interface/streaming-ux) and it is conspicuous: **it is the durable-run-plus-reconnectable-projection architecture, shipped as a feature.** Everything Part XIII has been describing as something you assemble is here as something you import.
+
+**Temporal** is the same properties from a separate orchestration service, plus signals, updates, timers, child workflows, and an event history that doubles as the audit record.
+
+## The architectural difference that actually decides it
+
+Not features. This:
+
+| | **Vercel Workflow / `WorkflowAgent`** | **Temporal** |
+| --- | --- | --- |
+| Orchestrator | **None**. Coordination runs in your application code | A separate cluster or managed service |
+| Programming model | Plain functions with awaited steps | Workflows and activities |
+| Replay matching | Steps matched to cached results **by order** | Steps matched against a recorded event history |
+| Operational commitment | Effectively none, on the right platform | Real: a cluster, or a bill |
+| Portability | Strongest where you already deploy | Runs anywhere, polyglot |
+
+The first row is the fork. One design eliminates the orchestrator and puts coordination in your code; the other puts it in a service you run or buy. That is a genuine architectural choice with genuine consequences, not a preference.
+
+The third row is worth a second look, because it is the sharper technical difference. **Matching steps to cached results by order** is simple and works. It is also more sensitive to code edits between a run starting and resuming, since inserting a step above an existing one shifts every match below it. That is the same ordering fragility [multiple interrupts have](/docs/human-in-the-loop/interrupts-vs-signals), for the same reason, and it is what [worker versioning](/docs/durable-execution/temporal-in-forty-minutes) exists to solve on the other side.
+
+## Why two of them do not compose
+
+Both memoize your steps. Both decide, on recovery, what already happened. Put both in one system and you have two journals that can disagree, and the disagreement surfaces on the **recovery path**, the one you exercise least and test worst.
+
+This is the third instance of one pattern in this book:
+
+- [Two loops](/docs/interface/ai-sdk): the SDK's and the workflow's, with different step counts.
+- [Two checkpointers](/docs/human-in-the-loop/interrupts-vs-signals): LangGraph's and Temporal's, with different ideas of position.
+- **Two durability runtimes**: two answers to "did step three run."
+
+Which generalises to something worth carrying out of Part XIII entirely:
+
+> **Any two systems that both memoize your steps will eventually disagree, and they will do it while recovering from something else.**
+
+## Choosing
+
+The honest comparison, without a thumb on the scale:
+
+**Choose Vercel Workflow / `WorkflowAgent` when** you deploy on Vercel, the agent *is* the product rather than one component of a larger system, your stack is TypeScript end to end, and you want durability without operating anything. The integration is genuinely tight, and for that shape it is a better answer than standing up a cluster to run one agent.
+
+**Choose Temporal when** waits are measured in weeks, retry and backoff behaviour is complex, the system is polyglot, the agent is one part of a larger set of business processes, you need the event history as an [audit artifact](/docs/human-in-the-loop/escalation-and-audit), or you already run it for other things.
+
+That last clause decides more real cases than any technical criterion. **A durable execution engine is not a per-project decision.** If a company runs one, the agent goes on it, and the argument is over.
+
+<FrameworkCheck decision="Meridian already operates Temporal, so Temporal owns replay. The AI SDK remains the generation, transport, and interface library.">
+<FrameworkOption name="temporal">
+
+**Temporal.** Choose it for polyglot business workflows, complex retry and timer policies, long-lived processes, or when the organization already operates it.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+**`WorkflowAgent`.** Choose it when the agent is a TypeScript product deployed on Vercel and avoiding a separate orchestrator is the dominant constraint.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## If both are already in the building
+
+The clean split, and it is the only one that works:
+
+> **One system owns durability. The other is a library.**
+
+Use the AI SDK for what has no competitor: generation, streaming, `useChat`, the transport boundary, [tool-call rendering](/docs/interface/generative-ui-and-approvals). Let the workflow own steps, retries, timers, and recovery. Do not use `WorkflowAgent`.
+
+The tell that this has gone wrong is the same one from the AI SDK chapter: two step counters that disagree, and no way to say which run actually happened.
+
+## Atlas, concretely
+
+Meridian runs Temporal, and would even if Atlas did not exist. The warehouse reconciliation, the nightly ERP sync, and the returns process are all workflows. Atlas is one more workflow on infrastructure that was already there, and its [retrieval and evaluation stack is Python](/docs/how-to-read), which the TypeScript-only option does not serve.
+
+So the console imports `useChat`, `streamText`, and a component registry, and imports nothing that journals a step.
+
+The decision took one question: *does this company already run a durable execution engine?* For Meridian, yes. For a two-person team shipping a Vercel-hosted product where the agent is the whole application, the same question answers the other way, and `WorkflowAgent` is the better tool.
+
+## References
+
+- [Workflow agents](https://ai-sdk.dev/docs/agents/workflow-agent), the AI SDK's durable-agent surface and its execution model.
+
+---
+
+Next: [Wiring the UI to a Durable Backend](/docs/interface/ui-to-durable-backend). Start, signal, query, reconnect: a React front end over agents that outlive the browser tab.
+
+## Takeaways
+
+- The AI SDK composes with Temporal; Temporal even publishes an integration. `WorkflowAgent` does not compose, because it is a durability runtime that arrives through the SDK's import path.
+- Adopting the AI SDK is not adopting `WorkflowAgent`. The conflation is the most common mistake here.
+- `WorkflowAgent` makes each tool call a durable step, resumes from the last completed one, can suspend for days on approval, and offers a reconnectable stream that outlives the browser: the architecture of Part XIII, as an import.
+- The deciding difference is not features: one design has no orchestrator and puts coordination in your application code, the other runs a separate service.
+- Matching steps to cached results by order is simple and more sensitive to code edits between start and resume, the same ordering fragility as multiple interrupts.
+- Two systems that memoize steps produce two journals that disagree, and the disagreement appears on the recovery path you test least.
+- Third instance of one pattern: two loops, two checkpointers, two durability runtimes. Any two systems that memoize your steps will eventually disagree.
+- Vercel Workflow fits a TypeScript product deployed on Vercel where the agent is the product and you want to operate nothing.
+- Temporal fits weeks-long waits, complex retries, polyglot systems, the history as an audit artifact, and, decisively, a company that already runs one.
+- A durable execution engine is not a per-project decision. If the company runs one, the agent goes on it.
+- If both are present: one owns durability, the other is a library. Use the AI SDK for generation, streaming, and rendering; do not use `WorkflowAgent`.
