@@ -1,0 +1,124 @@
+---
+title: "Escalation, Timeouts, and Audit Trails"
+description: "What happens when nobody approves, and how to prove afterwards what the agent did and why."
+---
+
+Two questions close Part XII. The first is what happens when the timer wins. The second is how you demonstrate, months later and possibly to someone hostile, what the agent did and why.
+
+## When nobody approves
+
+[The previous chapters](/docs/human-in-the-loop/approval-gates) left the wait as a condition raced against a timer, and promised that the answer to the timer winning is never *"ask again."* Re-raising an approval nobody answered produces a second unanswered approval and consumes more of a budget that is already the [scarce resource in this part](/docs/human-in-the-loop/risk-tiers).
+
+The governing principle comes from access control, and it is worth stating as an invariant:
+
+> **Fail closed.** A timeout, a missing payload, or an error results in denial plus escalation, never in silent approval.
+
+Every gate must answer three questions, and a gate that answers fewer than three is a gate with an undefined state:
+
+| Question | Atlas's answer |
+| --- | --- |
+| What happens if nobody responds? | Auto-deny, and route to a person |
+| Who is the backup reviewer? | The queue lead, after 24 hours |
+| How long until it expires? | 48 business hours, matching the approval's validity |
+
+<Figure caption="Each rung has a time and an owner. The bottom rung is a denial that a human still has to look at." frame={false}>
+
+```
+   request ──▶ primary reviewer          0h
+        │           │ no response
+        │           ▼
+        ├──▶ backup reviewer            24h   ← reminder + reassignment
+        │           │ no response
+        │           ▼
+        └──▶ AUTO-DENY                  48h   ← fail closed
+                    │
+                    ▼
+            human work queue                   ← the case is still open
+```
+
+</Figure>
+
+**Auto-deny is not the end of the case**, and this is where designs quietly lose work. The refund was not issued, but the customer is still waiting and the ticket is still open. Denial routes into a human workflow; it does not route into nothing. A system that treats "timed out" as "handled" has produced [exactly the silent failure](/docs/durable-execution/everything-that-breaks) this book keeps finding under new names.
+
+One detail that costs nothing and helps a lot: **a timeout denial and a judgement denial are different events, and you should tell the agent which.** *"Denied: no reviewer responded within 48 business hours"* is not *"denied: carrier liability must be confirmed first."* The first should not cause the model to revise its reasoning, because nothing about its reasoning was rejected. And if you hand it the generic denial, [it will helpfully revise anyway](/docs/tools/errors-as-instructions).
+
+## Logs are not an audit trail
+
+The second half, and the distinction that organises it:
+
+> **Logs are for you, while you are debugging. An audit trail is for someone who does not trust you, later.**
+
+That difference sets the requirements. A log can be lossy, unstructured, and rotated after a fortnight. An audit trail has to answer questions posed by an auditor, a regulator, a customer's lawyer, or your own incident review, none of whom will accept "the logs rolled."
+
+A defensible record of an agent decision contains:
+
+| Field | Why |
+| --- | --- |
+| Timestamp, agent identity, version | Which system, running which code |
+| Action type and inputs | What was attempted |
+| Outputs and outcome | What happened |
+| Data consulted, with versions | Which policy document, at which revision |
+| The governance intervention | **Whether the gate was hard or soft, and which fired** |
+| The human decision | Who decided, when, and **what they were shown** |
+| Retention and access | Who may read this, and for how long |
+
+Two of those rows are routinely missing, and both are ones this book has argued toward.
+
+**Whether the gate was hard or soft.** A record showing that an action proceeded is much less useful than one showing it proceeded *because it was below the tier threshold* versus *because a person approved it* versus *because the reviewer's window expired and policy allowed it*. Those are three different stories about your controls, and only the record can distinguish them.
+
+**What the reviewer was shown.** [The approval card is assembled at render time](/docs/human-in-the-loop/approval-gates) from state that has since moved: balances settle, documents get superseded, the account changes. Storing a *reference* to the card proves nothing, because re-rendering it next year produces a different card. **Store the rendered card**, as bytes, alongside the decision. It is the only way to demonstrate that the decision was informed rather than merely recorded.
+
+## The event history is most of this, and not all of it
+
+[Part XI observed](/docs/durability/agent-as-workflow) that the event history is the audit log you were going to build, produced as a by-product of replay. That remains true and is worth being precise about, because it is not the whole requirement.
+
+**What the history gives you for free:** every input, every result, every retry, every timer, in order, durably, with the exact arguments each activity received.
+
+**What it does not:** the *reasoning* (visible only insofar as a model response was journalled), the rendered approval card, the hard-versus-soft classification, tamper-evidence, and a retention policy distinct from your operational storage.
+
+So you write the audit record **deliberately**, as its own activity, rather than inferring it from the history later. The history is the base; the audit trail is a designed artifact on top of it.
+
+And the flip side [already flagged in Part XI](/docs/durability/agent-as-workflow) applies with more force here. The history is also a durable copy of every payload you passed through it. Retention that is right for durability may be wrong for personal data, which makes retention a decision rather than a default. "Keep everything forever" is not caution. It is an accumulating liability.
+
+<Aside type="caution" title="The regulatory schedule changed in 2026">
+The EU AI Act describes logging obligations for **high-risk** AI systems, including automatic recording of events and, where Article 19 applies, a retention floor of at least six months. Those requirements did **not** generally take effect on the old August 2026 schedule. As of August 2026, the European Commission's [implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act) places the Annex III high-risk rules on 2 December 2027 and rules for high-risk systems embedded in regulated products on 2 August 2028. Article 50 transparency rules follow a separate schedule and apply from 2 August 2026.
+
+Two qualifications matter. **Whether a given system is high-risk is a legal classification, not an engineering one**. Atlas, a support agent that can issue credits, is a question for counsel rather than for this book. Regulatory schedules also change faster than architecture guidance, so verify the [current official text](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng) and implementation guidance rather than treating this paragraph as legal advice.
+
+The direction of travel is the durable part, and it is not ambiguous: recorded, retained, queryable, and verifiable. There is also an IETF draft toward a standard agent audit-trail format using hash-chained records for tamper evidence, which is what standardisation looks like while it is happening.
+</Aside>
+
+## Atlas, concretely
+
+**Escalation.** Approvals go to the on-duty reviewer, reassign to the queue lead at 24 hours with a reminder, and auto-deny at 48, matching the approval's own expiry, so the two cannot disagree. Auto-denied cases land in a human queue tagged `expired-approval`, which is reviewed daily and is a metric rather than a folder. If that queue grows, the [thresholds are wrong](/docs/human-in-the-loop/risk-tiers), not the reviewers.
+
+**Audit.** One `record_decision` activity, called at every governance point, writing: the ticket, the action and arguments, the tier and posture that applied, whether a gate fired and which kind, the reviewer and their decision, the rendered card as stored bytes, the documents consulted with their versions, and the outcome. Retained separately from the event history, on a schedule set by policy rather than by convenience.
+
+**The question it has to answer**, which is also the test for any audit design, is a specific one, asked eleven months later: *"Why did Atlas give this customer $4,200 on the ninth of August?"* If the record cannot answer that without someone reconstructing it from three systems and a memory, it is a log.
+
+Part XII ends here. The agent can now be stopped by a person, waits for them without cost, escalates when they do not come, and can prove afterwards what happened.
+
+## References
+
+- [Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng), with [Article 12](https://artificialintelligenceact.eu/article/12/) on record-keeping and [Article 19](https://artificialintelligenceact.eu/article/19/) on log retention.
+- [European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act), the maintained official source for the phased timeline.
+
+---
+
+Next: [The Vercel AI SDK](/docs/interface/ai-sdk), Part XIII, and what the user sees while a durable backend does its work.
+
+## Takeaways
+
+- The answer to an unanswered approval is never to ask again. That spends more of the budget that is already scarce.
+- Fail closed: a timeout, a missing payload, or an error produces denial plus escalation, never silent approval.
+- Every gate answers three questions: what happens if nobody responds, who is the backup, and when does it expire. Fewer than three means an undefined state.
+- Auto-deny is not the end of the case. It routes into a human queue, or you have built a silent failure.
+- A timeout denial and a judgement denial are different events. Tell the model which, or it will revise reasoning that nothing rejected.
+- Logs are for you while debugging; an audit trail is for someone who does not trust you, later. The second cannot be lossy or rotated.
+- Record whether the governance intervention was a hard gate or a soft one, and which fired. "It proceeded" is three different stories about your controls.
+- Store the rendered approval card as bytes. Re-rendering it later produces a different card, so a reference proves nothing about what the reviewer saw.
+- The event history gives you inputs, results, retries, and timers for free. It does not give you reasoning, the rendered card, the gate classification, tamper-evidence, or a separate retention policy.
+- Write the audit record deliberately, as its own activity. The history is the base, not the artifact.
+- Retention is a decision. The history is also a copy of every payload, so "keep everything forever" is an accumulating liability rather than caution.
+- The EU AI Act describes logging and retention duties for applicable high-risk systems, but the 2026 implementation schedule moved the relevant dates into 2027 and 2028. Verify the current official timeline and let qualified counsel determine scope. The durable engineering direction is recorded, retained, queryable, and verifiable.
+- Test any audit design against one question asked eleven months later: why did the agent do this, on this date, for this customer?
