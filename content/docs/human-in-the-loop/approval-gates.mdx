@@ -1,0 +1,146 @@
+---
+title: "Approval Gates"
+description: "Blocking indefinitely on a human decision without holding a process, a socket, or a thread open."
+---
+
+The waiting is solved. [Part X](/docs/durable-execution/signals-and-children) reduced "block for three days on a human" to a condition raced against a timer, costing no process, no socket, and no thread. [The previous chapter](/docs/human-in-the-loop/risk-tiers) decided which actions get a gate at all.
+
+What remains is the gate itself, and it involves three decisions. Most teams make the first one and inherit the other two by accident.
+
+## 1 · Where the gate sits
+
+There are four positions, and they are not interchangeable:
+
+| Gate on | Blocks before | Good for | Fails when |
+| --- | --- | --- | --- |
+| **The plan** | Any work happens | Cheap review, wide scope | The plan is not the action |
+| **The execution** | The effect | Irreversible single actions | High volume. It is the default and the expensive one |
+| **The output** | It leaves the building | [Class ⑤ writes](/docs/tools/read-and-write-tools): replies, filings | The work is already paid for |
+| **Exceptions** | Only on a risk signal | Budget, by a wide margin | Your signals miss a case |
+
+Gating the **plan** is attractive and quietly weak: approving *"I will investigate and issue a refund"* is not approving *$4,200 to Acme against invoice 88213*. The plan is a claim about the future, and the number that matters does not exist yet.
+
+Gating **exceptions** is where the [approval budget](/docs/human-in-the-loop/risk-tiers) actually survives contact with volume, and it is underused because it requires trusting your risk signals, which is a testable property, not a leap of faith.
+
+Whatever you choose, one structural rule carries over from [Part VII](/docs/langgraph/graph-topologies): **the gate contains exactly one side-effecting call and nothing else**, because resume re-executes from the top of the node. A gate that also sends a notification sends it twice.
+
+## 2 · What the reviewer sees is the product
+
+This is the decision that determines whether the gate does anything, and it is usually made by whoever built the UI in an afternoon.
+
+A reviewer deciding well needs seven things: **the exact action, the changed state, the authority under which it is being taken, the evidence, the uncertainty, the alternatives considered, and the limits on reversal.**
+
+> If the screen hides those, you have added human latency without adding oversight.
+
+That sentence is worth keeping, because the failure it names is invisible from the inside: the gate exists, the metrics show approvals happening, the audit log is populated, and nobody has actually evaluated anything.
+
+Compare:
+
+<Figure caption="Both are approval screens. Only one is a decision." frame={false}>
+
+```
+   ✗                                  ✓
+   ┌──────────────────────────┐      ┌────────────────────────────────────────┐
+   │ Approve issue_credit?    │      │ CREDIT · $4,200.00 · Acme Industrial   │
+   │                          │      │ invoice 88213 · leaves $1,180 open     │
+   │   [Approve]  [Deny]      │      │                                        │
+   └──────────────────────────┘      │ WHY   Damaged on delivery, photos in   │
+                                     │       ticket. Policy RET-14 §3 allows  │
+                                     │       full credit within 30d. Day 6.   │
+                                     │ AUTH  Agent limit $1,000 — over by     │
+                                     │       $3,200, so you are the authority │
+                                     │ UNSURE Carrier liability unconfirmed;  │
+                                     │       may be recoverable from them     │
+                                     │ ALT   Partial credit $2,900 (restock   │
+                                     │       fee applied) — agent rejected,   │
+                                     │       policy says no fee when damaged  │
+                                     │ UNDO  Reversible for 24h, then a       │
+                                     │       compensating entry only          │
+                                     │                                        │
+                                     │ [Approve] [Edit] [Deny] [Ask]  · 41h   │
+                                     └────────────────────────────────────────┘
+```
+
+</Figure>
+
+Two disciplines make the right-hand card trustworthy rather than merely long.
+
+**Progressive disclosure, without hiding material facts.** The card above is the first view; source passages, the full policy text, and the trace go behind expanders. What must never be behind an expander is anything that would change the decision.
+
+**Every material claim either links to a source record or marks itself as an inference.** *"Policy RET-14 §3"* links to the document at the version that was retrieved. *"Carrier liability unconfirmed"* is labelled as uncertainty rather than presented as fact. This is [the citation requirement from the acceptance spec](/docs/first-agent/the-problem) arriving at the approval screen, and it is the difference between a reviewer checking the agent and a reviewer being persuaded by it.
+
+<Aside type="caution" title="The approval screen is an injection surface">
+Everything on that card is text the agent assembled, and some of it came from a ticket a stranger wrote. A reviewer reading *"Policy RET-14 §3 allows full credit"* is reading a claim the agent made, possibly on the basis of a document that told it to make that claim.
+
+Which is why the source link is not decoration. An approval UI that renders agent-authored justification without provenance has built a very efficient channel for [prompt injection](/docs/security/prompt-injection) to reach a human with authority: the one participant in the system who can override every other control.
+</Aside>
+
+## 3 · What answers the gate accepts
+
+Approve and Deny is the default, and it is wrong. You need four answers:
+
+| Answer | What it means | Why it matters |
+| --- | --- | --- |
+| **Approve** | Proceed as proposed | — |
+| **Edit** | Proceed, with this changed | The amount is wrong, not the action |
+| **Deny** | Do not proceed, with a reason | The reason is an instruction |
+| **Ask** | I need something before deciding | Otherwise the reviewer denies out of caution |
+
+**Edit is the one that is missing everywhere and the one reviewers most want.** In the card above, the realistic outcome is not "no refund" but "$2,900, not $4,200." A binary gate forces that into a denial, after which the agent must re-derive an amount it was never told was wrong, or a human leaves the system and does it by hand. Either way the gate stopped being part of the workflow.
+
+**The deny path is the most underdesigned code in the system.** Denial is not an end state, it is a branch, and it needs an answer: does the agent retry with the reason, escalate to a person, or terminate the case? The reason itself should go back as [an instruction written for the model](/docs/tools/errors-as-instructions). *"denied: carrier liability must be confirmed first"* selects a next action, while *"denied"* selects nothing and produces an apology.
+
+## Approvals expire
+
+The property almost nobody implements, and the one that prevents a specific bad day.
+
+An approval is a decision **about a state**, and the state moves. Approving a $4,200 credit on Tuesday, against an account balance and a policy version read on Tuesday, does not authorise issuing it on Friday after the customer has paid, disputed, or been closed.
+
+So expiry is set from **data volatility and risk**, not from reviewer convenience. The remaining validity is shown on the card, along with what happens when it lapses. Forty-one hours, in the example above.
+
+## Match the lane to the risk
+
+The last piece, and it connects the gate back to the tiers. Not every approval deserves the same response time.
+
+| Lane | For | Target |
+| --- | --- | --- |
+| Fast | Low-risk, high-volume, `notify`-tier | Seconds, a glance |
+| Standard | Sensitive data access | Minutes |
+| Deliberate | Money, irreversible, [dual control](/docs/patterns/security/dual-control) | Longer, and scheduled |
+
+A single queue mixing all three produces the worst outcome available: the deliberate decisions get the fast lane's attention, because they arrived between two trivial ones.
+
+## The mechanism, briefly
+
+[Signals and Children](/docs/durable-execution/signals-and-children) has the code. Two choices from it are worth restating in this context:
+
+**Use an update, not a signal.** The reviewer must learn whether their decision was accepted, and an update can carry a [validator](/docs/durable-execution/signals-and-children) that rejects a stale or malformed one before it is recorded. That is how expiry gets enforced rather than merely displayed.
+
+**The wait is a condition raced against a timer.** What happens when the timer wins is [the escalation chapter](/docs/human-in-the-loop/escalation-and-audit), and the answer is never "retry the approval."
+
+## Atlas, concretely
+
+`issue_credit` above $1,000 gates on **execution**, in a node containing exactly that call. The card is the one rendered above. It accepts four answers, with `Edit` restricted to lowering the amount. Raising it re-enters the tier check and may require [dual approval](/docs/human-in-the-loop/risk-tiers), which is a rule the validator enforces rather than the UI suggests.
+
+Approvals expire in 48 **business** hours, because Meridian's account balances settle nightly and a view of an account two business days old is no longer a fact. Measuring the expiry in business hours rather than wall-clock hours is what keeps a request raised on Friday evening alive for the person who reads the queue on Monday. A 48-hour clock would have expired it at Sunday teatime, when nothing had settled and nobody was working.
+
+Everything below $1,000 still gets a person, because [an irreversible action floors at inline approval](/docs/human-in-the-loop/risk-tiers) no matter how small the amount. But it gets whoever is already on the ticket, deciding in the console with the context in front of them, rather than a queued request to the lead. That is where the approval budget is preserved: not by letting money move unwatched, but by keeping the lead's queue for the twenty-odd decisions a week that genuinely need a second person, so those get more than eleven seconds.
+
+---
+
+Next: [LangGraph Interrupts vs. Temporal Signals](/docs/human-in-the-loop/interrupts-vs-signals), two mechanisms for the same pause. Which one owns the wait, and what happens when both think they do.
+
+## Takeaways
+
+- Three decisions make a gate: where it sits, what it shows, and what answers it accepts. Most teams decide only the first.
+- Four positions: plan, execution, output, exceptions. Gating the plan approves a claim about the future, not the number that matters. Gating exceptions is where the approval budget survives volume.
+- The gate node contains exactly one side-effecting call, because resume re-executes it from the top.
+- A reviewer needs the exact action, changed state, authority, evidence, uncertainty, alternatives, and limits on reversal. Hide those and you have added latency without oversight.
+- Progressive disclosure is fine; hiding a material fact behind an expander is not.
+- Every material claim links to a source record or marks itself as an inference. Otherwise the reviewer is being persuaded rather than checking.
+- The approval screen is an injection surface: it delivers agent-authored text to the one participant who can override every other control.
+- Four answers, not two. **Edit** is the one reviewers actually want, and its absence forces real corrections into denials.
+- The deny path is a branch, not an end state, and the denial reason should be written as an instruction the model can act on.
+- Approvals expire. An approval is a decision about a state, and the state moves. Set expiry from data volatility, show the remaining validity, and enforce it in a validator.
+- Match response-time lanes to risk. One mixed queue gives deliberate decisions the fast lane's attention.
+- Use an update rather than a signal, so the reviewer learns whether the decision was accepted and staleness can be rejected before it is recorded.
