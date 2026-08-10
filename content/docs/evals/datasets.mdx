@@ -1,0 +1,123 @@
+---
+title: "Building a Dataset"
+description: "Harvesting cases from logs, failures, and synthesis. What makes a golden set golden."
+---
+
+Twenty tickets got Atlas through Part II. They are a smoke test: enough to notice that a version resolves nothing, not enough to tell a five-point regression from noise. This chapter is how twenty becomes a set that can carry a release decision.
+
+## Size by route, not by application
+
+The first structural decision, and getting it wrong is the thing teams spend an audit untangling later:
+
+> **One mature golden set per route. Not one giant set for the whole application.**
+
+Atlas has three routes, [policy questions, order status, and things needing a decision](/docs/first-agent/the-problem), and they fail differently, get attacked differently, and escalate differently. A blended score across all three hides a collapse in one behind stability in the others, which is precisely the resolution you needed.
+
+For size, the practical ceiling is around **a thousand cases per route**, and the reason is not statistical. It is [judge cost](/docs/evals/scoring). Sixty rubrics against a thousand cases is sixty thousand judge calls per CI run; five thousand cases is three hundred thousand, with no equivalent gain in what you learn. Past a thousand, **stratified sampling within the set beats growing the set**.
+
+## Four buckets
+
+A serious golden set is not one pile. It is four, with different origins and different jobs:
+
+| Bucket | Where it comes from | What it tells you |
+| --- | --- | --- |
+| **Stratified production sample** | Real traffic, sampled across segments and difficulty | Whether the thing works on what people actually send |
+| **Adversarial library** | Attacks, injections, hostile inputs | Whether it holds under pressure |
+| **Constructed edge cases** | Known-hard shapes you built deliberately | Whether it handles the cases you already know are hard |
+| **Shipped-failure replays** | Every bug that reached production | Whether it stays fixed |
+
+The fourth is the one that grows itself. [Error analysis](/docs/evals/eval-discipline) produces clustered root causes; each cluster contributes a replay case; the suite accumulates exactly the failures your system actually has rather than the ones you imagined. **A golden set that is not growing from production failures is a set that has stopped learning.**
+
+## Harvest the centre, synthesise the edges
+
+The counterintuitive rule, and it inverts what most teams do with generated data.
+
+The instinct is to synthesise the ordinary cases, say five hundred plausible support tickets, and hand-build the weird ones. That is backwards, for two documented reasons.
+
+**Synthetic data collapses toward the modal case.** Asked for test inputs, models converge on the same phrasings and question structures, which makes synthetic evals *more solvable* than real production queries. Real ones arrive with idiosyncratic vocabulary and implicit context that a generator does not produce. And successive rounds of generation degrade lexical, syntactic, and semantic diversity further. Each iteration narrows the distribution until the set measures only the **centre of the ability distribution and leaves the edges uncovered.**
+
+**Distribution drift follows.** Synthetic inputs skew formal where real users are casual, so the benchmark improves while production performance does not. That is the [measurement-validity failure](/docs/durable-execution/everything-that-breaks) arriving through the dataset rather than the scorer.
+
+Meanwhile, production hands you the centre for free and never gives you enough of the edges. The adversarial and rare cases are exactly where human annotation is prohibitively expensive and where you need **coverage of a space** rather than fidelity to a distribution.
+
+<Figure caption="Each source is good at what the other cannot do. Using either alone produces a set with a known blind spot." frame={false}>
+
+```
+        THE CENTRE                          THE EDGES
+   ─────────────────────            ─────────────────────
+   real phrasing, implicit          rare, adversarial,
+   context, messy inputs            combinatorial
+
+   ✓ HARVEST from production        ✓ SYNTHESISE at scale
+   ✗ synthetic collapses here       ✗ production never
+     to modal phrasings               supplies enough
+```
+
+</Figure>
+
+<Aside type="caution" title="Never generate eval data with the model you are evaluating">
+Using the same model, or the same model family, to author test cases and to answer them produces an eval that is optimistic rather than challenging. The generator writes the questions it is equipped to answer, in the phrasing it prefers.
+
+Use a different family for generation, and treat any suspiciously high score on a synthetic set as a suspicion about the set before it is a conclusion about the system.
+</Aside>
+
+## Labels are the actual product
+
+A case without a trustworthy label is a case that can only produce an argument. And there is a hard, checkable threshold for whether your labels are worth anything:
+
+> **Two annotators, working from the same guidance on the same cases, should agree. A Cohen's kappa below about 0.7 means the labels are noise.**
+
+Measure it before trusting the set. It is an afternoon, and it prevents months of arguing about a number that was never measuring anything.
+
+The consequence is bigger than the metric, though, and it is worth stating plainly: **if you cannot write guidance that two people follow consistently, you do not yet have a definition of success.** A disagreeing pair is not an annotator problem to be resolved by picking the more senior one. It is a bug in the [acceptance spec](/docs/first-agent/the-problem), surfacing at the only point in the process that could have caught it.
+
+That is also why labelling should not be delegated wholesale to whoever is available. The first hundred cases are a design activity.
+
+## Harvesting production means handling production data
+
+Two obligations that arrive with the first bucket.
+
+**Privacy filters and governance on extraction.** A golden set built from real tickets contains real customers, and it will be copied to laptops, pasted into notebooks, and retained far longer than the tickets themselves.
+
+**It is a second copy.** [The event history is already a durable record of every payload](/docs/durability/agent-as-workflow), with a retention policy set for operational reasons. The eval set is a *separate* copy with a different lifetime, different access, and usually much worse discipline, which makes it worth deciding deliberately rather than discovering during [an audit](/docs/human-in-the-loop/escalation-and-audit).
+
+## Sets decay
+
+A set built in March measures March. Product changes, customers change, and the failure modes you fixed are replaced by ones you have not sampled yet.
+
+The signal is specific and easy to instrument: **when production failures stop being represented in the set, coverage has decayed.** If the last three incidents were all shapes the golden set contains no example of, the set is measuring a system you no longer run.
+
+Refresh the production bucket on a cadence. Keep the replay bucket forever. It is the only one that should only grow.
+
+## Atlas, concretely
+
+| Route | Production | Adversarial | Edge | Replays | Total |
+| --- | --- | --- | --- | --- | --- |
+| Policy questions | 300 | 60 | 40 | growing | ~400 |
+| Order status | 300 | 20 | 40 | growing | ~360 |
+| Action required | 200 | 80 | 60 | growing | ~340 |
+
+The `action required` route has the smallest production sample and the largest adversarial one, which is the right shape rather than an accident. It is the route that moves money, so it has the least traffic and the highest stakes, and [most of its risk is hostile rather than statistical](/docs/security/prompt-injection).
+
+The original twenty tickets are still there, inside the replay bucket, where they have earned a permanent place. Every one of them caught something once.
+
+---
+
+Next: [Scoring](/docs/evals/scoring). Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge, including calibrating a judge you can trust.
+
+## Takeaways
+
+- Twenty cases is a smoke test. A release decision needs a set built on purpose.
+- One golden set per route, not one for the application. A blended score hides a collapse in one route behind stability in the others.
+- Around a thousand cases per route is the practical ceiling, and the constraint is judge cost rather than statistics. Sixty rubrics against a thousand cases is sixty thousand calls per run.
+- Past that ceiling, stratified sampling within the set beats growing the set.
+- Four buckets: a stratified production sample, an adversarial library, constructed edge cases, and replays of failures that shipped.
+- The replay bucket grows itself from error analysis. A golden set not growing from production failures has stopped learning.
+- Harvest the centre, synthesise the edges. That is the opposite of the instinct.
+- Synthetic data collapses to modal phrasing, making generated evals more solvable than real queries; successive generations narrow diversity until only the centre of the ability distribution is measured.
+- Synthetic inputs skew formal where users are casual, so the benchmark improves while production does not.
+- Never generate eval data with the model family you are evaluating. A suspiciously high synthetic score is a suspicion about the set first.
+- Two annotators on the same guidance should agree; below about 0.7 kappa the labels are noise. Measure it before trusting the set.
+- If two people cannot follow your guidance consistently, you do not have a definition of success. A disagreeing pair is a spec bug, not an annotator problem.
+- A set harvested from production is a second copy of customer data, with a different lifetime and usually worse discipline than the system it came from.
+- When production failures stop appearing in the set, coverage has decayed. Refresh the production bucket; keep the replay bucket forever.
