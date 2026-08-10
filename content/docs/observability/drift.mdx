@@ -1,0 +1,232 @@
+---
+title: "Detecting Drift"
+description: "The model changed, the data changed, or the users changed. Noticing which."
+---
+
+Atlas's resolution rate has been 71% for four months. Over three weeks it slides to 64%.
+
+Nothing was deployed. The prompt is unchanged, the graph is unchanged, the model string in the config is the same one that has been there since March. Every dashboard in [the operating manual](/docs/production/operating-manual) is green: latency normal, error rate normal, cost per run slightly up, which nobody flags.
+
+Someone eventually asks the right question, and it is not *what broke*. It is:
+
+> **Which of the four things changed: the model, the data, the users, or us?**
+
+Because the answer determines whether this is a rollback, a re-index, a product decision, or an incident. And the output metric alone cannot tell you, which is the entire problem.
+
+## Four sources, and they look identical from the outside
+
+| Source | What actually happened | Typical tell |
+| --- | --- | --- |
+| **The model** | The provider changed behavior, often without a version bump | Format compliance shifts; tool-call shape changes |
+| **The data** | The corpus was re-indexed, an upstream schema moved, or the world's facts moved | Retrieval hit rate and cited-chunk distribution shift |
+| **The users** | New segment, new phrasing, seasonality, a marketing campaign | Input distribution shifts; the questions are different |
+| **You** | A deploy nobody connected to this | The git log, if anyone looks |
+
+The fourth row is on the list because it is the most common answer and the last one people check. A feature flag flipped, a tool description was tightened, a retrieval `k` was lowered to save money. Check the deploy log first, always. This is the argument for [versioning prompts, models, and graphs as artifacts](/docs/production/versioning), because "what was running on the 14th" should be a query rather than an archaeology project.
+
+The other three need instruments.
+
+## Hold something constant, or you learn nothing
+
+The reason production metrics cannot diagnose drift is that **everything is moving at once**. The users are different, the corpus is different, and the model may be different, so a change in the output tells you only that something upstream moved.
+
+The instrument is a **frozen canary**: a fixed set of inputs, a pinned configuration, executed on a schedule, scored the same way every time.
+
+<Figure caption="Two signals, four diagnoses. Neither is interpretable alone; the pair is." frame={false}>
+
+```
+                     PRODUCTION QUALITY
+                     stable            dropped
+                 ┌──────────────────┬──────────────────┐
+   CANARY        │                  │                  │
+   (frozen       │   nothing to     │  YOUR INPUTS     │
+   inputs,       │   see            │  CHANGED         │
+   pinned  stable│                  │  (users or data) │
+   config)       │                  │                  │
+                 ├──────────────────┼──────────────────┤
+                 │                  │                  │
+                 │  MODEL CHANGED   │  MODEL CHANGED   │
+         dropped │  but your traffic│  and it is       │
+                 │  doesn't hit it  │  hurting you     │
+                 │  yet             │                  │
+                 └──────────────────┴──────────────────┘
+```
+
+</Figure>
+
+The canary holds the inputs and the configuration constant, so **the only thing left that can move it is the provider.** That is the whole diagnostic value, and it is why the canary set must be genuinely frozen. A "canary" whose fixtures get updated when they start failing is a canary that cannot tell you anything.
+
+Run it on a schedule, not on deploys. [CI evals](/docs/evals/ci-for-agents) answer *did my change break it*; the canary answers *did something break without my change*, and those need different triggers. Hourly is common and cheap on a small fixture set. Put it on the [batch endpoint](/docs/patterns/cost/batch-api-offload) if the volume makes it worth it.
+
+<Aside type="caution" title="Pinned is not frozen">
+The most common wrong assumption in this chapter: naming a specific model version in your config does not guarantee its behavior is fixed. Providers do adjust deployed models, and there are documented cases of behavior on a pinned version changing enough to collapse an evaluator's expected output, with no release note and no version string change.
+
+This is not a reason for alarm; serving stacks, routing, and safety layers all evolve underneath a name. It is a reason to **verify rather than assume**. The canary is that verification, and it is the only one available to you. You cannot diff a model you do not host.
+</Aside>
+
+## Measure the inputs, not only the outputs
+
+Half of drift is upstream, and you will not see it in output metrics until it has already cost you.
+
+| Input signal | Catches |
+| --- | --- |
+| Embedding centroid of incoming requests + spread | A new topic or segment arriving |
+| Length distribution | Longer tickets, pasted logs, a changed form |
+| Intent-label mix | The product changed what people ask about |
+| Language / locale mix | A new market |
+| Tenant mix | One customer's volume swamping the average |
+| Retrieval hit rate and cited-chunk distribution | The corpus moved under you |
+
+The last row is the agent-specific one and it is often the real culprit. A re-index, a chunking-parameter change, or a batch of newly ingested documents can displace the chunks that used to answer your most common question. Nothing about the model or the users moved, and quality fell. Because you are already [recording chunk IDs per run](/docs/observability/replay-debugging) for replay and incident scoping, this metric is free: watch the distribution of which chunks get cited, and alert when the top-N set turns over.
+
+On the output side, watch behavior rather than quality scores, because behavior moves first and is cheap to compute:
+
+- **Format compliance rate**: the fraction of responses that parse. The earliest and clearest model-change signal.
+- **Tool-call distribution**: which tools, how often, with what argument shapes.
+- **Turn count and escalation rate**: an agent taking more turns to reach the same place is drifting before the resolution rate shows it.
+- **Refusal rate**: moves when safety layers change.
+
+## Alert on the pair, not on either half
+
+Input drift alone fires constantly. Traffic legitimately changes every week and most of it is fine. Quality-score drops alone are noisy on small samples and expensive to compute continuously.
+
+The alert that works in production is the **joint condition**: a measurable input-distribution shift *and* an evaluator-score drop, together. Reported practice is that this pairing cuts alert noise sharply, and the reason is structural. Either signal alone has a high base rate, and their conjunction does not.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/observability/drift.ts"
+export interface DriftWindow {
+  inputCentroidShift: number;   // cosine distance vs. the trailing baseline
+  evalScoreDelta: number;       // vs. the same baseline window
+  formatComplianceDelta: number;
+  canaryScoreDelta: number;     // frozen inputs, pinned config
+}
+
+export function diagnose(w: DriftWindow): string | null {
+  // The canary moved: inputs and config were constant, so it is upstream.
+  if (w.canaryScoreDelta < -0.05) return 'provider_behavior_changed';
+
+  // Joint condition — either half alone is too noisy to page on.
+  if (w.inputCentroidShift > 0.15 && w.evalScoreDelta < -0.03) {
+    return 'input_distribution_changed';
+  }
+
+  // Format compliance is the earliest model tell, and it is cheap.
+  if (w.formatComplianceDelta < -0.02) return 'output_shape_changed';
+
+  return null;
+}
+
+// Baseline is a trailing window, not a fixed historical point: you want
+// "different from recently", not "different from launch day".
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/observability/drift.py"
+from dataclasses import dataclass
+
+
+@dataclass
+class DriftWindow:
+    input_centroid_shift: float   # cosine distance vs. trailing baseline
+    eval_score_delta: float       # vs. the same baseline window
+    format_compliance_delta: float
+    canary_score_delta: float     # frozen inputs, pinned config
+
+
+def diagnose(w: DriftWindow) -> str | None:
+    # The canary moved: inputs and config were constant, so it is upstream.
+    if w.canary_score_delta < -0.05:
+        return "provider_behavior_changed"
+
+    # Joint condition — either half alone is too noisy to page on.
+    if w.input_centroid_shift > 0.15 and w.eval_score_delta < -0.03:
+        return "input_distribution_changed"
+
+    # Format compliance is the earliest model tell, and it is cheap.
+    if w.format_compliance_delta < -0.02:
+        return "output_shape_changed"
+
+    return None
+
+
+# Baseline is a trailing window, not a fixed historical point: you want
+# "different from recently", not "different from launch day".
+```
+
+</Tab>
+</Tabs>
+
+The trailing baseline matters. Comparing against launch day means every gradual, legitimate change accumulates into a permanent alarm; comparing against the last few weeks asks the question you actually care about.
+
+## The drift that comes from inside the system
+
+Three sources that are neither the provider nor your users, and that the standard ML-monitoring framing misses entirely because they only exist in agents.
+
+**Memory drift.** A [fact store](/docs/context/memory) accumulates. Some of what accumulates is wrong. As [poisoning](/docs/context/context-poisoning) established, a wrong fact that survives long enough gets cited by later facts. This is quality degradation with no external cause: the system drifted because it wrote to itself. It shows up as slowly rising confident-but-wrong answers, and the only detection is auditing the store rather than the outputs.
+
+**Procedural drift.** An agent whose successful-looking runs reinforce a workflow settles into a habit that is locally consistent and globally suboptimal. Watch the tool-call sequence distribution: a topology that narrows over time is a system converging, and convergence is not always improvement.
+
+**Tool and schema drift.** A downstream API adds a field, changes an enum, or tightens a validation. Your tool still works; its results mean something slightly different. Nobody deployed anything on your side. **Contract-test your tools** the way you would any integration. This is the drift source most likely to be diagnosed as "the model got worse."
+
+## A runbook, because the diagnosis has to route somewhere
+
+| Diagnosis | First move |
+| --- | --- |
+| Deploy log shows a change | Roll back, confirm, then decide deliberately |
+| Canary dropped, inputs stable | Pin harder if possible; run the [fallback rung](/docs/reliability/fallbacks-and-breakers) canary; open a vendor ticket with the fixture |
+| Input centroid moved, canary stable | Product question. Sample the new traffic and read it |
+| Retrieval hit rate dropped | Check the last ingestion diff and re-index history |
+| Format compliance dropped, canary stable | Your prompt assembly changed something. Check tool catalogue and context assembly |
+| Everything stable, quality still down | Audit the memory store and the tool contracts |
+
+The second row's last clause is worth doing: a reproducible fixture is what turns "the model feels different" into a report a provider can act on, and it costs nothing because the canary already produced it.
+
+## Atlas, concretely
+
+| Instrument | Setup |
+| --- | --- |
+| Canary set | 120 frozen fixtures, pinned model and prompt, hourly, batch endpoint |
+| Canary alert | Score drop > 5 points, or format compliance below 98% |
+| Input drift | Embedding centroid over a 24h window vs. trailing 14 days |
+| Joint alert | Centroid shift > 0.15 **and** [online eval](/docs/evals/online-evals) score down > 3 points |
+| Retrieval drift | Top-50 cited-chunk turnover per week; alert above 20% |
+| Behavior | Daily: format compliance, tool-call mix, turn count, escalation rate |
+| Memory | Monthly audit sample of written facts against source records |
+| Tool contracts | Contract tests in CI against every downstream API |
+| Deploy correlation | Every drift alert annotated with the deploy log for the window |
+
+The three-week slide from 71% to 64% turns out to be the retrieval row: a batch of newly ingested partner documentation displaced the chunk that answered the most common refund question. No model change, no user change, no deploy to the agent. A re-index, a chunking parameter, and a metric nobody was watching.
+
+## Where Part XV leaves you
+
+Five chapters on being able to see what happened.
+
+[Eight questions](/docs/observability/what-a-trace-must-answer) a single run must answer before anyone can debug it. [Semantic conventions](/docs/observability/otel-genai) so four layers of instrumentation agree about the same run. [Replay](/docs/observability/replay-debugging) that turns a production failure into a deterministic test and, eventually, into a regression corpus. [Cost accounting](/docs/observability/cost-accounting) built at call time because the invoice has no dimensions. And drift detection, which exists because the most dangerous change to an agentic system is the one nobody made.
+
+The through-line is that **an agent's failures do not announce themselves**, so observability is not a supporting function here. It is the mechanism by which you find out anything at all. Everything Part XVI is about to do depends on it: you cannot classify errors you did not record, tune retries you cannot count, or trust a fallback whose output you never compared.
+
+---
+
+Next: [An Error Taxonomy for Agents](/docs/reliability/error-taxonomy). Transient, permanent, policy, budget, semantic. Different failures, different responses.
+
+## Takeaways
+
+- When quality moves and nothing was deployed, the question is not what broke. It is which of four things changed: the model, the data, the users, or you.
+- Check the deploy log first. "You" is the most common answer and the last one people check, which is an argument for versioning prompts and graphs as queryable artifacts.
+- Production metrics cannot diagnose drift because everything moves at once. You have to hold something constant.
+- A frozen canary, with fixed inputs, a pinned config, and a schedule, is the only instrument that isolates provider change, because it removes every other variable.
+- Canary fixtures that get updated when they fail are not canaries.
+- Run canaries on a schedule, not on deploys. CI evals answer "did my change break it"; canaries answer "did something break without my change."
+- Pinned is not frozen. Provider behavior on a named version does change, without release notes. Verify rather than assume.
+- Measure input distribution: embedding centroid, length, intent mix, locale, tenant mix. Half of drift is upstream and invisible in output metrics until it costs you.
+- Watch retrieval hit rate and cited-chunk turnover. A re-index displacing the chunk that answered your most common question is a common and easily-missed cause.
+- On the output side, watch behavior before quality: format compliance, tool-call distribution, turn count, escalation rate. Format compliance is the earliest and cheapest model-change tell.
+- Alert on the joint condition: input drift *and* an eval drop. Either alone has too high a base rate to page on.
+- Use a trailing baseline, not launch day, or gradual legitimate change becomes a permanent alarm.
+- Three internal drift sources the ML framing misses: memory that accumulates wrong facts, procedural habits reinforced by successful-looking runs, and downstream tool schemas that shift under you.
+- Tool-contract drift is the source most often misdiagnosed as "the model got worse."
+- A canary failure comes with a reproducible fixture, which is what turns "it feels different" into a vendor report.
