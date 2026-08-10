@@ -1,0 +1,208 @@
+---
+title: "Rolling Out the Work, Not Just the Software"
+description: "Training, incentives, staffing, escalation quality, skill retention, support, and measuring whether the organization is better with the agent in it."
+---
+
+Atlas meets every release gate. Support agents still copy its answer into a private chat, ask a colleague whether it looks right, and then paste it into the ticket. Handling time goes up.
+
+The deployment is healthy. The work system is not.
+
+Production success depends on what people are asked to do, how they are measured, and whether the queue has enough attention to perform the oversight the architecture assumes.
+
+## Redesign the job around the new split
+
+For each role, compare before and after:
+
+| Question | Before | After |
+| --- | --- | --- |
+| What starts the person's work? | New ticket | Escalation, approval, audit sample |
+| What evidence arrives? | Raw message | Agent package plus source records |
+| What decision remains human? | Entire resolution | Policy exception or risky effect |
+| What can the person change? | Reply and backend record | Approval, correction, escalation, policy feedback |
+| What proves good work? | Tickets closed | Correct decisions and caught failures |
+| What skill can decay? | Investigation and policy recall | Detecting missing evidence and edge cases |
+
+An approval job is not a smaller version of the old support job. It is rarer, more concentrated, and biased toward difficult cases. Staffing and performance expectations have to change with it.
+
+## Pilot the workflow in shadow
+
+Use stages that change both software exposure and human work:
+
+```text
+observe current work
+        |
+        v
+shadow suggestions, no workflow change
+        |
+        v
+assisted mode, human owns every outcome
+        |
+        v
+bounded autonomy by route and risk tier
+        |
+        v
+review staffing, incentives, quality, and scope
+```
+
+In shadow, measure disagreement without asking staff to perform extra production steps. In assisted mode, time the review itself and record which evidence reviewers inspect. Before autonomy, rehearse escalation peaks and ensure someone actually owns them.
+
+Do not run a pilot that adds mandatory review while keeping the old output quota. It guarantees shortcuts and teaches the organization that safety work is unpaid delay.
+
+## Train by failure, not by feature tour
+
+A useful operator session includes real cases:
+
+- a correct answer with weak evidence;
+- a persuasive wrong answer;
+- a missing citation;
+- a scope violation;
+- a stale approval;
+- an escalation that needs more information;
+- a provider outage with degraded behavior;
+- a hostile ticket trying to manipulate a tool.
+
+The operator should practice rejecting, editing, escalating, reconciling, and reporting. Watching a polished demo teaches none of those actions.
+
+Role-specific AI literacy is also a governance requirement in some jurisdictions. The European Commission's current [AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers) says training should account for technical knowledge, experience, education, context, and the people affected by the system. That is a better training design than one annual course for everyone.
+
+## Metrics shape reviewer behavior
+
+If support agents are measured on tickets closed per hour, a rejection or escalation lowers their performance number. The organization has paid people to approve.
+
+Pair operational metrics with oversight metrics:
+
+| Bad incentive alone | Add |
+| --- | --- |
+| Approvals per hour | Error catch rate and decision agreement |
+| Low escalation rate | Escalation precision and missed-escalation review |
+| Fast review time | Evidence opened and correction quality |
+| Automation rate | Reopen rate, complaints, and expected error cost |
+| User satisfaction | Caught-wrong-answer rate |
+
+Never reward a low escalation rate without measuring whether difficult cases were incorrectly allowed through. Escalation is a successful outcome when the agent reached its boundary.
+
+## Staff the attention queue
+
+Approval capacity is a reliability dependency.
+
+Model it as a queue:
+
+```text
+arrival rate by tier
+  x review time by tier
+  x traffic peak
+  + incident surge
+  = required reviewer capacity
+```
+
+Track queue age, not only depth. Name business hours, holidays, overflow, secondary reviewers, and what happens when the SLA expires.
+
+Test surges. A provider fallback that sends every credit to approval can preserve technical availability while overwhelming the people who keep it safe.
+
+<Aside type="caution" title="Human in the loop is a capacity claim">
+Writing "requires human approval" asserts that a qualified person will be available, understand the evidence, have time to decide, and remain independent enough to reject. If the staffing model cannot support those conditions, the control does not exist.
+</Aside>
+
+## Preserve skill and independent judgment
+
+Reviewers who see only agent-prepared summaries lose contact with raw cases. Over time, they may become fast at approving and worse at investigating.
+
+Use deliberate countermeasures:
+
+- route a random sample without an agent recommendation until the reviewer forms an opinion;
+- require raw-evidence review for selected high-risk cases;
+- rotate operators through ordinary case handling;
+- run calibration sessions on recent misses;
+- test unaided decision quality periodically;
+- keep procedures for operating during an agent outage;
+- maintain domain ownership outside the AI team.
+
+Research on cognitive forcing found that designs which interrupt automatic acceptance can reduce over-reliance, while users may rate those designs less favorably. The [original study](https://dl.acm.org/doi/10.1145/3449287) is a useful warning against optimizing oversight for smoothness.
+
+## Build a correction path with authority
+
+Operators need several distinct actions:
+
+| Action | Meaning |
+| --- | --- |
+| Edit this output | Correct one customer-facing result |
+| Reject this action | Prevent one effect |
+| Escalate this case | Move ownership with evidence |
+| Report a system issue | Create an incident or defect |
+| Propose a policy change | Start governed review |
+| Add an eval candidate | Send a case to adjudication |
+
+Do not let an edited reply silently become training data or policy. [Learning From Production Feedback](/docs/evals/learning-from-production-feedback) already separates weak signals, labels, adjudication, and release. The interface should preserve those categories.
+
+## Support the people affected by the agent
+
+Users and customers need:
+
+- disclosure when they interact with an AI system where required or appropriate;
+- a route to a person;
+- a way to dispute an action or record;
+- accessible explanations and evidence;
+- response times for complaints;
+- a way to report safety or privacy problems;
+- protection from retaliation for internal issue reporting.
+
+Assign complaint ownership before launch. A support route that sends an agent complaint back to the same agent is a loop, not recourse.
+
+## Measure organizational value
+
+Return to the baseline from [Process Discovery and Value](/docs/foundations/process-discovery-and-value).
+
+Measure after rollout:
+
+- completed outcomes per paid hour;
+- elapsed time and active human time;
+- review and escalation time;
+- quality, reopen, complaint, and correction rates;
+- distribution across languages, tenants, shifts, and case types;
+- employee workload and queue predictability;
+- unaided operator skill on calibration cases;
+- adoption, workaround, and bypass rates;
+- cost per completed outcome;
+- incidents and near misses.
+
+A lower handling time with higher rework is not a win. A higher automation rate with concentrated overnight queue failures is not a win. Report the process outcome, not the agent's local metric.
+
+<Figure caption="The software release loop and the work redesign loop meet at observed outcomes." frame={false}>
+
+```text
+agent release ---> production behavior ---> outcome measures
+                                            |
+work design ----> human behavior ----------+
+      ^                                     |
+      +------- training, staffing, policy --+
+```
+
+</Figure>
+
+## Atlas, concretely
+
+Meridian runs two weeks of shadow and four weeks of assisted mode for each new route. Support agents receive failure-based training and a sandbox where no action reaches customers. Review quality and caught-error rate enter performance goals alongside throughput.
+
+The tier-1 queue has a primary, overflow rotation, and incident mode. Ten percent of review cases hide the recommendation until the reviewer records an initial judgment. Monthly calibration uses real disagreements and recent incidents. Portuguese stays human-owned until both system quality and reviewer capacity meet their thresholds.
+
+## References
+
+- [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/), human oversight, operator proficiency, role definition, feedback, and impact monitoring.
+- [NIST AI RMF appendix on human-AI interaction](https://airc.nist.gov/airmf-resources/airmf/appendices/app-c-ai-risk-management-and-human-ai-interaction/), human roles and responsibilities across the AI lifecycle.
+- [European Commission AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers), current role and context-based literacy guidance under the AI Act.
+- [To Trust or to Think: Cognitive Forcing Functions Can Reduce Overreliance on AI](https://dl.acm.org/doi/10.1145/3449287), the primary study discussed in the interface trust chapter.
+
+---
+
+Next: [The Coordination Tax](/docs/multi-agent/the-coordination-tax), what happens when the work boundary crosses another autonomous system as well as another team.
+
+## Takeaways
+
+- Redesign roles, triggers, evidence, decisions, and metrics around the new division of work.
+- Pilot human workflow changes in shadow and assisted stages before autonomy.
+- Train operators on failures, correction, escalation, reconciliation, and attacks.
+- Pair throughput with oversight quality so metrics do not pay reviewers to approve.
+- Treat approval capacity as a reliability dependency and test incident surges.
+- Preserve independent judgment and unaided skills through sampling, rotation, and calibration.
+- Keep one-case correction, system issue, policy change, and eval promotion as distinct actions.
+- Measure whether the whole process improved, including human time, rework, complaints, workarounds, and skill retention.
