@@ -1,0 +1,169 @@
+---
+title: "Fallback Model Ladder"
+description: "Degrade to another provider or a smaller model instead of failing."
+---
+
+## Problem
+
+The primary model endpoint degrades. Without a ladder, every run fails and every customer waits.
+
+With a naive ladder, something worse happens: availability holds at 100%, nobody is paged, and six days later a support lead mentions the replies have been "a bit off all week." The secondary model formats tool arguments differently, one parser has been silently dropping a field, and every request returned `200 OK`.
+
+The naive ladder traded a loud failure for a quiet one. For a system whose [worst failure mode is plausible output](/docs/reliability/error-taxonomy), that is usually a bad trade, and it is the default outcome unless the ladder is designed against it.
+
+## Forces
+
+- **A provider outage should not be your outage.** Some ladder is necessary.
+- **A different model is a different system**, with different formatting, tool-calling reliability, and judgment.
+- **Availability monitoring cannot see quality degradation.** Every response is a `200`.
+- **The fallback path is the least-exercised code you have.** It runs when things are already broken.
+- **Everyone's secondary is the same secondary**, and provider outages correlate.
+- **A fallback provider is a different data processor**, with different residency and retention.
+
+## Solution
+
+An **ordered ladder with per-rung eligibility**, where every response records which rung served it and high-stakes work is not permitted to descend.
+
+<Figure caption="Six rungs ordered by how much the output changes. The tier gate is what stops a cheap model making an expensive decision." frame={false}>
+
+```
+   RUNG                          OUTPUT CHANGES   ALLOWED FOR
+   ─────────────────────────────────────────────────────────────
+   1 retry, same model            nothing          all tiers
+   2 same model, other region     nothing          all tiers
+   3 reduce scope                 predictably      all tiers
+     (tighter retrieval, fewer
+      tools, no speculation)
+   ─────────────────────────────────────────────────────────────
+   4 smaller model, same provider  materially      TIER 0 ONLY
+   5 different provider            materially      TIER 0 ONLY
+   ─────────────────────────────────────────────────────────────
+   6 human queue                   work moves      ANY TIER
+                                                   ── and the FIRST
+                                                      choice above 0
+
+   every response carries served_by
+   alert on FALLBACK RATE, not only on errors
+```
+
+</Figure>
+
+Four rules:
+
+**Prefer reducing scope to swapping models.** Rung 3 degrades a model you have already evaluated, in a way you can predict and measure. Rungs 4 and 5 change the one component whose behaviour you cannot fully specify, in production, on a path nobody tested.
+
+**Only transient failures descend.** Falling back on [a content refusal](/docs/patterns/failure/non-retryable-model-errors) is shopping for a provider that will comply; falling back on a malformed request just fails again elsewhere. The eligibility check is the class, not the status code.
+
+**High-stakes work does not degrade: it escalates.** A [tier-2 decision](/docs/human-in-the-loop/risk-tiers) served by the cheapest model still answering is a bad answer at a discount. Above tier 0 the correct rung is the human one.
+
+**Record `served_by` on every response and every span.** Without it, silent degradation is undetectable *in principle*, and the alert is on the **rate of fallback**, because a rung serving 30% of traffic is a quality story that error monitoring will never tell you.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/failure/ladder.ts"
+export interface Rung {
+  name: string;
+  call: (req: ModelRequest) => Promise<ModelResponse>;
+  breaker: Breaker;        // per (provider, model, region)
+  maxTier: RiskTier;       // rungs this degraded are capped
+}
+
+export async function callWithLadder(
+  req: ModelRequest, ladder: Rung[], tier: RiskTier, ctx: RunContext,
+) {
+  for (const [i, rung] of ladder.entries()) {
+    if (rung.breaker.isOpen()) continue;      // fail fast; don't even try
+    if (tier > rung.maxTier) continue;        // high stakes skip weak rungs
+
+    try {
+      const res = await rung.call(req);
+      rung.breaker.recordSuccess();
+      // Without this line, silent degradation is undetectable in principle.
+      ctx.trace.set('served_by', rung.name);
+      return { ...res, servedBy: rung.name, degraded: i > 0 };
+    } catch (err) {
+      // Only transient failures descend. Falling back on a refusal is
+      // shopping for a provider that will comply.
+      if (classOf(err) !== 'transient') throw err;
+      rung.breaker.recordFailure();
+    }
+  }
+
+  // Ladder exhausted. This is an escalation, not a 500.
+  throw new AgentError('policy', 'no_capacity', 'all rungs unavailable', {
+    escalate: true,
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/failure/ladder.py"
+async def call_with_ladder(req, ladder, tier, ctx):
+    for i, rung in enumerate(ladder):
+        if rung.breaker.is_open():
+            continue                     # fail fast; don't even try
+        if tier > rung.max_tier:
+            continue                     # high stakes skip weak rungs
+
+        try:
+            res = await rung.call(req)
+            rung.breaker.record_success()
+            # Without this, silent degradation is undetectable in principle.
+            ctx.trace["served_by"] = rung.name
+            return res | {"served_by": rung.name, "degraded": i > 0}
+        except Exception as err:
+            # Only transient failures descend.
+            if class_of(err) != "transient":
+                raise
+            rung.breaker.record_failure()
+
+    # Ladder exhausted. This is an escalation, not a 500.
+    raise AgentError("policy", "no_capacity", "all rungs unavailable",
+                     escalate=True)
+```
+
+</Tab>
+</Tabs>
+
+Three lines carry the design: the class check that decides *whether* to descend, the tier check that decides *how far*, and `served_by` that makes the descent visible afterwards. Remove any one and the ladder becomes the quiet-failure machine from the opening scene.
+
+## Trade-offs
+
+**The fallback path is never exercised.** It runs 0.1% of the time and debuts during an incident. Two disciplines fix it: **evaluate the fallback configuration as its own variant** in [CI](/docs/evals/ci-for-agents) against the same suite with its own quality bar, and **route a small continuous share**, 1% of tier-0 traffic, through it permanently, so it is warm and monitored rather than theoretical.
+
+**Everyone's secondary is the same secondary.** Provider outages correlate, and failing over converts your outage into a thundering herd against a provider now receiving everyone else's traffic too. Which means the rungs guaranteed to be available are the ones that need no external capacity: reduced scope, queue-and-retry, and humans.
+
+**Mid-run swaps produce spliced runs.** Switching models at step twelve means the second half is decided by a model that did not make the first half's decisions, reading a transcript in another model's voice. Prefer failing over at run boundaries and [resuming from the checkpoint](/docs/langgraph/persistence); where mid-run is unavoidable, do it at a node boundary and record the switch.
+
+**Compliance surface changes.** A secondary provider is a different data processor, possibly in a different jurisdiction, with different retention and training terms. Pin the region and settle the terms for every rung, or [remove it from the ladder](/docs/security/pii-and-compliance). A failover that ships customer data somewhere your subprocessor list does not cover is a compliance incident produced by a reliability mechanism.
+
+## When not to use it
+
+**When quality matters more than availability.** Some paths are better failed than answered worse. A tier-2 credit decision is one; say so explicitly rather than discovering it during an outage.
+
+**When you cannot evaluate the fallback.** An unevaluated rung is an unknown system serving production traffic. If there is no budget to run the suite against it, the honest ladder ends at rung 3.
+
+**When reduced scope is enough.** If tighter retrieval and fewer tools keep the primary within budget during degradation, stop there. Rungs 4 and 5 exist for full unavailability, not for slowness.
+
+**When there is no second provider approved.** Procurement, residency, and data terms are prerequisites, not paperwork to do afterwards.
+
+<Aside type="caution" title="Availability is the metric that will lie to you here">
+Every dashboard says the week was perfect. Error rate zero, latency normal, uptime 100%. The ladder worked.
+
+That is precisely the failure. The measurement that would have caught it is **quality segmented by `served_by`**, and it only exists if someone recorded which rung served each response, and only alerts if someone put a threshold on the fallback *rate*.
+
+So the honest summary of this pattern is that it converts an availability problem into a quality problem, deliberately, and it is only a good trade if you are measuring quality. A team with a ladder and no `served_by` field has not made their system more reliable; they have made its failures harder to see, which for a system whose failures are already silent and plausible is moving in the wrong direction.
+</Aside>
+
+## Related
+
+- [Fallbacks and Circuit Breakers](/docs/reliability/fallbacks-and-breakers): the chapter, with the six rungs and the four ways fallbacks fail
+- [Tool Circuit Breaker](/docs/patterns/failure/tool-circuit-breaker): the per-rung breaker that decides when to skip
+- [Non-Retryable Model Errors](/docs/patterns/failure/non-retryable-model-errors): the class check that gates descent
+- [Escalation Ladder](/docs/patterns/control/escalation-ladder): rung 6, and why it is a first-class outcome
+- [Detecting Drift](/docs/observability/drift): quality segmented by served model, as an ongoing measurement
