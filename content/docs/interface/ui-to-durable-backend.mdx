@@ -1,0 +1,144 @@
+---
+title: "Wiring the UI to a Durable Backend"
+description: "Start, signal, query, reconnect: a React front end over agents that outlive the browser tab."
+---
+
+The pieces are specified, and they come from two different parts, which is the reason this chapter exists. Part XI supplied [a run with a business identity](/docs/durability/not-a-background-job) and [a validated acknowledgement in one round trip](/docs/durability/latency); Part XIII has supplied [a buffered stream that survives a refresh](/docs/interface/streaming-ux) and [rendered tool calls](/docs/interface/generative-ui-and-approvals). This chapter connects them, and the connecting layer turns out to carry the security of the whole design.
+
+## The browser never talks to the cluster
+
+There is no browser client for a workflow engine, and you would not want one. It would mean shipping cluster credentials to a JavaScript bundle. So there is always an API layer between React and the backend, and the only question is what belongs in it.
+
+<Figure caption="Four verbs, one API layer, and one thing that must never cross it." frame={false}>
+
+```
+   BROWSER                  API LAYER                    BACKEND
+   ───────                  ─────────                    ───────
+   user acts      ──▶  ① authenticate         ──▶   start / signal / update
+                       ② authorize the ENTITY
+                       ③ derive the workflow id
+   render         ◀──  ④ shape for the client  ◀──   query · stream buffer
+
+                       ✗ never: a workflow id
+                         supplied by the browser
+```
+
+</Figure>
+
+## The four verbs
+
+| The user… | Verb | Mechanism | Returns |
+| --- | --- | --- | --- |
+| Opens a ticket that has no run | **Start** | [Update-with-start](/docs/durability/latency) | A validated acknowledgement, in one trip |
+| Sends a message to a live run | **Signal** | Signal, or update if the outcome matters | Accepted / the handler's answer |
+| Loads a page mid-run | **Query** | A query against the live execution | Current state, once |
+| Comes back after a refresh | **Reconnect** | The stream buffer, by `Last-Event-ID` | Everything missed, then live |
+
+Four verbs is the whole surface. Anything else your API layer does, such as listing, searching, or history, is a different concern, addressed below.
+
+## The workflow ID is the authorization problem
+
+This is the part that is easy to get wrong precisely because the architecture is good.
+
+Part XI made the workflow ID the business entity: `ticket-8823`. That was the right call. It removed the mapping table, the duplicate-run race, and the progress table. It also made the identifier **guessable**, and if the API accepts a workflow ID from the browser and proxies it, any authenticated user can address any ticket in the company.
+
+That is textbook broken object-level authorization, arriving through a design decision that was correct for other reasons.
+
+> **The browser sends the business identity. The API checks entitlement, then derives the workflow ID.**
+
+```ts title="ts/src/api/tickets.ts"
+app.post('/tickets/:id/reply', async (req, res) => {
+  const session = await requireSession(req);              // ① who is this
+  const ticket = await tickets.get(req.params.id);
+  if (!canAccess(session, ticket)) return res.sendStatus(404);   // ② may they
+
+  await client.workflow                                    // ③ derive, never accept
+    .getHandle(`ticket-${ticket.id}`)
+    .signal(inboundEvent, { type: 'customer_reply', body: req.body.text });
+
+  res.sendStatus(202);
+});
+```
+
+Note `404` rather than `403` on the authorization failure. Telling an attacker that ticket 8824 exists is most of the work of enumerating it.
+
+This is the same rule as [the requester rule from Part VIII](/docs/tools/tools-are-apis-for-models), one layer out: **the caller proposes the subject, your code supplies the authority.** The pattern has now appeared at the tool boundary, the policy layer, and the HTTP layer, which is a reasonable sign that it is the actual invariant of the whole system.
+
+## Do not poll queries
+
+A query executes against the live workflow. It is cheap once and it is not free, and polling one per second per open tab produces load that scales with **browser tabs** rather than with work. That is the wrong quantity to scale with, and the load arrives during exactly the incident where everyone has the dashboard open.
+
+The division that works:
+
+| Need | Use |
+| --- | --- |
+| Live updates on one run | The **stream**, which is already buffered |
+| Current state on a cold page load | A **query**, exactly once |
+| "My open tickets", search, history | A **read model**. The cluster is not a database |
+
+That last row deserves emphasis, because it is a limit people hit late. **You cannot list workflows the way you list rows.** A view of every open case, filtered and sorted and paginated, is a query against a database that your workflows write to as they progress: a projection, updated from the run rather than interrogated by the page.
+
+The honest cost is that a projection is eventually consistent and can briefly disagree with the live execution. The resolution is a rule rather than a synchronisation effort: **the read model backs the list; the query backs the detail view.** A stale row in a list is a cosmetic problem. A stale detail view is someone approving a refund against a state that has moved.
+
+## The cold load has an ordering problem
+
+A page opens and the run is at step seven. The obvious sequence is: query for state, render, attach the stream. That sequence drops events. Anything emitted between the query returning and the stream attaching is gone, and nothing reports it.
+
+The fix is the same [stream-first ordering](/docs/interface/streaming-ux) this book has now needed three times:
+
+```
+   ① open the stream          (it begins buffering immediately)
+   ② query for current state  (a snapshot)
+   ③ render the snapshot
+   ④ apply buffered events, deduped by id
+   ⑤ continue live
+```
+
+Open first, snapshot second, reconcile by ID. The stream is already buffered, so nothing is lost while the snapshot is in flight.
+
+<Aside type="caution" title="Four things the API layer must not do">
+**Do not hold the request open for the run.** [Eight minutes against a sixty-second proxy timeout](/docs/durability/not-a-background-job). The whole of Part XIII exists because of this.
+
+**Do not start work on `GET`.** A page load, a prefetch, or a link preview will then start an agent. Starting is a `POST`, and it is idempotent because the workflow ID deduplicates it.
+
+**Do not proxy identifiers.** Covered above, and it is the one that becomes a security finding rather than a bug.
+
+**Do not put credentials in the stream.** The stream is buffered, possibly in Redis, possibly for an hour after the run ends, and is readable by anything that can reach the buffer with the stream ID.
+</Aside>
+
+## Multi-tab and multi-device come free
+
+If the stream is a projection with a buffer, then two tabs, a phone, and a colleague watching the same ticket are all just additional readers of one buffer. Nothing about the run changes, nothing coordinates, nothing races.
+
+The failure this avoids is the one where each surface starts its own run, and it is [the same failure a refresh causes](/docs/interface/streaming-ux) when the stream and the run are the same object. If opening a second tab can double your token spend, the architecture is wrong in a way no amount of front-end work will fix.
+
+## Atlas, concretely
+
+| Endpoint | Verb | Notes |
+| --- | --- | --- |
+| `POST /tickets/:id/resolve` | Start | Update-with-start; returns a validated ack |
+| `POST /tickets/:id/reply` | Signal | Customer reply into the live run |
+| `POST /tickets/:id/approve` | Update | Returns whether the decision was accepted |
+| `GET /tickets/:id/state` | Query | Cold load only, never polled |
+| `GET /tickets/:id/events` | Stream | SSE, `Last-Event-ID`, buffered per run |
+| `GET /tickets` | Read model | Postgres projection, written by the workflow |
+
+Six endpoints, and the only one that touches a database directly is the list. Everything else addresses a running execution through an identity the API derived after checking the session. So the browser has no knowledge that a workflow engine exists, and could be pointed at a different one without changing a line of React.
+
+---
+
+Next: [Interface Patterns for Trust](/docs/interface/trust-patterns). Provenance, progress, undo, confidence, failure states: the vocabulary that makes an agent usable by sceptics.
+
+## Takeaways
+
+- There is no browser client for a workflow engine and there should not be. An API layer always exists; the question is what belongs in it.
+- Four verbs cover the whole surface: start, signal, query, reconnect.
+- Making the workflow ID the business entity was correct and made it guessable. Accepting one from the browser is broken object-level authorization.
+- The browser sends the business identity; the API checks entitlement and derives the workflow ID. Return `404` rather than `403`, or you have confirmed the record exists.
+- This is the requester rule at the HTTP layer. Having appeared at the tool boundary, the policy layer, and here, it is the system's actual invariant.
+- Never poll a query. Polling load scales with open browser tabs rather than with work, and peaks during the incident when everyone is watching.
+- Stream for live updates, query once on cold load, and project to a read model for lists. The cluster is not a database and you cannot list workflows like rows.
+- The read model backs the list; the query backs the detail view. A stale list row is cosmetic; a stale detail view is an approval against a state that moved.
+- Cold load is stream-first: open the stream, take a snapshot, render, reconcile buffered events by ID. Querying first drops whatever arrives before the stream attaches.
+- The API layer must not hold the request open, must not start work on `GET`, must not proxy identifiers, and must not put credentials in a buffered stream.
+- Multi-tab and multi-device are free when the stream is a buffered projection. If a second tab doubles your token spend, the architecture is wrong.
