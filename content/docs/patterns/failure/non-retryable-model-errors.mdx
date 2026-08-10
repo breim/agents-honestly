@@ -1,0 +1,188 @@
+---
+title: "Non-Retryable Model Errors"
+description: "Tell a content refusal apart from a 500 and stop burning money on retries."
+---
+
+## Problem
+
+A run at turn nineteen sends a prompt that is 214,813 tokens against a 200,000-token window. The provider returns a `400`.
+
+The retry policy sees a failed call and retries. The same oversized prompt fails identically. It retries again. Three attempts, three rejections, three charges for a request the provider never processed, and eleven seconds of latency spent learning something that was knowable before the first call.
+
+The same code path treats a content refusal identically: the model declined, the retry sends the same request, it declines again. And the third attempt is worse than a waste, because a system that retries refusals is a system that will eventually get one to pass, which means the retry loop is now [searching for a way around a control](/docs/security/prompt-injection).
+
+One `catch` block, three completely different failures, one wrong response to all of them.
+
+## Forces
+
+- **Provider errors arrive as HTTP status codes** that flatten very different situations.
+- **Retrying a deterministic failure is pure cost**, and model calls are expensive.
+- **Some failures are the model's mistake to fix**, not the transport's.
+- **A refusal is a policy outcome**, and retrying policy outcomes is a security problem.
+- **Vendor error strings change** without notice, so matching on them is fragile.
+- **The classification has to happen where the call was made.** Later, the context is gone.
+
+## Solution
+
+**Classify at the adapter into retryable and non-retryable, and declare the non-retryable set to the retry policy explicitly.**
+
+<Figure caption="Four outcomes from what looks like one error channel. Only the first is a retry." frame={false}>
+
+```
+   provider response
+        │
+        ├── 429 · 5xx · 529 · socket reset
+        │      └──▶ TRANSIENT      retry, one layer, backoff + jitter
+        │
+        ├── 400 context_length_exceeded
+        │      └──▶ PERMANENT      never retry. compact and re-enter.
+        │                          the same prompt fails identically,
+        │                          and you pay for each rejection
+        │
+        ├── refusal · content policy
+        │      └──▶ POLICY         never retry. escalate.
+        │                          retrying a refusal is searching for
+        │                          a phrasing that gets past a control
+        │
+        └── 400 malformed tool args (the MODEL's mistake)
+               └──▶ MODEL-FIXABLE  not a transport retry at all —
+                                   return it to the model as an instruction
+
+   declared to the SDK as: nonRetryableErrorTypes: [...]
+```
+
+</Figure>
+
+Four rules:
+
+**Classify at the adapter, with your own stable codes.** The code that made the call knows what it called and what the protocol meant. Assign a code you own: `context_too_long`, `refused`, `bad_arguments`, so metrics, alerts, and the retry policy key on something that survives a vendor rewording their message.
+
+**Declare non-retryable types to the retry machinery.** Do not rely on a `catch` deciding correctly every time. [Activity retry policies take an explicit list](/docs/patterns/durability/tool-as-activity); the SDK then stops on the first attempt instead of looping.
+
+**Split "permanent" into yours and the model's.** `context_too_long` is your bug and the recovery is [compaction](/docs/patterns/context/context-compaction). `account 9917 not found` is the model's mistake and the recovery is [returning the error as an instruction](/docs/tools/errors-as-instructions). A transport retry there produces three identical failures before the model ever sees one.
+
+**Never retry a refusal.** Route it to a human. A rephrase-and-retry loop is a workaround for a control, and if the refusal was correct you have built the thing that eventually defeats it.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/adapters/classify.ts"
+export type Cls = 'transient' | 'permanent' | 'policy' | 'model_fixable';
+
+export class ModelError extends Error {
+  constructor(
+    readonly cls: Cls,
+    readonly code: string,          // OURS, stable across vendor rewording
+    message: string,
+    readonly retryAfterMs?: number,
+  ) { super(message); }
+}
+
+// One place per dependency. The context needed to classify exists here
+// and nowhere downstream.
+export function classifyModelError(status: number, body: any): ModelError {
+  if (status === 429)
+    return new ModelError('transient', 'rate_limited', '…', retryAfterFrom(body));
+  if (status >= 500)
+    return new ModelError('transient', 'provider_unavailable', '…');
+
+  // Deterministic: the same prompt fails identically, three times, billed.
+  if (isContextLength(body))
+    return new ModelError('permanent', 'context_too_long', '…');
+
+  // A policy outcome. Retrying it is searching for a phrasing that passes.
+  if (isRefusal(body))
+    return new ModelError('policy', 'refused', '…');
+
+  return new ModelError('permanent', 'bad_request', '…');
+}
+
+// Declared to the SDK, so it stops on attempt one rather than looping.
+export const MODEL_RETRY = {
+  maximumAttempts: 3,
+  nonRetryableErrorTypes: ['context_too_long', 'refused', 'bad_request'],
+};
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/adapters/classify.py"
+Cls = Literal["transient", "permanent", "policy", "model_fixable"]
+
+
+@dataclass
+class ModelError(Exception):
+    cls: Cls
+    code: str            # OURS, stable across vendor rewording
+    message: str
+    retry_after_ms: int | None = None
+
+
+def classify_model_error(status: int, body: dict) -> ModelError:
+    # One place per dependency. The context needed to classify is here.
+    if status == 429:
+        return ModelError("transient", "rate_limited", "…", retry_after_from(body))
+    if status >= 500:
+        return ModelError("transient", "provider_unavailable", "…")
+
+    # Deterministic: the same prompt fails identically, three times, billed.
+    if is_context_length(body):
+        return ModelError("permanent", "context_too_long", "…")
+
+    # A policy outcome. Retrying it is searching for a phrasing that passes.
+    if is_refusal(body):
+        return ModelError("policy", "refused", "…")
+
+    return ModelError("permanent", "bad_request", "…")
+
+
+# Declared to the SDK, so it stops on attempt one rather than looping.
+MODEL_RETRY = RetryPolicy(
+    maximum_attempts=3,
+    non_retryable_error_types=["context_too_long", "refused", "bad_request"],
+)
+```
+
+</Tab>
+</Tabs>
+
+`retryAfterFrom(body)` is captured here because it is available here and nowhere later. A backoff curve computed downstream is a guess made without information the provider already gave you.
+
+## Trade-offs
+
+**Misclassification is costly in both directions.** Marking a transient error non-retryable fails runs that would have succeeded on attempt two; marking a permanent one retryable burns money on guaranteed failures. The asymmetry favours caution on the retryable side. A run that fails and escalates is recoverable, a loop that spends a hundred dollars is not.
+
+**Vendor error shapes drift.** New codes appear, messages change, and a classifier tuned to one provider is wrong for the [fallback](/docs/patterns/failure/fallback-model-ladder). Keep one classifier per provider and treat an unclassified error as *permanent*. Failing closed is cheaper than looping.
+
+**`bad_request` hides two things.** It is usually your serialization bug, occasionally something the model produced. Log the body, alert on the rate, and split the code once you can tell them apart. Otherwise a real regression looks like normal noise.
+
+**The model-fixable class is not a retry at all.** It belongs in the [dispatcher](/docs/capstone/building-it), returning a result rather than raising. Putting it in the retry policy is a category error that costs three round trips.
+
+## When not to use it
+
+**When you only call one endpoint, once, with a fixed prompt.** A single classification call with a bounded input has no long run to protect and no accumulating context to overflow.
+
+**When the SDK already classifies faithfully.** Some clients distinguish these correctly. Verify rather than assume. Check what it does with a context-length error specifically, because that is the one most often folded into a generic `400`.
+
+**As a substitute for preventing the error.** `context_too_long` should mostly not happen: [trigger compaction on a threshold](/docs/patterns/context/rolling-summary) rather than discovering the ceiling by hitting it. Classification is the safety net, not the design.
+
+<Aside type="caution" title="The refusal loop is a security bug wearing a reliability costume">
+Of the four classes, the refusal is the one where a wrong retry policy stops being expensive and starts being dangerous.
+
+Retrying a refusal means sending a slightly different request until one is accepted. That is precisely the shape of an attack against a content control, and your own retry logic is executing it, at machine speed, against your own provider, with no attacker involved.
+
+Two consequences. If the refusal was correct, you have built the loop that eventually defeats it. If it was wrong, you have hidden a product problem behind a retry instead of fixing the prompt or the routing.
+
+Either way the right response is the same: [escalate](/docs/patterns/control/escalation-ladder), record the refusal with the request, and let a person look at the pattern. A rising refusal rate is [a drift signal](/docs/observability/drift) worth reading, and a retry loop erases it.
+</Aside>
+
+## Related
+
+- [An Error Taxonomy for Agents](/docs/reliability/error-taxonomy): the five classes, and the fifth one that never raises
+- [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries): what to do with the errors that *are* retryable
+- [Tool as Activity](/docs/patterns/durability/tool-as-activity): where the non-retryable list is declared
+- [Errors as Instructions](/docs/tools/errors-as-instructions): the model-fixable class, written for its actual consumer
+- [Fallback Model Ladder](/docs/patterns/failure/fallback-model-ladder): why only transient failures may fall back
