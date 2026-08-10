@@ -1,0 +1,189 @@
+---
+title: "Retrieval on Demand"
+description: "Let the agent pull context through a tool instead of pre-loading it."
+---
+
+## Problem
+
+The pipeline retrieves eight chunks for every ticket before the model sees anything, and stuffs them into the prompt.
+
+For ticket #8817, *"total tonnage shipped to Iberia in Q2,"* none of the eight are relevant, because [the answer is a SQL query](/docs/retrieval/where-does-the-answer-live) and no document contains it. Six thousand tokens of policy text are now in the context, competing for attention with the question and [sitting exactly where attention is weakest](/docs/foundations/context-window).
+
+For ticket #8812, a returns question, the eight chunks are relevant and *insufficient*: the answer needs the returns policy and the product-family exception, and the second one ranked eleventh.
+
+One fixed `k`, chosen before the question is understood, is simultaneously too much and too little. And in a multi-turn run the mismatch compounds: the pre-loaded chunks were selected for turn one and are still being re-sent at turn fourteen, when the conversation has moved on.
+
+## Forces
+
+- **How much context is needed varies by question**, and is not knowable before reading it.
+- **Some questions need none.** A fixed pipeline pays anyway.
+- **The agent can judge relevance after a first look**, which a pre-retrieval step cannot.
+- **Every extra search costs a turn**: latency and tokens on the critical path.
+- **An agent that can choose to search can also choose not to**, and be wrong about it.
+- **Unbounded searching is a real failure mode**: an agent that keeps refining a query it cannot satisfy.
+
+## Solution
+
+Expose retrieval as a **tool the agent calls**, rather than a stage that runs before it.
+
+<Figure caption="Pre-loading decides before the question is understood. On-demand decides after, including deciding not to search at all." frame={false}>
+
+```
+   PRE-LOADED                          ON DEMAND
+   ─────────────────────────           ────────────────────────────
+   question                            question
+      │                                   │
+   retrieve k=8  ← fixed, blind           ▼
+      │                                model reads it
+      ▼                                   │
+   [8 chunks] + question              ┌───┴────┐
+      │                               │        │
+      ▼                          no search   search_policies("returns,
+   answer                            │        opened components")
+                                     │        │
+   always 6k tokens                  │        ▼  3 chunks
+   sometimes irrelevant              │     may search again, narrower
+   sometimes insufficient            ▼        │
+                                  answer ◀────┘
+
+                                   0 tokens when unneeded
+                                   refined when insufficient
+```
+
+</Figure>
+
+Four rules:
+
+**The tool takes a query, not a topic.** `search_policies(query, k?)`: the agent writes the query, which is what makes refinement possible. Pair it with [query rewriting](/docs/patterns/retrieval/query-rewriting) inside the tool so a conversational phrasing still retrieves well.
+
+**Return provenance, always.** Chunk IDs and versions come back with the text. That is what makes [citation checkable](/docs/patterns/retrieval/grounded-citations), and it is the field [replay and incident scoping](/docs/observability/replay-debugging) both need.
+
+**Cap the searches per run.** Three or four. An agent that has searched four times and not found it should [escalate](/docs/human-in-the-loop/escalation-and-audit), not search a fifth time. The fifth search is almost never the one that works, and unbounded refinement is how a cheap run becomes an expensive one.
+
+**Enforce the filter inside the tool.** Tenant, trust class, and version predicates are [authorization](/docs/retrieval/metadata-and-authorization), so the model supplies the query and never the filter.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/search-policy.ts"
+export const searchPolicies: ToolDef = {
+  name: 'search_policies',
+  // The description is prompt text: it must say when NOT to call this.
+  description: [
+    'Search Meridian policy documents. Use for questions about returns,',
+    'warranties, freight terms, or contract language.',
+    'Do NOT use for order status, quantities, or dates — those are in the',
+    'warehouse; call query_warehouse instead.',
+  ].join(' '),
+  schema: z.object({
+    query: z.string().describe('A specific question or phrase to match.'),
+    k: z.number().min(1).max(10).default(5),
+  }),
+
+  async execute({ query, k }, ctx) {
+    if (ctx.searchCount >= MAX_SEARCHES) {
+      // A limit reached is an instruction, not an error.
+      return errorForModel(
+        'search_limit',
+        `Already searched ${MAX_SEARCHES} times. If the answer has not been ` +
+        `found, escalate rather than searching again.`,
+      );
+    }
+
+    const hits = await index.search(rewrite(query, ctx), {
+      k,
+      // Authorization, not relevance. Never from the model.
+      filter: { tenantId: ctx.tenantId, trust: ctx.allowedTrust, current: true },
+    });
+
+    // External chunks taint the run — see /security/untrusted-retrieval/
+    if (hits.some(h => h.trust === 'external')) ctx.taint.mark('corpus');
+
+    return hits.map(h => ({
+      id: h.id, version: h.version, text: h.text,   // provenance travels
+    }));
+  },
+};
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/search_policies.py"
+class SearchPolicy(BaseModel):
+    query: str = Field(description="A specific question or phrase to match.")
+    k: int = Field(default=5, ge=1, le=10)
+
+
+# The description is prompt text: it must say when NOT to call this.
+DESCRIPTION = (
+    "Search Meridian policy documents. Use for questions about returns, "
+    "warranties, freight terms, or contract language. "
+    "Do NOT use for order status, quantities, or dates — those are in the "
+    "warehouse; call query_warehouse instead."
+)
+
+
+async def execute(args: SearchPolicy, ctx) -> list[dict] | dict:
+    if ctx.search_count >= MAX_SEARCHES:
+        # A limit reached is an instruction, not an error.
+        return error_for_model(
+            "search_limit",
+            f"Already searched {MAX_SEARCHES} times. If the answer has not "
+            f"been found, escalate rather than searching again.",
+        )
+
+    hits = await index.search(
+        rewrite(args.query, ctx),
+        k=args.k,
+        # Authorization, not relevance. Never from the model.
+        filter={"tenant_id": ctx.tenant_id, "trust": ctx.allowed_trust,
+                "current": True},
+    )
+
+    if any(h.trust == "external" for h in hits):
+        ctx.taint.mark("corpus")     # see /security/untrusted-retrieval/
+
+    return [{"id": h.id, "version": h.version, "text": h.text} for h in hits]
+```
+
+</Tab>
+</Tabs>
+
+The `Do NOT use for…` clause is doing more work than it looks. An agent with a search tool and a SQL tool will reach for search on a quantity question unless told plainly not to, and [routing before retrieving](/docs/retrieval/where-does-the-answer-live) is the decision that matters most. The tool description is where that routing rule is actually enforced at runtime.
+
+## Trade-offs
+
+**Latency.** A search is an extra turn: a model call, a retrieval, and another model call to use it. Pre-loading answers in one round trip. For an interactive assistant with a strict first-response budget, this is the real cost, and the mitigation is to pre-load *only* on the paths where you know retrieval is always needed.
+
+**The agent may not search when it should.** The characteristic failure. A model that believes it knows the return policy will answer from parametric knowledge, confidently and wrongly. Two defenses: a system prompt that makes citation mandatory for policy claims, and an eval case that fails a run whose answer cites nothing.
+
+**Cost is variable rather than fixed.** Usually cheaper on average and occasionally much more expensive, which makes the [p99 run cost](/docs/observability/cost-accounting) the number to watch rather than the mean.
+
+**Cache behaves better, not worse.** Pre-loaded chunks sit near the front of the prompt, where they [invalidate everything after them](/docs/patterns/context/stable-prefix). Retrieved results arrive as appended tool messages, below the breakpoint. This is one of the few places where the more flexible design is also the more cache-friendly one.
+
+## When not to use it
+
+**Single-turn, latency-critical paths.** A search box, an autocomplete, a "summarize this page" button. One retrieval, one generation, done.
+
+**When you always need the same context.** If every run reads the same policy summary, put it in the [stable prefix](/docs/patterns/context/stable-prefix) and cache it. Retrieving invariant material on demand pays a turn for nothing.
+
+**When the corpus is small enough to include entirely.** A few thousand tokens of documentation belongs in the prompt. Retrieval infrastructure for material that fits is [the most over-provisioned box on the diagram](/docs/production/reference-architecture).
+
+**When the agent cannot be trusted to search.** If evals show it answering policy questions without citing, fix that first, with a mandatory-citation gate or a forced first retrieval, because on-demand retrieval that the agent skips is worse than pre-loading.
+
+<Aside type="note" title="Where agentic RAG and RAG actually differ">
+The distinction is usually described as an architecture and is really a single decision: **who chooses what to retrieve, and when.** A pipeline chooses before the question is understood, with a fixed `k`. An agent chooses after reading it, and can choose again.
+
+That is genuinely better on precision and genuinely worse on latency and predictability, which is the whole trade. It is not a new component: the index, the embeddings, the filters, and the [evals](/docs/retrieval/retrieval-evals) are identical. Only the caller moved.
+</Aside>
+
+## Related
+
+- [Query Rewriting](/docs/patterns/retrieval/query-rewriting): what the tool should do to the agent's query before searching
+- [Tool Result Truncation](/docs/patterns/context/tool-result-truncation): capping what comes back, so on-demand does not become unbounded
+- [Stable Prefix](/docs/patterns/context/stable-prefix): why appended results cache better than pre-loaded ones
+- [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool): the same pattern, catalogued from the retrieval side
+- [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live): the routing decision the tool description encodes
