@@ -1,0 +1,151 @@
+---
+title: "Graph Retrieval"
+description: "Traversal, neighborhoods, and returning a subgraph small enough to fit in a prompt."
+---
+
+
+You have entities, relationships, and a resolution pipeline that keeps them coherent. Now an agent asks a question, and there is an interface problem: a graph query returns a **subgraph**, and a prompt takes **text**, with a [budget](/docs/context/context-as-budget) measured in a few thousand tokens.
+
+That mismatch is the whole chapter. Nearly every disappointing graph integration fails here rather than in the modeling.
+
+## Neighborhoods explode
+
+Start at the Acme account and expand:
+
+```
+   hop 0    Acme                                          1 node
+   hop 1    + 4 contacts, 20 tickets, 60 orders,
+              1 contract                                 86 nodes
+   hop 2    + each ticket's 5 events, each order's
+              8 line items                              ~660 nodes
+   hop 3    + every part on every line item, and
+              every other order containing those parts  thousands
+```
+
+Two hops is already past what you want in a prompt. Three hops is, for most enterprise graphs, "a large fraction of the database," reached by a query that looks completely reasonable.
+
+And **hub nodes** make it abrupt rather than gradual. One node connected to everything, whether a status, a country, or a popular part number, turns a traversal that passes through it into a scan. This is the practical cost of the [attributes-as-entities mistake](/docs/graphs/modeling-entities): a `Status: Open` node connects every open ticket in the company, so two hops from any ticket reaches every open ticket in the company.
+
+## Four patterns, in order of how often you need them
+
+**1 · Point lookup with fixed expansion.** Fetch one entity, expand named relationships to depth one or two. Predictable, bounded, boring, and correct for the large majority of agent questions. `get_account_health(account_id)` expands exactly the four relationships that account health depends on and nothing else.
+
+**2 · Path finding.** How are A and B connected? Bounded by maximum depth, and genuinely something no other retrieval mechanism offers.
+
+**3 · Neighborhood aggregation.** Traverse, then *compute over* the subgraph rather than returning it. This is the pattern most implementations skip, and the next section is about why it matters most.
+
+**4 · Precomputed community summaries.** For whole-corpus questions ("what themes appear across our at-risk accounts"), summarize clusters offline and retrieve the summaries. That's [the next chapter's](/docs/graphs/graphrag) territory, and it's expensive.
+
+Notice that the first pattern is a **parameterized query**, exactly like the [SQL tools](/docs/retrieval/sql-is-still-the-answer) from Part IV. The same discipline applies for the same reasons: you write the traversal, the model supplies the entry point, and it cannot construct a query that walks the whole graph.
+
+## Aggregate at the boundary
+
+Here is the technique that separates working graph integrations from disappointing ones.
+
+The instinct is to serialize the subgraph and hand it over: 86 nodes as JSON, let the model figure it out. Don't. **The model does not need the subgraph. It needs the answer to a question about the subgraph.**
+
+<Figure caption="Same traversal, two ways to return it. One costs 4,000 tokens of attention; the other costs 40 and is easier to reason over." frame={false}>
+
+```
+   ✗  SERIALIZE THE SUBGRAPH          ✓  AGGREGATE AT THE BOUNDARY
+
+   { "account": {...},                 {
+     "tickets": [                        "open_tickets": 6,
+       {"id": 8801, "status": ...},      "escalated_90d": 3,
+       {"id": 8802, "status": ...},      "oldest_open_days": 41,
+       ... 18 more ...                   "order_volume_yoy_pct": -38,
+     ],                                  "renewal_in_days": 60,
+     "orders": [ ... 60 ... ],           "owner_changed_days_ago": 74
+     "contract": {...}                 }
+   }
+     ~4,000 tokens                       ~40 tokens
+     the model must count                the database counted
+```
+
+</Figure>
+
+The right-hand version is what the risk question actually needs. Counting, grouping, and date arithmetic are things a database does exactly and a language model does approximately, at output-token rates, over content that also crowds out everything else in the window.
+
+This is [result design](/docs/tools/result-design) applied to graphs, and the rule generalizes: **traverse in the graph, compute in the graph, return the conclusion.** Return the underlying nodes only when the model needs to quote or cite them, and then return the five that matter, not all sixty.
+
+<Aside type="caution" title="Sampling is not aggregation">
+A common fallback when a neighborhood exceeds the limit is to sample it: take 50 nodes uniformly and send those.
+
+This is worse than it looks. Uniform sampling discards exactly the signal you wanted: the three escalated tickets among twenty are the answer, and a uniform sample keeps them with probability 15%. You have converted a bounded, complete aggregate into an unbiased-but-noisy estimate of something nobody asked for.
+
+If the neighborhood is too big, aggregate it or rank it. Sample only when you genuinely want a representative example rather than a conclusion.
+</Aside>
+
+## How to serialize what's left
+
+When you do put graph structure in the prompt, the format is not neutral, and the evidence is more specific than "use JSON."
+
+| Format | Best for |
+| --- | --- |
+| **Linearized triples** (`Acme —RAISED→ Ticket 8801`) | Fact-intensive lookups; outperforms prose descriptions |
+| **Structured JSON** | General comprehension; the reliable default |
+| **Code-like representations** | Complex reasoning over structure |
+| **Natural-language prose** | Weakest for fact-intensive questions |
+
+The counterintuitive row is the last one. Converting a subgraph into flowing sentences feels more model-friendly and measures worse on factual questions. It costs tokens and blurs the structure that made the graph worth querying.
+
+Two further rules from the same literature. **Deduplicate and order** the triples you emit: redundant edges inflate context for nothing, and a stable ordering (by relationship type, then by recency) makes the structure legible instead of arbitrary. And keep entity labels **human-readable rather than opaque IDs**, `Acme Industrial` rather than `n_4471`, because a model reasons better over names, and because the reply will be more grounded if the identifier it saw is the one it can cite.
+
+## Bound everything, and report the bound
+
+Every traversal needs three limits: **maximum depth**, **maximum nodes**, and **a timeout**. That is the same discipline as [the agent loop](/docs/first-agent/the-loop-by-hand), for the same reason: an unbounded traversal is an unbounded query.
+
+And the same rule about what happens at the limit: **hitting a bound is a result, not a truncation to hide.** Return it explicitly:
+
+```json
+{ "result": {...}, "truncated": true, "reason": "node_limit",
+  "hint": "Acme has 340 related orders; narrow by date range." }
+```
+
+Silently returning the first 50 of 340 nodes is how an agent concludes that an account has 50 orders. The hint matters too: told what happened, the model can re-query with a narrower scope, which is precisely the adaptive behaviour you bought an agent for.
+
+## Authorization travels per hop
+
+The subtlest security issue in Part V, and it does not have an analogue in document retrieval.
+
+In [Part IV](/docs/retrieval/metadata-and-authorization), the filter was applied once: this principal may see these chunks. A traversal is different, because **you can enter at an authorized node and walk to an unauthorized one.** The principal may see the Acme account. Two hops away is a shared supplier; one hop from there is another customer's order. Nothing about the entry check prevents that.
+
+So the filter must be applied **at every hop**, as a predicate on traversal rather than a check at the boundary:
+
+- Filter the frontier at each expansion, not the result set at the end. Post-filtering a traversal means you already read what you shouldn't have, and worse, may have used it to decide where to go next, which leaks structure even if you drop the nodes.
+- Treat edges as permissioned, not just nodes. The existence of a relationship can itself be confidential: that these two companies transact is sometimes the sensitive fact.
+- Cap depth partly as a security control. Each additional hop widens what a mistake can reach.
+
+This is the row that most graph integrations get wrong, because traversal APIs make the entry check obvious and the per-hop check optional.
+
+## The graph is an index too
+
+One closing reminder, because a graph feels authoritative in a way a vector index doesn't: it is still a copy, built at ingestion time, and everything from [Where Does the Answer Live](/docs/retrieval/where-does-the-answer-live) applies.
+
+An account owner who changed this morning is whatever your last sync said. So the pattern that works is the same one: **traverse the graph for structure, then verify the volatile facts live** before acting on them. The graph tells you Acme has three escalated tickets and a renewal in sixty days; the ticket system tells you whether one was resolved an hour ago.
+
+Use the graph to find *what to look at*. Use the source of truth to decide *what to do*.
+
+## Atlas, concretely
+
+One tool: `get_account_health(account_id)`. Fixed traversal, depth two, expanding four named relationships. Aggregates in the query, covering counts, ages, and year-over-year deltas, and returns a flat object of about a dozen fields plus the IDs of the three most recent escalated tickets, so the reply can cite them.
+
+Node cap of 500 with an explicit truncation flag. Per-hop tenant predicate. Two-second timeout. And the volatile fields, ticket status and renewal date, re-checked against their source systems before anything appears in a customer-facing reply.
+
+Twelve fields and three IDs, in place of a subgraph. That is the whole interface between Part V and the rest of the system.
+
+---
+
+Next: [Evaluating Graph Quality](/docs/graphs/evaluating-graph-quality), on nodes, edges, paths, provenance, freshness, and whether the graph improved the answer.
+
+## Takeaways
+
+- A graph query returns a subgraph; a prompt takes a few thousand tokens. That mismatch is where most graph integrations fail.
+- Neighborhoods explode multiplicatively, and hub nodes make it abrupt: a `Status: Open` node connects every open ticket in the company.
+- Prefer point lookup with fixed expansion. It's a parameterized query, and the model supplies only the entry point.
+- Aggregate at the boundary. The model needs the answer about the subgraph, not the subgraph, and counting and date math belong in the database.
+- Sampling is not aggregation. A uniform sample of twenty tickets keeps the three escalated ones by luck.
+- Format matters: triples for fact-heavy questions, structured JSON as the default, prose worst. Deduplicate, order stably, and use readable names rather than opaque IDs.
+- Bound depth, node count, and time, and return the bound explicitly with a hint, so the agent can re-query instead of believing a truncated answer.
+- Authorization applies per hop, not at entry. You can start at an allowed node and walk somewhere you aren't allowed, and edges themselves can be confidential.
+- The graph is an index like any other. Traverse for structure, verify volatile facts against the source before acting.
