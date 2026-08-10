@@ -1,0 +1,201 @@
+---
+title: "Reflection"
+description: "Have the agent critique its own output before returning it."
+---
+
+## Problem
+
+The drafted reply is nearly right. It cites the correct policy and gets the credit amount right, and it omits the order number the customer asked about and uses a tone that reads as dismissive.
+
+Nothing is wrong enough to fail a check. There is no exception, no invalid citation, no unauthorized action, just output that a careful person would have improved before sending.
+
+The obvious move is to ask the model to review its own work before returning it. That is **reflection**, it is the most widely deployed agent pattern after the loop itself, and it is the one most often deployed in the form that does not work.
+
+## Forces
+
+- **A second pass costs one model call**, cheap relative to the run, and on the latency path.
+- **The model has more information at review time**: the complete draft, which did not exist when it started writing.
+- **Asking a model to find its own reasoning errors does not reliably work**, and can make things worse.
+- **External feedback changes this completely.** A signal from outside the model is something it can act on.
+- **Unbounded revision loops** oscillate, drift, or converge on something worse.
+- **Every revision is another chance to introduce an error** into text that was already acceptable.
+
+## Solution
+
+Reflect **against an external signal**, not against the model's own judgment, and bound the loop to one or two passes.
+
+<Figure caption="The difference between the two shapes is whether the critique has an input the generator did not already have." frame={false}>
+
+```
+   ✗ INTRINSIC — no new information enters
+   ┌─────────┐   "review your answer   ┌─────────┐
+   │ draft   │ ─────────────────────▶  │ revise  │
+   └─────────┘    and improve it"      └─────────┘
+                                        ── reported: reasoning accuracy
+                                           does not improve, and can drop
+
+   ✓ GROUNDED — the critique reads something the draft did not
+   ┌─────────┐        ┌────────────────────┐
+   │ draft   │ ─────▶ │  EXTERNAL SIGNAL   │
+   └─────────┘        │  · schema / lint    │
+        ▲             │  · test run         │
+        │             │  · grounding check  │
+        │             │  · tool re-read     │
+        │             │  · rubric + sources │
+        │             └──────────┬─────────┘
+        │                        │ findings
+        └────── revise ◀─────────┘
+                bounded: 1–2 passes, then ship or escalate
+```
+
+</Figure>
+
+Four rules:
+
+**The critique must have an input the draft did not.** A validator's errors, a failing test, a [grounding check's list of unsupported claims](/docs/patterns/retrieval/grounded-citations), a re-read of the record. Without that, the review is the same model, on the same information, producing a different sample.
+
+**Prefer a deterministic signal where one exists.** Schema validation, a linter, a compile step, a citation-resolution check. These are free, total, and cannot hallucinate a problem, and if the only feedback you can produce is a model's opinion, that is [a critic](/docs/patterns/control/critic-reviser), with its own caveats.
+
+**Bound the loop hard, and default to one pass.** Revision is not monotonic. Cap at two, track whether each pass actually cleared findings, and stop when it does not, a pass that changes text without clearing anything is drift.
+
+**Keep what was already right.** Feed the *specific findings*, not "improve this." A targeted revision preserves the parts nobody complained about; an open-ended one rewrites them.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/reflect.ts"
+const MAX_PASSES = 2;
+
+// The signal comes from OUTSIDE the model. This is the whole pattern.
+export interface Finding { code: string; detail: string }
+
+export async function reflect(
+  draft: string, ctx: RunContext,
+): Promise<{ text: string; escalate?: string }> {
+  let text = draft;
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const findings = await critique(text, ctx);
+    if (findings.length === 0) return { text };
+
+    // Targeted revision: the findings, not "make this better". An open
+    // prompt rewrites the parts nobody complained about.
+    const revised = await model.complete({
+      system: REVISE_PROMPT,
+      input: { text, findings, sources: ctx.retrievedRefs },
+    });
+
+    const remaining = await critique(revised, ctx);
+    // Revision is not monotonic. A pass that clears nothing is drift.
+    if (remaining.length >= findings.length) {
+      return { text, escalate: 'revision did not converge' };
+    }
+    text = revised;
+  }
+
+  const left = await critique(text, ctx);
+  return left.length ? { text, escalate: 'findings remain after 2 passes' } : { text };
+}
+
+// Deterministic checks first — free, total, and cannot invent a problem.
+async function critique(text: string, ctx: RunContext): Promise<Finding[]> {
+  return [
+    ...schemaFindings(text),                      // structure
+    ...unresolvedCitations(text, ctx.retrievedIds), // set membership
+    ...ungroundedAmounts(text, ctx.scratchpad),     // matches a tool result?
+  ];
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/reflect.py"
+MAX_PASSES = 2
+
+
+@dataclass(frozen=True)
+class Finding:
+    code: str
+    detail: str
+
+
+async def reflect(draft: str, ctx) -> tuple[str, str | None]:
+    text = draft
+
+    for _ in range(MAX_PASSES):
+        findings = await critique(text, ctx)
+        if not findings:
+            return text, None
+
+        # Targeted revision: the findings, not "make this better".
+        revised = await model.complete(
+            system=REVISE_PROMPT,
+            input={"text": text, "findings": findings, "sources": ctx.retrieved_refs},
+        )
+
+        remaining = await critique(revised, ctx)
+        # Revision is not monotonic. A pass that clears nothing is drift.
+        if len(remaining) >= len(findings):
+            return text, "revision did not converge"
+        text = revised
+
+    left = await critique(text, ctx)
+    return text, ("findings remain after 2 passes" if left else None)
+
+
+async def critique(text: str, ctx) -> list[Finding]:
+    # Deterministic checks first — free, total, cannot invent a problem.
+    return [
+        *schema_findings(text),                        # structure
+        *unresolved_citations(text, ctx.retrieved_ids),  # set membership
+        *ungrounded_amounts(text, ctx.scratchpad),       # matches a tool result?
+    ]
+```
+
+</Tab>
+</Tabs>
+
+`critique` returning deterministic findings is what separates this from a prompt trick. Every check in it reads state the generator could not influence: the retrieved IDs recorded by the retriever, the [scratchpad values written only by tools](/docs/patterns/context/structured-scratchpad). Those are assertions, not opinions.
+
+## Trade-offs
+
+**Latency and cost per pass.** One or two extra model calls on every response, plus the critique. On an interactive path this is felt; reserve it for output that leaves the perimeter.
+
+**It can make things worse.** Not a theoretical risk, a revision pass rewrites text that was fine, introduces a new error, or softens something that needed to be direct. The non-convergence check bounds it; nothing eliminates it.
+
+**Findings are only as good as the checks.** Reflection with a weak critique is theatre with a bill attached. If you cannot produce a signal the generator did not already have, the honest answer is not to run the pass.
+
+**It does not catch what the checks do not cover.** A fluent, well-cited, correctly-grounded paragraph that misreads the customer's actual question passes everything here. That is [the semantic class](/docs/reliability/error-taxonomy), and it needs [evals](/docs/evals/eval-discipline), not a reflection step.
+
+## When not to use it
+
+**With no external signal.** This is the important one. If the pass consists of *"review your answer and improve it,"* skip it, see the caution below.
+
+**On high-volume, low-stakes output.** Doubling the cost of a tier-0 status reply to marginally improve tone is a bad trade. Reserve it for the paths where a wrong or clumsy answer is expensive.
+
+**When a deterministic fix is available.** If the finding is *"the citation does not resolve,"* the right response may be to re-retrieve, not to ask the model to rewrite around it.
+
+**When latency is the binding constraint.** Two extra round trips is not a sub-second experience.
+
+<Aside type="caution" title="Intrinsic self-correction does not work, and this is measured">
+The version everyone builds first, ask the model to review its own reasoning with no new information, has been evaluated directly. Huang et al. ([ICLR 2024](https://arxiv.org/abs/2310.01798)) found that LLMs cannot reliably improve reasoning through intrinsic self-correction, and that performance sometimes **degrades** after the pass. Their reported example: accuracy on a grade-school math benchmark falling from 95.5% to 91.5% after self-review.
+
+The reason is not mysterious. At review time the model has exactly the information it had while generating, so a critique that finds a problem is a different sample rather than a new insight, and a critique that finds a problem where none exists produces a revision that introduces one.
+
+The same work is clear about the other half: **when valid external feedback is available, using it helps.** So the pattern is not discredited, it is *conditioned*. Reflection with a validator, a test, or a grounding check is a real technique. Reflection with a mirror is a token cost with a chance of making the answer worse.
+</Aside>
+
+## Related
+
+- [Critic and Reviser](/docs/patterns/control/critic-reviser): a separate model as the external signal, and why independence matters
+- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): the best deterministic critique available to a retrieval agent
+- [Output Guardrail](/docs/patterns/security/output-guardrail): the same checks, positioned as a gate rather than a revision loop
+- [Evaluator-Optimizer](/docs/workflows/evaluator-optimizer): the chapter, including bounded iteration
+- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): why the pass count is a hard cap
+
+## References
+
+- [Large Language Models Cannot Self-Correct Reasoning Yet](https://arxiv.org/abs/2310.01798), Huang et al., ICLR 2024, why self-review without external feedback degrades rather than improves.
