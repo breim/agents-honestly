@@ -1,0 +1,232 @@
+---
+title: "Computer-Using Agents"
+description: "Browsers, desktops, screenshots, DOMs, waits, session isolation, visual injection, and the cases where an API remains the better tool."
+---
+
+The supplier portal has no API. A person signs in, searches an order, opens a modal, copies a delivery date, and downloads a PDF. So someone gives Atlas a browser and calls the missing integration solved.
+
+The browser has turned one typed tool into hundreds of possible clicks. Every pixel can change, every page can contain hostile text, and the session holds credentials that may reach far beyond the task.
+
+Computer use is a tool boundary with a much larger action space.
+
+## Choose the narrowest control plane
+
+There are four ways to automate a screen, in descending structural reliability:
+
+| Control | What the agent targets | Failure mode |
+| --- | --- | --- |
+| Direct API | Typed operation | Contract or transport change |
+| DOM or accessibility locator | Role, label, text, test ID | Semantic UI change |
+| Browser script | Page code and selectors | Implementation change |
+| Screenshot and coordinates | Pixels and positions | Any visual change |
+
+Use an API when one exists. For browser work, prefer semantic locators over coordinates. Reserve screenshot control for surfaces that expose no useful structure, such as a remote desktop or canvas application.
+
+Playwright's official guidance recommends user-facing locators such as role, label, and text. It warns that long CSS or XPath chains break when DOM structure changes. Its actionability checks also wait for a target to be visible, stable, enabled, and able to receive events before clicking. [Playwright locators](https://playwright.dev/docs/locators) and [auto-waiting](https://playwright.dev/docs/actionability) are good models even when another runtime drives the browser.
+
+<Figure caption="A browser action is observe, resolve, check, act, and verify. The model should not collapse those into one click." frame={false}>
+
+```text
+observe page
+     |
+     v
+resolve target by role and name
+     |
+     v
+check page, account, action, and risk
+     |
+     v
+perform one action
+     |
+     v
+verify expected state transition
+     |
+     +---- mismatch ----> stop or recover
+```
+
+</Figure>
+
+## One action, one postcondition
+
+"Complete the return" is a goal. It is not a safe browser operation. The executor should expose small actions and verify each result.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/browser/cancel-order.ts"
+export async function cancelOrder(page: Page, orderId: string) {
+  await page.getByRole('textbox', { name: 'Order ID' }).fill(orderId);
+  await page.getByRole('button', { name: 'Search' }).click();
+
+  const result = page.getByRole('row', { name: new RegExp(orderId) });
+  await expect(result).toBeVisible();
+  await result.getByRole('link', { name: 'Open' }).click();
+
+  await expect(page.getByRole('heading', { name: `Order ${orderId}` }))
+    .toBeVisible();
+
+  return {
+    observedOrderId: orderId,
+    cancel: async () => {
+      await page.getByRole('button', { name: 'Cancel order' }).click();
+      await expect(page.getByRole('dialog', { name: 'Confirm cancellation' }))
+        .toBeVisible();
+    },
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/browser/cancel_order.py"
+async def open_cancel_order(page: Page, order_id: str):
+    await page.get_by_role("textbox", name="Order ID").fill(order_id)
+    await page.get_by_role("button", name="Search").click()
+
+    result = page.get_by_role("row", name=re.compile(order_id))
+    await expect(result).to_be_visible()
+    await result.get_by_role("link", name="Open").click()
+
+    await expect(
+        page.get_by_role("heading", name=f"Order {order_id}")
+    ).to_be_visible()
+
+    async def request_cancel():
+        await page.get_by_role("button", name="Cancel order").click()
+        await expect(
+            page.get_by_role("dialog", name="Confirm cancellation")
+        ).to_be_visible()
+
+    return {"observed_order_id": order_id, "cancel": request_cancel}
+```
+
+</Tab>
+</Tabs>
+
+The code stops at the confirmation dialog. A separate policy gate approves the effect. The model never receives a generic `click(x, y)` capability for an action whose meaning the application can name.
+
+## Visual state is untrusted input
+
+A webpage can contain instructions in prose, images, hidden text, filenames, notifications, or downloaded documents. The agent sees them in the same observation channel as legitimate UI labels.
+
+The official Claude computer-use guidance warns that content on webpages or in images may override instructions or induce mistakes. It recommends a dedicated environment, minimal privileges, restricted network access, no sensitive data, and human confirmation for actions with meaningful consequences. [Claude computer use security guidance](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
+
+Apply the same taint model as retrieval:
+
+```text
+trusted control state
+  application route, expected domain, user scope
+
+untrusted observation
+  page text, pixels, downloads, tooltips, chat messages
+
+policy decision
+  deterministic code outside the computer session
+```
+
+Page text may help find a button. It never expands the allowed domain, account, recipient, amount, or operation.
+
+## A disposable session is the security boundary
+
+Run each task in a dedicated browser profile or disposable virtual machine. Bind it to one principal, one tenant, and one operation class.
+
+The session needs:
+
+- an allowlist of domains and redirect targets;
+- short-lived credentials scoped to the task;
+- no access to personal browser cookies, password managers, or clipboard history;
+- an isolated downloads directory;
+- file scanning before any downloaded content enters context;
+- limits on time, storage, network, and screenshots;
+- destruction after completion or escalation.
+
+Do not place a broad service-account password inside the browser image. Use a broker that mints a short-lived session after checking the run's delegated identity. The browser gets the session, not the reusable credential.
+
+<Aside type="caution" title="Login is an effect too">
+Accepting cookies, granting OAuth consent, agreeing to terms, solving an identity challenge, or changing a password can create legal or security consequences. Treat them as named operations with policy, not navigation the agent may improvise.
+</Aside>
+
+## Recovery needs a state model
+
+Pages drift. Sessions expire. A modal appears. The network returns an error after the remote system accepted the action.
+
+Record after every meaningful step:
+
+```json
+{
+  "step": "cancel_confirmation_open",
+  "url": "https://supplier.example/orders/481",
+  "page_title": "Order 481",
+  "semantic_snapshot_hash": "sha256:...",
+  "screenshot_id": "shot_8823_07",
+  "expected": ["dialog:Confirm cancellation"],
+  "observed_at": "2026-08-09T14:22:11Z"
+}
+```
+
+On mismatch, re-observe and classify the state. Never repeat the last click blindly. The remote action may already have happened.
+
+For a write, follow the same rule as any other integration: read the result back through an independent route. A cancellation flow ends when the order status says canceled, not when the browser reports that it clicked a button.
+
+## Evaluate trajectories against controlled sites
+
+A browser benchmark needs more than task completion. Score:
+
+- target resolution accuracy;
+- forbidden-domain and forbidden-action rate;
+- duplicate-effect rate;
+- successful recovery from overlays, stale state, and session expiry;
+- number of actions and observations;
+- accessibility-locator use versus coordinate fallback;
+- evidence completeness;
+- latency and cost;
+- correct abstention when the page is outside the known state model.
+
+Build deterministic variants of the site that move buttons, delay responses, insert hostile content, return ambiguous confirmation, and expire the session. A golden screenshot alone overfits the agent to one rendering.
+
+<FrameworkCheck decision="Atlas uses a typed API when available, a task-specific Playwright adapter for the supplier portal, and screenshot control only for the one legacy canvas the DOM cannot describe.">
+<FrameworkOption name="plain">
+
+**Task-specific adapter.** Preferred. Code owns locators, postconditions, identity, and effects. The model chooses the task, not the coordinates.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+**LangGraph.** Useful when the browser investigation has several recovery paths that benefit from explicit state and checkpoints.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal.** Own long waits, retries around session creation, callbacks, and reconciliation after ambiguous remote effects.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas reads orders through the supplier API. Only claims and legacy delivery documents require the portal. The adapter exposes `open_claim`, `upload_evidence`, `read_claim_status`, and `request_submit`, not generic mouse and keyboard tools.
+
+Submission is a tier-1 action. The adapter stops at a stored confirmation view, a reviewer approves it, and a fresh session re-authorizes and submits. A paired status read confirms the claim ID. Every run uses a disposable profile restricted to the supplier domain.
+
+## References
+
+- [Claude computer use tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool), including environment design and security precautions.
+- [Claude tool reference](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference), current tool types and versioning.
+- [Playwright locators](https://playwright.dev/docs/locators), semantic locator guidance and strict target resolution.
+- [Playwright auto-waiting](https://playwright.dev/docs/actionability), actionability checks and retrying assertions.
+
+---
+
+Next: [Coding Agents and Workspaces](/docs/tools/coding-agents-and-workspaces), applying the same narrow-capability and isolated-session rules to a repository rather than a browser.
+
+## Takeaways
+
+- Prefer APIs, then semantic browser locators, then scripts, and use screenshot coordinates only when no structure exists.
+- Expose task-specific browser operations rather than unrestricted clicks.
+- Make every action prove a postcondition before continuing.
+- Treat pixels, page text, downloads, and visual instructions as untrusted input.
+- Run each task in a disposable, tenant-bound session with short-lived credentials and restricted egress.
+- Consent, login, terms acceptance, and identity changes are effects with policy.
+- Re-observe after uncertainty. Repeating the last click can duplicate a real action.
+- Verify writes through an independent read and score the whole browser trajectory.
