@@ -1,0 +1,189 @@
+---
+title: "Early Exit"
+description: "Detect the answer is already good enough and stop the loop."
+---
+
+## Problem
+
+At turn four the agent has everything it needs: the order, the applicable policy, the computed credit, and a citation that resolves.
+
+It keeps going. It re-reads the policy to be sure, searches for an adjacent clause, re-checks the order total, and drafts a paragraph explaining its reasoning to itself. Four more turns, and because [the transcript is re-sent every turn](/docs/production/cost-engineering), those four cost more than the first four did.
+
+The answer at turn eight is the same as the answer at turn four. Occasionally it is worse, because the extra turns retrieved a superseded document that [now competes with the correct one](/docs/context/context-poisoning).
+
+[Bounded autonomy](/docs/patterns/control/bounded-autonomy) stops a run that is going badly. This is the opposite problem: a run going *well* that does not know it is finished, because nothing in *read a result and decide what to do next* contains a notion of sufficiency.
+
+## Forces
+
+- **The stopping decision is currently the model's**, and models under-stop: continuing always looks locally reasonable.
+- **The later turns are the expensive ones**, because context grows.
+- **Sufficiency is often mechanically checkable**: the required fields are populated, the citation resolves, the amount is grounded.
+- **Stopping too early produces an incomplete answer**, which is worse than a slightly expensive one.
+- **A confidence signal from the model is weak**: it is another guess from the component being assessed.
+- **Extra turns can actively degrade quality**, not merely cost money.
+
+## Solution
+
+**Define sufficiency as a checkable predicate over the [scratchpad](/docs/patterns/context/structured-scratchpad), and evaluate it after every turn.** When it holds, the loop stops.
+
+<Figure caption="Sufficiency is a fact about the state, not an opinion from the model. Check it in code, after every turn." frame={false}>
+
+```
+   turn ──▶ tool ──▶ record into scratchpad
+                          │
+                          ▼
+   ┌────────────────────────────────────────────────────┐
+   │  SUFFICIENT?  a predicate over STATE, in code       │
+   │                                                      │
+   │  policy path:   policy_id ✓  version ✓  cite ✓       │
+   │  data path:     value ✓  units ✓  source ✓           │
+   │  credit path:   order ✓  policy ✓  amount ✓  tier ✓  │
+   │                                                      │
+   │  every field written by a TOOL, with provenance      │
+   └──────────────────┬─────────────────────────────────┘
+                      │
+              yes ────┴──── no ──▶ next turn
+               │
+               ▼
+        compose and finish
+        ── stop at turn 4, not turn 8
+
+   the predicate is per ROUTE: what "enough" means differs
+```
+
+</Figure>
+
+Four rules:
+
+**Define sufficiency per route, not globally.** A policy answer is sufficient with a resolved citation; a credit decision needs an order, a policy version, a grounded amount, and a computed tier. [Routing](/docs/patterns/control/router) is what makes this expressible: one predicate for all requests is either too strict or meaningless.
+
+**Check state, not confidence.** The predicate reads fields the model could not fabricate: values written by tools with provenance, citations that resolve against `retrievedIds`. Asking the model *are you done* returns another guess from the component whose judgment is in question.
+
+**Require provenance, not just presence.** A populated `credit_cents` field is not sufficiency if the model asserted it. Sufficiency means *established by a tool*, which is exactly what the scratchpad's [writer restriction](/docs/patterns/context/structured-scratchpad) already enforces.
+
+**Log near-misses.** When a run exits at turn seven, record which field was the last to be filled. That distribution tells you whether the predicate is too strict, and it is the cheapest available evidence for tuning it.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/cost/early-exit.ts"
+// Sufficiency is per ROUTE. One predicate for everything is either too
+// strict or meaningless.
+const SUFFICIENT: Record<Route, (s: Scratchpad, ctx: RunContext) => Gap[]> = {
+  policy: (s, ctx) => [
+    !s.policy && 'policy',
+    s.policy && !ctx.retrievedIds.has(s.policy.value.chunkId) && 'citation_unresolved',
+  ].filter(Boolean) as Gap[],
+
+  data: (s) => [
+    !s.value && 'value',
+    s.value && !s.value.units && 'units',
+  ].filter(Boolean) as Gap[],
+
+  credit: (s) => [
+    !s.orderId && 'order',
+    !s.policy && 'policy',
+    // Presence is not enough: the amount must have been written by a TOOL.
+    !s.creditCents && 'amount',
+    s.creditCents?.source === 'model' && 'amount_not_grounded',
+  ].filter(Boolean) as Gap[],
+};
+
+export function checkSufficient(state: RunState, ctx: RunContext) {
+  const gaps = SUFFICIENT[state.route](state.scratchpad, ctx);
+
+  if (gaps.length === 0) {
+    ctx.metrics.observe('early_exit.turn', state.turn, { route: state.route });
+    return { done: true as const };
+  }
+
+  // The last gap standing tells you whether the predicate is too strict.
+  ctx.trace.set('sufficiency.gaps', gaps);
+  return { done: false as const, gaps };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/cost/early_exit.py"
+# Sufficiency is per ROUTE. One predicate for everything is either too
+# strict or meaningless.
+def _policy_gaps(s, ctx) -> list[str]:
+    gaps = []
+    if not s.policy:
+        gaps.append("policy")
+    elif s.policy.value["chunk_id"] not in ctx.retrieved_ids:
+        gaps.append("citation_unresolved")
+    return gaps
+
+
+def _credit_gaps(s, ctx) -> list[str]:
+    gaps = []
+    if not s.order_id:
+        gaps.append("order")
+    if not s.policy:
+        gaps.append("policy")
+    if not s.credit_cents:
+        gaps.append("amount")
+    # Presence is not enough: the amount must have been written by a TOOL.
+    elif s.credit_cents.source == "model":
+        gaps.append("amount_not_grounded")
+    return gaps
+
+
+SUFFICIENT = {"policy": _policy_gaps, "credit": _credit_gaps, "data": _data_gaps}
+
+
+def check_sufficient(state, ctx) -> tuple[bool, list[str]]:
+    gaps = SUFFICIENT[state.route](state.scratchpad, ctx)
+    if not gaps:
+        ctx.metrics_observe("early_exit.turn", state.turn, route=state.route)
+        return True, []
+    # The last gap standing tells you whether the predicate is too strict.
+    ctx.trace["sufficiency.gaps"] = gaps
+    return False, gaps
+```
+
+</Tab>
+</Tabs>
+
+`s.creditCents?.source === 'model'` is the check that makes this safe. Without it, a run where the model asserted an amount looks sufficient and exits early with a fabricated number, turning a cost optimization into [a poisoning failure](/docs/context/context-poisoning).
+
+## Trade-offs
+
+**A too-strict predicate buys nothing.** If sufficiency is never reached before the turn cap, you have added a check and saved zero. Watch `early_exit.turn` against the turn distribution: if the two are identical, the predicate is not firing.
+
+**A too-loose predicate ships incomplete answers.** This is the expensive direction. The mitigation is that the predicate demands *tool-written* fields, which is a high bar to clear accidentally, and [the output guardrail](/docs/patterns/security/output-guardrail) is the backstop that catches the ones that slip.
+
+**It is per-route maintenance.** Six routes is six predicates to write, test, and keep aligned as the workflows change. That is real work and it is the same work [partial result return](/docs/patterns/failure/partial-result-return) already requires, since both need the request decomposed into checkable sub-goals.
+
+**It does not catch a wrong answer.** A run can be fully sufficient by every field and wrong, because the retrieved policy was superseded. Sufficiency is about completeness, not correctness: [grounding checks](/docs/patterns/retrieval/grounded-citations) and evals cover the other axis.
+
+## When not to use it
+
+**When runs are already short.** If the p95 is four turns and the cap is six, there is nothing to exit early from.
+
+**When sufficiency cannot be expressed as a predicate.** Open-ended research, drafting, or anything where "enough" is a judgment. Forcing a checkable definition there produces a check that fires at the wrong moment.
+
+**When there is no typed state.** Without a [scratchpad](/docs/patterns/context/structured-scratchpad) whose fields carry provenance, the predicate has nothing trustworthy to read, and reading the transcript instead is checking the model's claims with the model's claims.
+
+**When the extra turns genuinely improve the answer.** Measure it. If turn eight is reliably better than turn four on [the golden set](/docs/patterns/evaluation/golden-set), the run was not wasting money and this pattern is a quality regression.
+
+<Aside type="note" title="The loop under-stops, and the reason is structural">
+[Bounded autonomy](/docs/patterns/control/bounded-autonomy) exists because the loop does not know when to give up. This pattern exists because it does not know when to *finish*, and both come from the same absence: nothing in *read an observation and decide the next action* encodes a notion of enough.
+
+From the model's position, one more check always looks reasonable. It has budget, the tools are there, and verifying something is never obviously wrong. There is no gradient pushing toward stopping, so with no external signal, a run tends to consume whatever it is given.
+
+Which is why both the floor and the ceiling live in code. The model decides *what* to do next; your predicate decides *whether* there is a next. That split is [deterministic rails](/docs/patterns/control/deterministic-rails) applied to the stopping decision, and it is the cheapest turn reduction available, because [turn count is the strongest cost lever there is](/docs/production/cost-engineering), and the turns this removes are the expensive ones at the end.
+</Aside>
+
+## Related
+
+- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the ceiling; this is the floor
+- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): the provenance-carrying state the predicate reads
+- [Router](/docs/patterns/control/router): what makes per-route sufficiency definable
+- [Partial Result Return](/docs/patterns/failure/partial-result-return): the same decomposition, used when coverage is incomplete
+- [Cost Engineering](/docs/production/cost-engineering): why removing late turns saves superlinearly
