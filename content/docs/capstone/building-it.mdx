@@ -1,0 +1,282 @@
+---
+title: "Building It"
+description: "Retrieval, graph, tools, agent, workflow, interface, wired together."
+---
+
+Twenty parts of decisions, assembled into one system. This chapter walks the layers bottom-up, the order things have to exist in, rather than the order they get demoed in, and ends with the one piece of code that no individual chapter could show, because it is where every one of them lands.
+
+## Layer 1 · Tools and data
+
+Meridian's [four systems](/docs/first-agent/the-problem) demand four different access strategies, and the tool catalogue is the place that gets decided.
+
+| Tool | Class | Backing system | Scoping |
+| --- | --- | --- | --- |
+| `search_policies` | ① pure read | Vector index | Per-account filter; trust-split index |
+| `query_warehouse` | ① pure read | Postgres warehouse | RLS by `tenant_id` |
+| `get_order` | ① pure read | Postgres | Must be in the run's `orderIds` |
+| `get_account_graph` | ① pure read | CRM graph | RLS by `tenant_id` |
+| `get_credit` | ① pure read | ERP | Paired read for `issue_credit` |
+| `get_delivery_status` | ① pure read | Mail service | Paired read for `send_reply` |
+| `escalate_to_human` | ③ reversible | Queue | Naturally idempotent, sets a status |
+| `set_ticket_status` | ③ reversible | Ticket system | Naturally idempotent |
+| `issue_credit` | ④ irreversible | ERP | Account from run scope; capped at tier 0 |
+| `send_reply` | ⑤ external | Mail service | **No recipient argument** |
+
+Nine tools, not nineteen. The catalogue is small because [every tool is a permission](/docs/security/least-privilege) and [every description is prompt text you pay for on every turn](/docs/tools/tool-discovery).
+
+Three design decisions in that table are worth naming because they came from different parts of the book and agree:
+
+**`issue_credit` takes `order_id`, not `amount`.** It re-derives the amount from the order and the damage policy server-side. [Poisoning](/docs/context/context-poisoning) said don't let the model's arithmetic reach an effect; [injection](/docs/security/prompt-injection) said the leverage lives in the arguments. Same fix.
+
+**`send_reply` has no recipient parameter.** The contact resolves from the ticket record. [Least privilege](/docs/security/least-privilege) called this removing a parameter rather than validating one; it also closes the [trifecta's](/docs/security/prompt-injection) exfiltration element.
+
+**Every class ④–⑤ tool ships with a paired read.** `get_credit`, `get_delivery_status`. Without them, [state ③, unknown](/docs/tools/idempotency) is permanently unresolvable.
+
+## Layer 2 · Context and knowledge
+
+[Where does the answer live](/docs/retrieval/where-does-the-answer-live) routes before it retrieves, and Meridian's four systems make the routing table concrete:
+
+```
+   "can we return opened relays"        → semantic     → search_policies
+   "tonnage to Iberia, Q2 vs Q1"        → aggregation  → query_warehouse (SQL)
+   "why is Acme at risk"                → relationship → get_account_graph
+   "where is order 4921"                → live state   → get_order
+```
+
+The corpus is **two indexes, split by trust**, not one:
+
+| Index | Trust | Who may retrieve it | Effect on the run |
+| --- | --- | --- | --- |
+| Reviewed policy | `reviewed` | The only source for policy answers | None |
+| Contributed / partner docs | `external` | Troubleshooting only | **Taints** |
+
+That split is what makes the opening scene of [the untrusted-retrieval chapter](/docs/security/untrusted-retrieval) a non-event: the poisoned article can still rank first for refund-timeline questions, and the run that reads it cannot reach `issue_credit`.
+
+Context assembly follows the [budget](/docs/context/context-as-budget): a stable prefix for [caching](/docs/foundations/prompt-caching), pointers rather than payloads, tool results summarized to the fields actually used, and a typed scratchpad that only accepts values a tool returned.
+
+## Layer 3 · The agent runtime
+
+The graph is smaller than people expect, because most of the branching is [deterministic routing](/docs/workflows/routing-and-orchestration) rather than agent judgment: [the determinism test](/docs/workflows/the-determinism-test) applied honestly removes about half of what a first draft contains.
+
+<Figure caption="Four nodes are model calls. Everything else is code. The classify → route split is what keeps the loop short." frame={false}>
+
+```
+   ingest ──▶ classify ──▶ route ─┬──▶ policy_answer ──┐
+   (code)     (small       (code) │    (model+search)  │
+              model)              │                    │
+                                  ├──▶ data_answer ────┤
+                                  │    (model+SQL)     │
+                                  │                    ▼
+                                  ├──▶ action_loop ──▶ compose ──▶ deliver
+                                  │    (model+tools)   (model)     (code)
+                                  │         │
+                                  └──▶ escalate ◀──────┘
+                                       (code)
+```
+
+</Figure>
+
+State is typed and minimal: ticket reference, account and order IDs in scope, the classification, retrieved chunk IDs, tool results, the taint flag, and budget counters. Not the transcript: the transcript is the model's working memory, and [everything that must survive](/docs/context/context-poisoning) lives in the scratchpad.
+
+`action_loop` is the only node that can call a write tool, and it is capped at eight turns, under the run-wide ceiling of twelve, because the node that can move money is the one worth bounding tightest.
+
+## Layer 4 · Durable execution
+
+[One rule decides the layout](/docs/durability/agent-as-workflow): workflow code decides, activity code discovers.
+
+| Element | Where | Why |
+| --- | --- | --- |
+| The graph's control flow | **Workflow** | Deterministic; replayable |
+| Every model call | **Activity** | Nondeterministic by definition |
+| Every tool call | **Activity** | Touches the world |
+| The approval wait | **Workflow timer + signal** | Days, surviving deploys |
+| Retry policy per activity | Workflow config | [One layer](/docs/reliability/timeouts-and-retries) |
+| Credit compensation | **Activity**, invoked by the workflow | [Compensation](/docs/durability/compensation) |
+
+The workflow ID carries the tenant, which is [structural tenancy](/docs/security/tenant-isolation) and per-account queue routing in one decision.
+
+## Layer 5 · Interface
+
+Two things the [interface part](/docs/interface/generative-ui-and-approvals) insists on, both of which are product requirements rather than polish:
+
+**The approval card is rendered and stored as bytes.** Balances settle and documents get superseded, so re-rendering next year proves nothing: the [audit record](/docs/human-in-the-loop/escalation-and-audit) needs what the reviewer actually saw.
+
+**The escalation package is the interface's real deliverable.** Original message, everything retrieved with citations, every tool call and result, and a stated reason. This is [the escalation contract](/docs/first-agent/the-problem), and it is the difference between saving a support lead time and costing them the investigation twice.
+
+## The dispatcher, whole
+
+Every chapter in this book that said *"this belongs in the dispatcher"* meant this function. It is the only place where the whole system is visible at once, and seeing the checks stacked is the point of the capstone.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/dispatch/index.ts"
+export async function dispatch(
+  call: { tool: string; args: Record<string, unknown> },
+  ctx: RunContext,
+): Promise<ToolResult> {
+  const tool = catalogue[call.tool];
+  if (!tool) return errorForModel('unknown_tool', call.tool);   // Part VIII
+
+  // 1 · Schema. Malformed arguments are the model's to fix, not a retry.
+  const parsed = tool.schema.safeParse(call.args);
+  if (!parsed.success) return errorForModel('bad_arguments', parsed.error);
+
+  // 2 · Taint ceiling. Ticket bodies and external chunks taint the run;
+  //     a tainted run cannot reach class ④–⑤.               (Part XVII)
+  const admitted = admit(tool, ctx.taint);
+  if (!admitted.allow) return escalate(ctx, admitted.reason);
+
+  // 3 · Argument scope. The account must be one this run legitimately
+  //     concerns, and the amount within the tier-0 cap.       (Part XVII)
+  const scoped = authorize(call, ctx.scope);
+  if (!scoped.ok) return escalate(ctx, scoped.reason);
+
+  // 4 · Risk tier, computed from the ARGUMENTS, not the tool.  (Part XII)
+  const tier = riskTier(tool, parsed.data, ctx);
+  if (tier > ctx.autonomousTier) return requestApproval(ctx, call, tier);
+
+  // 5 · Budget. Degrade before failing; stop cleanly at the cap.
+  const budget = beforeCall(ctx.budget, tool.estimateMicros(parsed.data));
+  if (budget.action === 'stop') return stopCleanly(ctx);
+
+  // 6 · Identity. sub = the user whose rights apply, act = Atlas.
+  //     Minted here, expiring in minutes, never checkpointed.  (Part XVII)
+  const token = await mintToken(ctx.delegation);
+
+  // 7 · Idempotency. Key derived from OUR state, never the model's.
+  //     Effect and dedup record commit together.               (Part XVI)
+  const key = idempotencyKey(ctx.runId, call.tool, parsed.data);
+
+  return once(key, argsHash(parsed.data), tool.leaseMs, async (tx) => {
+    const result = await withInjection(                 // Part XVI, tests
+      { target: call.tool, index: ctx.step },
+      ctx.faultSchedule,
+      () => tool.execute(parsed.data, { token, tx, tenantId: ctx.tenantId }),
+    );
+
+    // 8 · Record: user, agent, run, tool, args, tier, outcome, cost.
+    //     One write that serves the trace, the audit trail, and billing.
+    await recordAction(tx, ctx, call, tier, result);
+    return shapeForModel(result, tool);                 // Part VIII
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/dispatch/__init__.py"
+async def dispatch(tool_name: str, args: dict, ctx: RunContext) -> ToolResult:
+    tool = CATALOGUE.get(tool_name)
+    if tool is None:
+        return error_for_model("unknown_tool", tool_name)          # Part VIII
+
+    # 1 · Schema. Malformed arguments are the model's to fix, not a retry.
+    ok, parsed, err = tool.schema.validate(args)
+    if not ok:
+        return error_for_model("bad_arguments", err)
+
+    # 2 · Taint ceiling — a tainted run cannot reach class ④–⑤.    (Part XVII)
+    allowed, reason = admit(tool, ctx.taint)
+    if not allowed:
+        return await escalate(ctx, reason)
+
+    # 3 · Argument scope: account in scope, amount under the tier-0 cap.
+    ok, reason = authorize(tool_name, parsed, ctx.scope)
+    if not ok:
+        return await escalate(ctx, reason)
+
+    # 4 · Risk tier, computed from the ARGUMENTS, not the tool.     (Part XII)
+    tier = risk_tier(tool, parsed, ctx)
+    if tier > ctx.autonomous_tier:
+        return await request_approval(ctx, tool_name, parsed, tier)
+
+    # 5 · Budget: degrade before failing, stop cleanly at the cap.
+    if before_call(ctx.budget, tool.estimate_micros(parsed)) == "stop":
+        return await stop_cleanly(ctx)
+
+    # 6 · Identity: sub = user, act = Atlas. Minted here, never checkpointed.
+    token = await mint_token(ctx.delegation)
+
+    # 7 · Idempotency: key from OUR state; effect and record commit together.
+    key = idempotency_key(ctx.run_id, tool_name, parsed)
+
+    async def effect(tx):
+        result = await with_injection(                       # Part XVI, tests
+            tool_name, ctx.step, ctx.fault_schedule,
+            lambda: tool.execute(parsed, token=token, tx=tx,
+                                 tenant_id=ctx.tenant_id),
+        )
+        # 8 · One write serving the trace, the audit trail, and billing.
+        await record_action(tx, ctx, tool_name, parsed, tier, result)
+        return shape_for_model(result, tool)
+
+    return await once(key, args_hash(parsed), tool.lease_ms, effect)
+```
+
+</Tab>
+</Tabs>
+
+Forty lines, eight checks, nine parts of this book. Three properties of that function are the actual argument of the capstone:
+
+**Order matters and it is not arbitrary.** Cheap and total checks come first; the token is minted after every reason to refuse has been evaluated; the idempotency wrapper is outermost around the effect so nothing can commit without its record.
+
+**Refusals escalate; they do not error.** Steps 2, 3, and 4 produce a well-formed question for a human, and `escalate` assembles [the handover package](/docs/patterns/control/escalation-ladder), not just the reason: the original message, what was retrieved, every tool call and its result, and the scratchpad with provenance. [The escalation contract](/docs/first-agent/the-problem) counts a bare *"I couldn't handle this"* as a failure even when the refusal itself was correct, because it costs the human the whole investigation again. A control that returns a stack trace is a control that gets disabled.
+
+**There is exactly one of these.** Every argument in [Part XVII](/docs/security/threat-model) reduces to that sentence. Four dispatch sites means implementing eight checks four times, and you will implement them in three.
+
+<Aside type="note" title="What the model never sees">
+Reading the function from the model's side: it emits a tool name and arguments and receives a result. It has no visibility into the taint flag, the scope, the tier, the token, or the key.
+
+That is the design. Every one of those is [authority, and authority comes from your code](/docs/tools/idempotency): the model supplies intent, and nothing it can say reaches the eight checks. It is also why the [prompt-injection](/docs/security/prompt-injection) defense holds: a hostile ticket can make Atlas *want* to issue a credit to account 9917, and wanting is where it stops.
+</Aside>
+
+## The seven decisions, listed
+
+| Decision | Choice | Because |
+| --- | --- | --- |
+| Workflow or agent? | Workflow shell, agent in one node | [Determinism test](/docs/workflows/the-determinism-test), most branching is routing |
+| One agent or several? | **One**, plus a quarantined reader | [Coordination tax](/docs/multi-agent/the-coordination-tax) exceeds per-ticket margin |
+| Where does the answer live? | Four routes, chosen before retrieval | [Part IV](/docs/retrieval/where-does-the-answer-live) |
+| Durable or not? | Durable, the approval pause decides it | [Part X](/docs/durable-execution/why-durable-execution) |
+| How much autonomy? | Tier 0 unassisted; everything above escalates | [Risk tiers](/docs/human-in-the-loop/risk-tiers) |
+| Where do the checks live? | One dispatcher | Part XVII, all of it |
+| What state survives? | Typed scratchpad + workflow history, not the transcript | [Poisoning](/docs/context/context-poisoning) |
+
+## What we deliberately did not build
+
+Naming these matters as much as the build, because each is a thing a reviewer will ask about:
+
+**No multi-agent topology.** [The three legitimate reasons](/docs/multi-agent/when-not-to) are context overflow, a trust boundary, and separate ownership. Only the second applies, and it is a quarantine rather than a team.
+
+**No fine-tuning.** Every quality problem in the pilot traced to retrieval or context assembly. Fine-tuning would have frozen a corpus that changes weekly.
+
+**No generated code, except one flagged calculator.** [`run_python` is the largest single capability you can grant](/docs/security/sandboxing), and the proration math is three tools' worth of arithmetic.
+
+**No MCP server for internal tools.** [MCP is right for a boundary you don't own](/docs/mcp/when-a-function-is-better); these are functions in the same repo, and wrapping them adds a protocol and a [dynamic-catalogue attack surface](/docs/security/least-privilege) for nothing.
+
+**No memory across tickets in v1.** A [fact store](/docs/context/memory) is a durable place for a wrong belief to live, and the erasure story is real work. Deferred deliberately, with the reason written down.
+
+---
+
+Next: [Hardening It](/docs/capstone/hardening-it), evals, tracing, failure injection, authorization, and the security review.
+
+## Takeaways
+
+- Build bottom-up: tools and data, context, runtime, durability, interface. That is the order things must exist in, not the order they demo in.
+- Nine tools, not nineteen. Every tool is a permission and every description is prompt text billed each turn.
+- `issue_credit` takes an order ID and re-derives the amount. Poisoning and injection arrive at the same fix from different directions.
+- `send_reply` has no recipient argument: removing a parameter beats validating one, and it closes the exfiltration element of the trifecta.
+- Every class ④–⑤ tool ships with a paired read, or "unknown" is permanently unresolvable.
+- Route before retrieving: semantic, aggregation, relationship, live state. Four systems, four strategies.
+- Split the corpus by trust. The poisoned article can still rank first and still cannot reach a write tool.
+- The graph is small because the determinism test removes about half of a first draft's branching.
+- Workflow code decides; activity code discovers. Model calls and tool calls are always activities.
+- Put the tenant in the workflow ID: structural tenancy and queue routing in one decision.
+- Store the rendered approval card as bytes; re-rendering later proves nothing.
+- The dispatcher is forty lines, eight checks, and nine parts of this book. Cheap checks first, token minted last, idempotency outermost.
+- Refusals escalate rather than error. A control that returns a stack trace gets disabled.
+- There is exactly one dispatcher. Four dispatch sites means implementing the checks four times and getting three.
+- The model sees a tool name, arguments, and a result: never the taint, scope, tier, token, or key. A hostile ticket can make Atlas *want* to issue a credit, and wanting is where it stops.
+- Write down what you did not build and why: no multi-agent topology, no fine-tuning, no general code execution, no MCP for internal functions, no cross-ticket memory in v1.
