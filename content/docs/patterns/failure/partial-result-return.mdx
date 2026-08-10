@@ -1,0 +1,186 @@
+---
+title: "Partial Result Return"
+description: "Return the eight things that worked instead of failing all ten."
+---
+
+## Problem
+
+A ticket asks three things: what the return window is, where order 4921 is, and whether expedited freight is covered by the contract.
+
+The agent answers the first from the policy corpus and the second from the warehouse. The third needs the contract terms, which are [out of scope for v1](/docs/capstone/the-brief), so the run escalates, and the human receives a ticket with nothing attached, re-does the two answers the agent already had, and then answers the third.
+
+The same waste appears at every other boundary. A [budget cap fires](/docs/patterns/control/bounded-autonomy) at step nine and the eight completed steps are discarded. A [fan-out](/docs/patterns/scale/fan-out) over ten documents has one failure and returns an error for all ten. A [breaker opens](/docs/patterns/failure/tool-circuit-breaker) on the carrier API and the run fails rather than answering the parts that never needed it.
+
+In each case the system had real, usable work in hand and threw it away because its outcome type had two values.
+
+## Forces
+
+- **Partial work is often most of the work**, and it was paid for.
+- **A binary outcome cannot express it**, so the default is to discard.
+- **A partial answer presented as complete is worse than a failure.** The customer acts on a gap they cannot see.
+- **The consumer differs.** A human wants the work; a customer usually should not see an incomplete reply.
+- **Completeness must be machine-checkable**, not a note in prose.
+- **Some results are atomic** and a partial one is meaningless or dangerous.
+
+## Solution
+
+Make the outcome a **structured object with explicit coverage**: what was established, what was not, and why, with a rule about who may see a partial.
+
+<Figure caption="Three fields, and the third is what keeps a partial honest. Never render an incomplete answer as a complete one." frame={false}>
+
+```
+   {
+     "established": [                     ← real, cited, usable
+       { "q": "return window",  "a": "30 days",  "cite": "c-8812" },
+       { "q": "order 4921",     "a": "delivered 14 Aug", "cite": "tool:get_order" }
+     ],
+     "unresolved": [                      ← named, not implied by absence
+       { "q": "expedited freight cover", "reason": "contract terms out of scope" }
+     ],
+     "coverage": "partial",               ← MACHINE-CHECKABLE
+     "cause": "out_of_scope"
+   }
+        │
+        ├── coverage = "complete" ──▶ may be sent to the customer
+        │
+        └── coverage = "partial"  ──▶ NEVER auto-sent.
+                                      goes to a human, who receives the
+                                      established answers already done
+```
+
+</Figure>
+
+Four rules:
+
+**Decompose the request first, or you cannot report coverage.** *"Answered two of three"* requires knowing there were three. A [router or planner](/docs/patterns/control/plan-then-execute) that records sub-questions is what makes partial coverage expressible at all. Without it, the only honest report is *"something is missing, unclear what."*
+
+**Name what is unresolved, with a reason.** Absence is not a signal a reader can act on. `{ q, reason }` tells the human exactly what remains and often lets them finish in seconds.
+
+**Coverage is a field, never a phrase.** A model writing *"I could not determine the freight coverage"* inside otherwise fluent prose is not a check anything can gate on. The [output guardrail](/docs/patterns/security/output-guardrail) reads `coverage`, and a partial never reaches a customer automatically.
+
+**Preserve provenance on the established parts.** Each answer carries its citation or tool result, so the human can trust it without re-deriving it. A partial without provenance is a claim the reviewer has to verify, which costs more than doing the work.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/partial.ts"
+export interface Answer { q: string; a: string; cite: string }
+export interface Gap    { q: string; reason: string }
+
+export interface Outcome {
+  established: Answer[];
+  unresolved: Gap[];
+  coverage: 'complete' | 'partial' | 'none';   // machine-checkable, not prose
+  cause?: 'budget' | 'turn_cap' | 'out_of_scope' | 'dependency_down' | 'no_progress';
+}
+
+export function outcomeFrom(state: RunState, cause?: Outcome['cause']): Outcome {
+  // Requires that the request was DECOMPOSED. Without sub-questions you
+  // cannot say "two of three" — only "something is missing".
+  const established = state.subQuestions
+    .filter(q => state.scratchpad.hasAnswer(q.id))
+    .map(q => state.scratchpad.answer(q.id));      // carries its citation
+
+  const unresolved = state.subQuestions
+    .filter(q => !state.scratchpad.hasAnswer(q.id))
+    .map(q => ({ q: q.text, reason: reasonFor(q, cause, state) }));
+
+  return {
+    established,
+    unresolved,
+    coverage: unresolved.length === 0 ? 'complete'
+            : established.length === 0 ? 'none' : 'partial',
+    cause,
+  };
+}
+
+// The gate. A partial never reaches a customer automatically; it reaches a
+// person, WITH the work already done.
+export async function deliver(out: Outcome, ctx: RunContext) {
+  if (out.coverage === 'complete') return sendToCustomer(out, ctx);
+  return escalate(ctx, out.cause ?? 'incomplete', {
+    established: out.established,     // the human does not redo these
+    unresolved: out.unresolved,
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/partial.py"
+@dataclass
+class Outcome:
+    established: list[Answer]
+    unresolved: list[Gap]
+    coverage: Literal["complete", "partial", "none"]   # a field, not prose
+    cause: str | None = None
+
+
+def outcome_from(state: RunState, cause: str | None = None) -> Outcome:
+    # Requires that the request was DECOMPOSED. Without sub-questions you
+    # cannot say "two of three" — only "something is missing".
+    established = [state.scratchpad.answer(q.id) for q in state.sub_questions
+                   if state.scratchpad.has_answer(q.id)]   # carries citations
+
+    unresolved = [Gap(q.text, reason_for(q, cause, state))
+                  for q in state.sub_questions
+                  if not state.scratchpad.has_answer(q.id)]
+
+    coverage = ("complete" if not unresolved
+                else "none" if not established else "partial")
+    return Outcome(established, unresolved, coverage, cause)
+
+
+async def deliver(out: Outcome, ctx) -> None:
+    # A partial never reaches a customer automatically; it reaches a person,
+    # WITH the work already done.
+    if out.coverage == "complete":
+        return await send_to_customer(out, ctx)
+    return await escalate(ctx, out.cause or "incomplete",
+                          established=out.established,
+                          unresolved=out.unresolved)
+```
+
+</Tab>
+</Tabs>
+
+`deliver` is where the pattern earns its keep and where it is most often subverted. The temptation is to send the partial with a hedge, *"I was able to answer two of your questions…"*, which is honest and still leaves the customer with an unanswered question and no owner. The [escalation contract](/docs/first-agent/the-problem) says a person takes it, holding the work already done.
+
+## Trade-offs
+
+**Decomposition is a prerequisite and it costs something.** A model call to split the request, and a wrong split produces wrong coverage. On single-question traffic it is pure overhead. Apply it where multi-part requests are common, which for support is most of them.
+
+**Partials increase escalation volume.** Every partial is a human touch. That is the intended trade, twenty seconds of review against eight minutes of doing it, and it is [a real load on the queue](/docs/patterns/scale/priority-queues) that has to be staffed.
+
+**A partial can look more complete than it is.** Two confident answers plus one gap reads as mostly done, and the gap may have been the important one. Ordering `unresolved` by the requester's emphasis rather than by discovery order helps; nothing fully fixes it.
+
+**Coverage can be wrong.** The agent believes it answered a sub-question and did not. This is [the semantic class](/docs/reliability/error-taxonomy) again. The defense is [grounding each established answer](/docs/patterns/retrieval/grounded-citations), not a better coverage calculation.
+
+## When not to use it
+
+**When the result is atomic.** A refund either happened or did not. "Partially issued a credit" is not a state, and reporting one is worse than failing.
+
+**When the request has one part.** Nothing to be partial about; the outcome is an answer or an escalation.
+
+**When a partial would mislead in a costly way.** Compliance answers, medical or legal information, anything where an incomplete picture is actively dangerous. Fail and escalate.
+
+**When nobody will service the escalation.** A partial routed to an unattended queue is a request that quietly stops. If there is no human rung, the honest behaviour is to fail visibly.
+
+<Aside type="note" title="This is what makes every other cap survivable">
+Look at what fires a partial: [a budget cap](/docs/patterns/control/bounded-autonomy), a turn cap, a deadline, [an open breaker](/docs/patterns/failure/tool-circuit-breaker), an [exhausted fallback ladder](/docs/patterns/failure/fallback-model-ladder), an out-of-scope sub-question.
+
+Every one of those is a control this book argues for, and every one has the same objection: *stopping mid-run wastes everything spent so far.* That objection is only true if the outcome type is binary.
+
+With a structured partial, a cap becomes a **cheaper completion** rather than a loss. The run stops, the work survives, and a person finishes it holding everything the agent established. That converts the caps from things operators want to raise into things they can live with, which is the difference between a bounded system and one where the bounds get disabled the first time they fire.
+</Aside>
+
+## Related
+
+- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the caps whose exhaustion produces a partial
+- [Escalation Ladder](/docs/patterns/control/escalation-ladder): the rung a partial lands on, and the handover package
+- [Tool Circuit Breaker](/docs/patterns/failure/tool-circuit-breaker): a missing dependency as a cause of partial coverage
+- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): why each established answer carries provenance
+- [Output Guardrail](/docs/patterns/security/output-guardrail): the gate that reads `coverage` before anything is sent
