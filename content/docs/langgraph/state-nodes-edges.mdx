@@ -1,0 +1,219 @@
+---
+title: "State, Nodes, Edges"
+description: "The graph model, and rebuilding Atlas as an explicit state machine."
+---
+
+Three primitives, and they are almost disappointingly simple:
+
+- **State.** A typed object that flows through the graph.
+- **Nodes.** Functions that read state and return an update to it.
+- **Edges.** What runs next.
+
+That's the model. The reason it's worth a part of this book is not the primitives; it's one consequence of expressing them this way.
+
+## Control flow becomes data
+
+In [Atlas v0](/docs/first-agent/the-loop-by-hand), control flow was `for`, `if`, and `break`. Instructions in a function. At run time that structure is invisible: you cannot ask the program which step it's on, you cannot serialize its position, and you cannot resume it in another process. The loop exists only while the stack frame does.
+
+In a graph, the same control flow is **a value**. Nodes and edges are data you constructed before running anything, and the current position is a field you can read.
+
+<Figure caption="The same control flow, twice. One is instructions; the other is data you can inspect, persist, and resume." frame={false}>
+
+```
+   AS CODE                          AS A GRAPH
+
+   for step in 1..MAX:              ┌──────────┐
+     r = call_model()               │  agent   │◀───────┐
+     if not r.tool_calls:           └────┬─────┘        │
+       break                             │ tool_calls?  │
+     run_tools(r)                   ┌────▼─────┐        │
+                                    │  tools   │────────┘
+   position lives in the            └──────────┘
+   stack frame and dies              position is a value:
+   with the process                  "currently at: agent"
+```
+
+</Figure>
+
+Everything a graph framework sells you is downstream of that one property:
+
+| Because position is data… | You get |
+| --- | --- |
+| It can be written to a store | [Resume a run](/docs/langgraph/persistence) in another process, after a crash or a deploy |
+| It can be paused between nodes | [Human-in-the-loop](/docs/human-in-the-loop/approval-gates) that holds no thread open |
+| It can be enumerated | A diagram of what your system can do, generated from the system |
+| It can be replayed | Re-run from step four with a changed node, to debug |
+
+None of that is available for a `while` loop, at any price. And all of it is the same purchase.
+
+## The correction that matters most
+
+Here is the thing people get backwards, and it's worth being blunt about:
+
+> **A graph does not hand control flow to the model. It does the opposite.**
+
+Teams say "we moved to LangGraph" as a synonym for "we went agentic." It isn't. The edges are *your code*. A conditional edge is a plain function that reads state and returns the name of the next node. No model call, no judgment, fully testable:
+
+```python
+def should_continue(state) -> str:
+    if state["step"] >= MAX_STEPS:
+        return "halt"
+    if state["messages"][-1].tool_calls:
+        return "tools"
+    return "respond"
+```
+
+That function is as deterministic as an `if` statement, because it *is* an `if` statement. The model's output landed in `state["messages"]`; a deterministic function read it and picked an edge.
+
+This is exactly [the shape Part VI argued for](/docs/workflows/the-determinism-test), a deterministic backbone with intelligence at specific nodes, expressed in a runtime that makes the backbone explicit. Adopting a graph should make your control flow **more** legible than the hand-written loop, not less. If it's making it less, you've put a model somewhere it doesn't belong.
+
+## Nodes return updates, not state
+
+One mechanical detail with consequences.
+
+A node receives the whole state and returns only the keys it changed:
+
+```python
+def classify(state):
+    result = client.messages.create(...)          # one bounded call
+    return {"category": result.category,          # ← only what changed
+            "urgency": result.urgency}
+```
+
+Not a new state object. A **partial update** that the framework merges into the existing state. That keeps nodes small and independent. A node doesn't need to know about fields it doesn't touch, which means adding a field doesn't require touching every node.
+
+The merge itself is where this gets interesting and where graphs go subtly wrong. What happens when two parallel nodes both write `messages`? That's the reducer question, and it's [the next chapter](/docs/langgraph/reducers-and-state), because it deserves one.
+
+## Rebuilding Atlas
+
+Now the actual exercise. The [Part VI decomposition](/docs/workflows/the-determinism-test) was nine steps, one of them an agent loop. Here it is as an explicit graph:
+
+<Figure caption="Atlas as a state machine. Six nodes, two conditional edges, one cycle. Everything that was implicit in the loop is now a value." frame={false}>
+
+```
+        START
+          │
+    ┌─────▼─────┐
+    │  triage   │   bounded call: category, urgency, entities
+    └─────┬─────┘
+          │  ┌──────────────────────────┐
+          │  │ route(state) → str       │  ← your function, not a model
+    ┌─────▼──▼──┐
+    │  gather   │◀─────────┐   the agent step: model picks tools
+    └─────┬─────┘          │
+          │ more?          │
+          ├────────────────┘
+          │ done
+    ┌─────▼─────┐
+    │   check   │   deterministic: policy limit, authority
+    └─────┬─────┘
+          │
+     ┌────▼────┐  need_human(state) → str
+     │         │
+┌────▼───┐ ┌───▼──────┐
+│ compose│ │ escalate │
+└────┬───┘ └───┬──────┘
+     │         │
+    ┌▼─────────▼┐
+    │  finalize │   cite, log, send
+    └─────┬─────┘
+        END
+```
+
+</Figure>
+
+And the construction, which is unremarkable on purpose:
+
+```python
+from langgraph.graph import StateGraph, START, END
+
+g = StateGraph(AtlasState)
+
+g.add_node("triage",   triage)        # bounded model call
+g.add_node("gather",   gather)        # the agent step
+g.add_node("check",    check_policy)  # pure code
+g.add_node("compose",  compose)       # bounded model call
+g.add_node("escalate", escalate)      # pure code
+g.add_node("finalize", finalize)      # pure code
+
+g.add_edge(START, "triage")
+g.add_conditional_edges("triage", route, ["gather", "escalate"])
+g.add_conditional_edges("gather", should_continue, ["gather", "check"])
+g.add_edge("check", "compose")
+g.add_conditional_edges("compose", need_human, ["escalate", "finalize"])
+g.add_edge("escalate", "finalize")
+g.add_edge("finalize", END)
+
+app = g.compile(checkpointer=checkpointer)
+```
+
+Four things worth noticing about that.
+
+**Four of six nodes contain no model call.** `check_policy` is the [invariant](/docs/first-agent/the-problem), the credit limit, as a node that cannot be prompted around. The graph didn't make Atlas more autonomous; it made the non-autonomous parts visible.
+
+**The cycle is one edge.** `gather → gather` is the entire agent loop, and it's bounded by `should_continue`, which is the [step cap from v0](/docs/first-agent/the-loop-by-hand) relocated into a testable function.
+
+**Every path ends at `finalize`.** Including escalation. That's the [outcome union](/docs/first-agent/what-a-framework-buys) enforced structurally. There is no way to leave this graph without logging what happened.
+
+**`compile()` validates the structure.** Type checking and edge connectivity. It catches a node with no path to `END` before you run anything. That's a class of bug the hand-written loop had no way to detect.
+
+<Aside type="tip" title="The TypeScript API mirrors this">
+LangGraph has a JavaScript/TypeScript implementation with the same model and camelCase method names. `addNode`, `addEdge`, `addConditionalEdges`, and the same `START`/`END` sentinels.
+
+The graph *shape* above is the transferable part, and it's identical across both. This chapter shows Python because the state-schema declaration differs between the two and the structure is what matters.
+</Aside>
+
+## The minimal agent, for comparison
+
+Strip Atlas away and the classic agent loop is two nodes and one conditional edge:
+
+```
+   START ──▶ agent ──▶ (tool_calls?) ──▶ tools ──┐
+                            │                    │
+                            └── no ──▶ END       │
+                  ▲                              │
+                  └──────────────────────────────┘
+```
+
+That's it. Every prebuilt "ReAct agent" in every framework is this graph with the nodes filled in. Knowing that is useful in both directions: it tells you what a prebuilt agent actually is, and it tells you that building it yourself is six lines rather than a project.
+
+## What the graph still doesn't give you
+
+Being precise, because this is where expectations get set wrong.
+
+**It does not survive a crash by itself.** The graph makes position *serializable*; a checkpointer with a durable store is what persists it. In memory, you have the same volatility as the `while` loop with extra structure. That's [the persistence chapter](/docs/langgraph/persistence), and it has a hard limit worth knowing about early.
+
+**Replay is only as deterministic as your nodes.** Re-running from a checkpoint replays the graph, not the world. A node that calls an API gets a fresh answer, and a node with a side effect does it again. Node purity is a property you maintain, not one the framework grants. It is also the hinge on which [durable execution](/docs/durable-execution/why-durable-execution) later turns.
+
+**It doesn't reduce the number of decisions you own.** The [seven decisions](/docs/first-agent/the-loop-by-hand) from the hand-written loop are all still yours: history policy, result truncation, error handling, authorization, termination. They've moved into nodes and edges, which makes them easier to see and no less your responsibility.
+
+## When it earns its overhead
+
+The honest boundary, which [gets its own chapter](/docs/langgraph/node-or-function) later:
+
+**A graph earns it when you have more than one run shape**, when you need to pause and resume, or when someone other than the author needs to understand what the system can do. Those are real and common.
+
+**It's ceremony when your flow is a straight line.** Six nodes with unconditional edges between them is a function, written in a heavier notation, and the diagram it generates will tell you so.
+
+Atlas qualifies: three run shapes, an approval pause, and a cycle. Most of what people build a graph for does not, and Part VI is the answer for those.
+
+## References
+
+- [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629), Yao et al., 2022, the loop that every framework's prebuilt agent implements.
+
+---
+
+Next: [Reducers and State Schemas](/docs/langgraph/reducers-and-state), what flows along an edge, what must not, and why this is where graphs get subtly wrong.
+
+## Takeaways
+
+- State, nodes, edges. The primitives are trivial; the consequence is that control flow becomes data rather than instructions.
+- Resumption, pausing for humans, inspectable structure, replay debugging. Everything a graph framework sells is downstream of position being a value you can read and store.
+- A graph does not hand control flow to the model. Conditional edges are plain functions of state; the model's output lands *in* state and deterministic code reads it.
+- Adopting a graph should make control flow more legible than a hand-written loop, not less.
+- Nodes return partial updates rather than new state, which keeps them independent. How those updates merge is the next chapter and it's where graphs get subtly wrong.
+- Rebuilt as a graph, four of Atlas's six nodes contain no model call. The policy check becomes a node nothing can prompt around.
+- The whole agent loop is one self-edge with a bounded condition. Every prebuilt ReAct agent is two nodes and a conditional edge.
+- `compile()` catches structural bugs a hand-written loop had no way to detect: an unreachable node, a missing path to `END`.
+- The graph makes position serializable; a checkpointer with durable storage is what persists it. Replay is only as deterministic as your nodes are pure.
+- It earns its overhead with multiple run shapes, pause-and-resume, or a reader who isn't the author. A straight line is a function.
