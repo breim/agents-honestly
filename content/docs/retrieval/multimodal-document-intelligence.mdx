@@ -1,0 +1,249 @@
+---
+title: "Multimodal Document Intelligence"
+description: "PDFs, scans, tables, images, and audio: extracting evidence without flattening away the structure that made it meaningful."
+---
+
+
+A PDF is a container, not a document type. One file may contain selectable text, a scanned signature page, a chart, a photograph, and a table whose headers repeat after a page break. Calling `extractText()` on all of it produces a string. That does not mean it produced the evidence.
+
+The retrieval system needs two outputs from document processing:
+
+1. content the retriever and model can use;
+2. a coordinate system that lets a person verify where the content came from.
+
+Lose either one and the pipeline is incomplete.
+
+## Route pages, not files
+
+The cheap default should handle the common page and hand the hard page to a stronger parser.
+
+<Figure caption="A mixed document is routed page by page. The final manifest preserves one document identity across every extraction path." frame={false}>
+
+```text
+                         PDF
+                          │
+                    inspect pages
+                          │
+       ┌──────────────────┼──────────────────┐
+       ▼                  ▼                  ▼
+  text layer         complex layout      scanned page
+       │                  │                  │
+ native extract      layout parser       OCR / vision
+       │                  │                  │
+       └──────────────────┼──────────────────┘
+                          ▼
+                  normalized evidence
+                          │
+              text · tables · regions · refs
+```
+
+</Figure>
+
+File-level routing wastes money on easy pages and misses mixed files. Page-level routing can use simple signals: text density, number of detected regions, table likelihood, image coverage, rotation, and whether the extracted characters form plausible words. None of those decides truth. They decide which parser gets a chance.
+
+## Keep the original and every derivation
+
+The object store holds the source bytes. The index holds derived records. The link between them is immutable.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/evidence.ts"
+export interface EvidenceRef {
+  sourceSha256: string;
+  documentId: string;
+  version: string;
+  page: number;
+  region?: { x: number; y: number; width: number; height: number };
+  time?: { startMs: number; endMs: number };
+  extractor: { id: string; version: string; route: string };
+}
+
+export interface EvidenceUnit {
+  kind: 'paragraph' | 'table' | 'figure' | 'transcript';
+  text: string;
+  ref: EvidenceRef;
+  confidence?: number;       // parser signal, never factual confidence
+  warnings: string[];
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/evidence.py"
+from dataclasses import dataclass, field
+from typing import Literal
+
+@dataclass(frozen=True)
+class EvidenceRef:
+    source_sha256: str
+    document_id: str
+    version: str
+    page: int
+    region: tuple[float, float, float, float] | None
+    time: tuple[int, int] | None
+    extractor_id: str
+    extractor_version: str
+    route: str
+
+@dataclass(frozen=True)
+class EvidenceUnit:
+    kind: Literal["paragraph", "table", "figure", "transcript"]
+    text: str
+    ref: EvidenceRef
+    confidence: float | None = None   # parser signal, never factual confidence
+    warnings: tuple[str, ...] = field(default_factory=tuple)
+```
+
+</Tab>
+</Tabs>
+
+The hash answers which bytes were read. Page and region answer where. Extractor version answers how. Without all three, a citation to "page 7" can silently point at a replacement file that no longer contains the claim.
+
+Store the rendered page image too when the source is visual. A reviewer checking a disputed table should see the pixels that were processed, not a fresh rendering produced by a newer PDF library.
+
+## Tables are structure, not prose
+
+Flattening a table row into text may work for simple two-column data. It fails on merged headers, units in a caption, footnotes, subtotals, and cells whose meaning comes from two levels of column header.
+
+```text
+Bad extraction
+
+Q2  412  18  430  Q1  390  11  401
+
+
+Usable extraction
+
+table: Regional shipments, tonnes
+columns: quarter | standard | expedited | total
+row: Q2 | 412 | 18 | 430
+row: Q1 | 390 | 11 | 401
+footnote: expedited excludes replacements
+```
+
+Preserve the table as a typed object and derive text from it for retrieval. The object supports validation and calculation. The text supports lexical and semantic matching. One representation should not be forced to do both jobs.
+
+The minimum table checks are mechanical:
+
+- every data cell has a row and column header path;
+- numeric columns carry their units;
+- totals reconcile when the source provides subtotals;
+- repeated headers do not become data rows;
+- footnotes remain attached to the cells or table they qualify;
+- the bounding box points back to the rendered source.
+
+A model can help reconstruct a difficult table. Code should still run the arithmetic checks. A fluent JSON object with a total that does not equal its rows is a failed extraction.
+
+## Images need a question-specific representation
+
+An image caption is useful for broad retrieval and insufficient for visual questions. "Photograph of damaged pallet" may find the file. It cannot answer which corner is crushed, whether the seal is broken, or which serial number appears on the label.
+
+Use three levels deliberately:
+
+| Representation | Use |
+| --- | --- |
+| Caption | Broad discovery and cheap indexing |
+| Detected regions plus labels | Locate objects, text, and sections |
+| Original pixels passed to a multimodal model | Inspect the visual evidence for this question |
+
+Do not send the original image on every query because it exists. Retrieve by caption and metadata first, then load pixels on demand when the question depends on them. This is [dynamic context selection](/docs/context/dynamic-selection) applied to media.
+
+The result should distinguish observation from inference:
+
+```text
+observed: "outer carton torn along lower-left edge"
+observed: "label contains order 4921"
+inferred: "damage may have occurred during handling"
+```
+
+Only the first two can be cited directly to regions. The third is a conclusion and belongs to the run, not to the index.
+
+## Audio and video add time and identity
+
+Transcription turns sound into searchable text and removes the features that changed its meaning. Speaker identity, timing, overlap, long pauses, on-screen text, and a gesture toward an object may matter.
+
+For every segment keep:
+
+- start and end timestamps;
+- speaker identity or an explicit unknown speaker;
+- transcript text and language;
+- links to frames or slides referenced during the segment;
+- redaction state and consent policy;
+- the model and version that produced the transcript.
+
+Chunk on semantic and speaker boundaries, then include a small overlap in time. Cutting exactly every thirty seconds can place a question in one chunk and its answer in the next, the audio version of splitting a policy mid-sentence.
+
+## Multimodal embeddings are another index
+
+A joint image-text embedding lets a text query retrieve a visually similar image. It does not replace metadata, OCR, or direct inspection.
+
+Use it when the query is genuinely visual: "show pallets damaged like this one" or "find diagrams with this connector layout." Use OCR plus lexical search for serial numbers. Use structured fields for dates and account IDs. The routing table from [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live) still applies inside a single image.
+
+Version multimodal embeddings exactly as text embeddings. A model change means a new index, a measured migration, and a rollback path.
+
+## Quality gates before indexing
+
+Document extraction should fail closed on missing evidence and fail open on optional enrichment.
+
+| Gate | Response |
+| --- | --- |
+| Source hash or document identity missing | Reject document |
+| Required tenant or ACL missing | Reject document |
+| Page failed every parser | Quarantine document |
+| Table arithmetic inconsistent | Quarantine table, retain other valid pages |
+| Caption generation failed | Index OCR/text, omit caption |
+| Region reference does not resolve | Reject evidence unit |
+| Low OCR confidence on an identifier | Mark uncertain and require visual verification |
+
+That distinction keeps one failed chart from hiding a thirty-page policy while preventing the broken chart from becoming trusted evidence.
+
+Measure extraction on the hard slice, not on average characters. For Atlas that slice is scanned return forms, tables with merged headers, rotated carrier documents, and low-resolution photographs containing order labels. The end-to-end check asks whether the final answer cites the correct region and preserves the value, not whether the OCR output looks plausible.
+
+## The security boundary starts before OCR
+
+Pixels, metadata, filenames, QR codes, captions, and transcripts are untrusted input. A white-on-white instruction in a PDF becomes ordinary text after OCR. An image description written by one model becomes prompt content for another.
+
+Keep trust labels on every derived unit and propagate them into retrieval. Never concatenate extracted text into instructions. Never let a high-confidence OCR score raise the authority of the source. Confidence says the parser likely read the bytes correctly; it says nothing about whether the bytes were honest.
+
+The attack path and defenses are covered in [Prompt Injection](/docs/security/prompt-injection) and [Adversarial Evals](/docs/security/adversarial-evals). The ingestion requirement is simple: derivation may change format, never trust.
+
+<FrameworkCheck decision="Keep extraction as a deterministic, versioned pipeline. Use model calls for hard pages inside Activities, and keep the agent out of the ingestion control flow.">
+<FrameworkOption name="plain">
+
+Inspect, route, normalize, validate, and write the manifest in ordinary code. The same source and pipeline version must produce the same identities.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+A graph can help an interactive analyst inspect one document, but it adds no value to a repeatable batch whose branches are known before the run starts.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Use Activities for parsing, OCR, and model calls. A Workflow owns retries, fan-out by page, manifests, and atomic publication of the completed index build.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas stores source PDFs and rendered pages under the source hash. Native extraction handles clean pages. A layout parser handles columns and ordinary tables. OCR or a vision model receives only pages that fail the cheap path.
+
+Every chunk carries document, version, page, region, extractor version, tenant, ACL, and trust class. Table objects live beside their retrieval text. A policy answer may cite a paragraph or table cell; the approval UI opens the exact rendered region that produced it.
+
+---
+
+Next: [Evaluating Retrieval](/docs/retrieval/retrieval-evals), covering recall, precision, evidence fidelity, and whether the answer survived the trip from source to context.
+
+## Takeaways
+
+- A PDF is a container. Route mixed documents page by page.
+- Processing must produce usable content and a resolvable coordinate back to the source.
+- Keep original bytes, rendered evidence, source hash, extractor version, and region or time references.
+- Preserve tables as typed structures and derive retrieval text from them. Validate totals and units in code.
+- Retrieve images cheaply, then load pixels only when the question depends on visual evidence.
+- Audio and video need timestamps, speakers, linked frames, consent, and redaction state.
+- Multimodal embeddings add a retrieval route. They do not replace OCR, metadata, or structured queries.
+- Reject missing identity and authorization metadata. Quarantine broken evidence without hiding the valid rest of a document.
+- Extraction changes format, never trust. OCR confidence is not source authority.
