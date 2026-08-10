@@ -1,0 +1,143 @@
+---
+title: "Continuous Integration for Agents"
+description: "Regression gates on a stochastic system: sample sizes, variance, flake budgets, statistical honesty."
+---
+
+Every chapter of Part XIV has produced a number. This one asks the question that decides whether any of them can block a release: **how big a change can you actually detect?**
+
+The answer is less flattering than most eval dashboards imply, and it starts with a table.
+
+## What a set size actually buys
+
+A resolution rate is a proportion, so its uncertainty is arithmetic rather than opinion. At a true rate around 70%:
+
+| Cases | 95% confidence interval |
+| --- | --- |
+| 20 | **± 20 points** |
+| 50 | ± 13 points |
+| 100 | ± 9 points |
+| 200 | ± 6 points |
+| 500 | ± 4 points |
+| 1,000 | ± 3 points |
+
+<Aside type="caution" title="An audit of this book's own numbers">
+Atlas scored 14/20 in [Part II](/docs/first-agent/the-loop-by-hand) and this book reported it as 70%.
+
+The honest statement is **70% ± 20**. The twenty-ticket set cannot distinguish a system that resolves half the tickets from one that resolves nearly all of them. Those scores were directionally useful, and they were never precise. Every version comparison built on them showed a direction rather than a magnitude.
+
+That is the correct use of a small set, and saying so is the discipline this chapter is about. A number reported without its interval is a claim wearing a lab coat.
+</Aside>
+
+## What a gate actually needs
+
+Detecting a *regression* is harder than measuring a rate, because you are comparing two noisy numbers. For a two-arm comparison against a 70% baseline, at **80% power and a two-sided 5% threshold**:
+
+| To reliably detect… | Cases needed **per arm** |
+| --- | --- |
+| A 20-point drop | ~90 |
+| A 10-point drop | ~340 |
+| **A 5-point drop** | **~1,350** |
+| A 3-point drop | ~3,700 |
+| A 2-point drop | ~8,400 |
+
+Those two settings are worth stating rather than assuming, because the table is not robust to them. Hold the threshold and raise power to 90%, a defensible choice for a gate you intend to trust, and **every row grows by about a third**: the five-point row goes from ~1,350 to ~1,840. A table of sample sizes without its power and its threshold is the same species of claim this chapter is about to criticise.
+
+Read the fourth row and then re-read [the dataset chapter's ceiling](/docs/evals/datasets) of about a thousand cases per route. Those two numbers agree, and together they say something specific and worth internalising:
+
+> **A well-built golden set detects a five-point regression. It does not detect a two-point one, and no realistic budget will.**
+
+Which inverts the usual sequence. Do not pick a set size and then discover what it can prove. **Decide the regression size that would matter to the business, and let the set size follow.** And if the answer is a number you cannot afford, that is information: the gate you wanted is not available and something else has to catch that class of change.
+
+## Two kinds of run, two configurations
+
+Most CI suites are simultaneously flaky and blind because they use one configuration for two different questions.
+
+| Question | Configuration |
+| --- | --- |
+| **"Did it change?"**: regression | Temperature 0 and a fixed seed *where the model still takes them*; otherwise a pinned bundle and repetition |
+| **"How good is it?"**: measurement | Production settings, several seeds, full distribution |
+
+A regression test does not need the model's creativity. Pinning temperature and seed removes a large share of run-to-run variance for free, and what remains is much closer to the change you introduced.
+
+That last word is the one to watch, because on the frontier it is no longer free. [Current models reject `temperature`, `top_p` and `top_k` outright](/docs/foundations/nondeterminism), so the cheapest variance reduction in this chapter is unavailable for the system you are actually shipping. The split still holds; the price changed. What is left to pin is the [configuration bundle](/docs/production/versioning), and what replaces the sampler is repetition, which means the variance you used to remove for nothing now comes out of the sample sizes above.
+
+The measurement run is the opposite. It should sample the distribution you will actually ship, across several fixed seeds, because a quality claim made at temperature 0 is a claim about a system nobody runs.
+
+## Remove the variance you own before measuring the variance you don't
+
+| Removable | Irreducible |
+| --- | --- |
+| Sampling temperature | Provider-side variation |
+| Unfixed seeds | Model updates beneath you |
+| [Unsorted JSON, timestamps in prompts](/docs/foundations/prompt-caching) | Genuine sampling at production settings |
+| Tool results arriving in racing order | |
+| [Judge drift](/docs/evals/scoring) between runs | |
+
+The rule: **eliminate every source you control before sizing your set against the ones you do not.** Otherwise you are buying thousands of cases to see past noise you introduced yourself, an expensive way to avoid sorting a dictionary.
+
+## Sixty criteria is sixty tests
+
+A problem nobody mentions and everybody has.
+
+[The scoring chapter](/docs/evals/scoring) recommended decomposing quality into binary checks: twenty per route, perhaps sixty across the suite. If each criterion gets its own pass/fail gate at the conventional 5% threshold, then **you expect about three false alarms every run, by construction.** Not because anything broke; because you ran sixty tests.
+
+The consequences are predictable: the suite cries wolf, the team learns to re-run until green, and the gate stops being a gate.
+
+Two workable responses. **Gate on the aggregate and investigate the criteria**: one test, sixty diagnostics. Or **correct for multiplicity** if per-criterion gating is genuinely required, and accept that the correction makes each individual criterion much harder to trip.
+
+## The flake budget
+
+A stochastic gate fails sometimes on a system that is fine. That rate is not zero, and pretending otherwise is how a suite gets disabled by the third person it blocks on a Friday.
+
+So state it: **what fraction of correct releases may this gate reject?** Then design to it, and note the trade: a gate that never flakes is either enormously expensive or insensitive to anything you care about.
+
+Re-runs are the usual mitigation, with one condition that makes the difference between statistics and self-deception:
+
+> **The re-run policy is declared in advance.** "Best of three" decided before the run is a design. "Let us try once more" decided after seeing red is p-hacking with extra steps.
+
+## Gate what you can detect; report the rest
+
+The final discipline, and the one that keeps the suite credible:
+
+| | |
+| --- | --- |
+| **Gate** | Effects your set can detect at your chosen power |
+| **Report** | Everything else: tracked, charted, never blocking |
+
+**A gate on an undetectable effect is a coin flip with a changelog.** It will block good releases and pass bad ones at roughly the rate chance dictates, and the team will correctly learn to ignore it, which also destroys their trust in the gates that were sound.
+
+## Atlas, concretely
+
+| | Setting |
+| --- | --- |
+| Regression runs | Per route; temperature 0 and a fixed seed on the models that accept them, a pinned bundle and repeats on the ones that do not |
+| Measurement runs | Production settings, three seeds, weekly |
+| Detectable regression | ~5 points per route, which takes ~1,350 cases per arm. [Atlas is not there yet](/docs/capstone/hardening-it) |
+| Gated | Aggregate resolution rate, [cost per resolved ticket](/docs/evals/cost-and-latency-evals), p95 latency, and every [deterministic assertion](/docs/evals/scoring) |
+| Reported only | Individual rubric criteria, step efficiency, redundant-call rate |
+| Flake budget | 2% of correct releases may be rejected |
+| Re-run policy | Two of three, declared in the config, not negotiated at the time |
+
+The deterministic assertions are the row worth noticing. **They have no sampling error at all.** The requester check either filtered or it did not, and the citation either matched the version or it did not, so they gate at any set size, on a single run, with no statistics required.
+
+Which is the practical argument for [the scoring ladder](/docs/evals/scoring) restated as a CI property: every criterion you move from a judge to an assertion is a criterion that stops needing a thousand cases to say anything.
+
+---
+
+Next: [Online Evals and Guardrails](/docs/evals/online-evals), scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery.
+
+## Takeaways
+
+- At a 70% rate, twenty cases carry a 95% interval of ±20 points. This book's own Part II scores were directional, not precise, and reporting them without the interval would have been a claim wearing a lab coat.
+- Detecting a regression is harder than measuring a rate: at 80% power and a two-sided 5% threshold, roughly 90 cases per arm for a 20-point drop, 340 for 10 points, 1,350 for 5, and 8,400 for 2, and about a third more for all of them at 90% power.
+- A well-built golden set detects about a five-point regression. Nothing realistic detects two.
+- Decide the regression size that matters, then derive the set size. If the answer is unaffordable, that is information: the gate is not available and something else must catch it.
+- Use two configurations: the tightest the model accepts for "did it change," production settings across several seeds for "how good is it." One configuration for both questions makes a suite flaky and blind at once.
+- Frontier models no longer take `temperature`, `top_p` or `top_k`, so the free variance reduction is gone. Pin the bundle instead and buy the rest with repeats, which comes out of the sample sizes above.
+- A quality claim measured at temperature 0 is a claim about a system nobody runs.
+- Remove the variance sources you control: seeds, unsorted serialization, racing tool results, judge drift. Then size your set against the ones you do not.
+- Sixty binary criteria gated individually at a 5% threshold produce about three false alarms per run by construction. Gate the aggregate and investigate the criteria, or correct for multiplicity.
+- State a flake budget explicitly. A gate that never flakes is either enormously expensive or insensitive.
+- Declare the re-run policy in advance. "Best of three" chosen beforehand is a design; "one more try" chosen after seeing red is p-hacking.
+- Gate what you can detect and report the rest. A gate on an undetectable effect is a coin flip with a changelog, and it destroys trust in the gates that were sound.
+- Deterministic assertions have no sampling error, so they gate on a single run at any set size, which is the CI argument for moving criteria down the scoring ladder.
