@@ -1,0 +1,157 @@
+---
+title: "Rolling Summary"
+description: "Compress old turns into a running summary before the window fills."
+---
+
+## Problem
+
+A run is at turn nineteen. The transcript holds every model message, every tool call, and every tool result since turn one, and it is re-sent in full on every request. The window is 60% full and the run is not close to finishing.
+
+Two things happen if you do nothing. The window fills and the request fails: a [permanent error](/docs/reliability/error-taxonomy) that retrying will reproduce exactly. And well before that, cost climbs [quadratically in turn count](/docs/production/cost-engineering), because each turn pays for every turn before it.
+
+The obvious fix, dropping the oldest messages, silently deletes the decision made at turn three that everything since depends on.
+
+## Forces
+
+- **The window is finite** and the run's length is not known in advance.
+- **Old turns are mostly noise**: a tool result you already extracted three fields from, a retrieval that did not help, a step that was retried.
+- **Some old turns are load-bearing**: the customer's actual request, a policy decision, an amount that was agreed.
+- **Compression is lossy and the loss is unrecoverable.** Once summarized, the detail is gone from the context for the rest of the run.
+- **Summarizing costs a model call**, so doing it every turn is worse than the problem.
+- **Prefix caching punishes rewrites**: rewriting the front of the context [invalidates the cache](/docs/foundations/prompt-caching) for everything after it.
+
+## Solution
+
+Maintain a **running summary** of the turns that have aged out, and keep a fixed window of recent turns verbatim.
+
+```
+   ┌────────────────────────────────────────────────────────┐
+   │  system prompt + tools          ← never touched        │
+   ├────────────────────────────────────────────────────────┤
+   │  RUNNING SUMMARY                ← rewritten on trigger │
+   │  "Ticket 9104: damaged pallet, order 4921. Damage      │
+   │   policy v7 applies (chunk c-8812). Credit computed    │
+   │   at 25000 cents, pending approval."                   │
+   ├────────────────────────────────────────────────────────┤
+   │  turn n-4 … turn n               ← verbatim, always    │
+   └────────────────────────────────────────────────────────┘
+```
+
+Three rules make it work:
+
+**Trigger on a threshold, not every turn.** Summarize when the transcript crosses a fraction of the window, 60% is a reasonable default, not on a fixed cadence. Most runs never reach it and never pay.
+
+**Summarize into a fixed schema, not free prose.** The summarizer fills named fields: the request, decisions made, values established with their sources, open questions. A prose summary drifts a little on every pass, which is [semantic drift](/docs/context/context-poisoning) and it compounds. A schema bounds what can be lost.
+
+**Never summarize what the scratchpad already holds.** Values that must survive, such as the order ID, the amount, the cited chunk, live in [typed state](/docs/context/context-poisoning), not in the summary. The summary is for *narrative*: what was tried, what was decided, why. If the summary is the only home for a number, the design is wrong.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/rolling-summary.ts"
+const TRIGGER = 0.6;      // fraction of the window
+const KEEP_VERBATIM = 5;  // recent turns never summarized
+
+export interface RunningSummary {
+  request: string;              // what the user actually asked
+  decisions: string[];          // what was decided, and why
+  established: Record<string, string>;  // value → tool call that produced it
+  open: string[];               // what is still unresolved
+  turnsCovered: number;
+}
+
+export async function maybeCompress(
+  state: AgentState,
+  window: number,
+): Promise<AgentState> {
+  const used = countTokens(state.messages);
+  if (used < window * TRIGGER) return state;             // usually returns here
+
+  const [older, recent] = split(state.messages, KEEP_VERBATIM);
+
+  // The summarizer sees the previous summary AND the turns aging out, so
+  // it revises rather than re-derives. Schema-constrained, low temperature.
+  const summary = await summarize({
+    previous: state.summary,
+    turns: older,
+    schema: RunningSummarySchema,
+  });
+
+  return { ...state, summary, messages: recent };
+  // scratchpad is untouched: it holds the values, the summary holds the story.
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/rolling_summary.py"
+TRIGGER = 0.6        # fraction of the window
+KEEP_VERBATIM = 5    # recent turns never summarized
+
+
+class RunningSummary(BaseModel):
+    request: str                      # what the user actually asked
+    decisions: list[str]              # what was decided, and why
+    established: dict[str, str]       # value → tool call that produced it
+    open: list[str]                   # what is still unresolved
+    turns_covered: int
+
+
+async def maybe_compress(state: AgentState, window: int) -> AgentState:
+    if count_tokens(state.messages) < window * TRIGGER:
+        return state                                   # usually returns here
+
+    older, recent = split(state.messages, KEEP_VERBATIM)
+
+    # The summarizer sees the previous summary AND the turns aging out, so
+    # it revises rather than re-derives. Schema-constrained, low temperature.
+    summary = await summarize(
+        previous=state.summary, turns=older, schema=RunningSummary
+    )
+
+    return replace(state, summary=summary, messages=recent)
+    # scratchpad untouched: it holds the values, the summary holds the story.
+```
+
+</Tab>
+</Tabs>
+
+## Trade-offs
+
+**Cost.** One extra model call per compression, against unbounded growth otherwise. On a run that triggers twice, this is strongly positive; on a run that never triggers, it is free. Use a [mid-tier model](/docs/production/cost-engineering): summarization needs faithfulness, not judgment.
+
+**Cache.** Rewriting the summary invalidates the prefix cache from that point down. This is why the summary sits *below* the system prompt and tool catalogue rather than being woven into them: the [stable prefix](/docs/patterns/context/stable-prefix) survives, and only the part that changed is re-read.
+
+**Fidelity.** Each pass is model output about model output. Constraining to a schema and always passing the *previous* summary rather than re-summarizing from scratch bounds the drift, but does not eliminate it. Runs that compress five times have measurably lower fidelity than runs that compress once, which is an argument for a higher trigger threshold, not a lower one.
+
+**Latency.** The compression is on the critical path. At a 60% trigger on a long run, it is a one-off second or two, which is acceptable; at a 30% trigger it fires often enough to be felt.
+
+## When not to use it
+
+**When the run is short.** If p99 turn count keeps you under half the window, this is machinery for a problem you do not have. Measure before adding it.
+
+**When you can drop instead of compress.** If the old turns are genuinely disposable, a chatty read-only assistant with no accumulated decisions, [selective history](/docs/patterns/context/selective-history) or plain truncation is cheaper and lossless in the ways that matter.
+
+**When the detail is the point.** Legal review, incident forensics, anything where "what exactly was said at turn four" is the deliverable. Compression is the wrong shape; [sub-agent isolation](/docs/patterns/context/subagent-isolation) with full transcripts per subtask keeps the detail somewhere.
+
+**When state should have been typed.** If the summary is carrying identifiers, amounts, or anything a tool returned, the fix is a [structured scratchpad](/docs/patterns/context/structured-scratchpad), not a better summarizer. A rolling summary that holds facts is a poisoning vector with extra steps.
+
+**When a full rewrite is better.** At a natural checkpoint, such as a subtask completing or an approval returning, [context compaction](/docs/patterns/context/context-compaction) rebuilds the whole context from verified state rather than folding the old one forward. It loses less, and it is available whenever a clean boundary exists.
+
+<Aside type="caution" title="The summary is not a restore point">
+A rolling summary is derived from the transcript, so if the transcript was [poisoned](/docs/context/context-poisoning), the summary inherits the poison and now looks like established fact with no provenance.
+
+Whatever you rebuild a compromised run from has to be something the model never wrote: the typed scratchpad, the tool results in the trace, or the [workflow history](/docs/durability/agent-as-workflow). The summary is a convenience for the model, never the system of record.
+</Aside>
+
+## Related
+
+- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): where the values go, so the summary only carries narrative
+- [Context Compaction](/docs/patterns/context/context-compaction): full rewrite at a checkpoint, when a clean boundary exists
+- [Selective History](/docs/patterns/context/selective-history): retrieve the relevant past turns instead of compressing all of them
+- [Stable Prefix](/docs/patterns/context/stable-prefix): why the summary sits below the cacheable region
+- [Sub-Agent Isolation](/docs/patterns/context/subagent-isolation): keep a noisy subtask out of the main transcript entirely
+- [Compaction](/docs/context/compaction): the chapter this pattern comes from
