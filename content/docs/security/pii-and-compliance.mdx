@@ -1,0 +1,257 @@
+---
+title: "PII, Audit, and Compliance"
+description: "Data residency, retention, redaction, and an audit trail that satisfies someone who is not an engineer."
+---
+
+An erasure request arrives for customer 8841. An engineer runs the deletion against the application database, confirms the rows are gone, and closes the ticket in nine minutes.
+
+The customer's name, address, order history, and the substance of four support conversations remain in: eleven Temporal workflow histories, roughly two hundred checkpointed thread states, the trace store at your observability vendor, a memory record asserting *"prefers email contact, disputes charges frequently,"* two summaries written during compaction, an eval fixture built from a run last quarter, and, depending on what you signed, a model provider's abuse-monitoring buffer.
+
+None of that is a bug. Every one of those stores did exactly what it was built to do.
+
+> **A classical application reads personal data. An agent copies it.**
+
+That is the whole difference, and it is why compliance for agentic systems is not the same exercise with a different logo on the report.
+
+## Map the copies, not the database
+
+The [previous chapter](/docs/security/tenant-isolation) listed your stores on the tenancy axis: which of them can leak *across customers*. This is the same inventory on a different axis: which of them hold personal data at all, how it got there, and who decided.
+
+| Store | How personal data arrives | Who chose this |
+| --- | --- | --- |
+| Application database | Deliberately, with a schema | A designer, on purpose |
+| Prompt sent to the provider | Every field the assembler included | Whoever wrote the prompt template |
+| Trace / observability store | Verbatim prompts and results | An engineer adding instrumentation |
+| Checkpointer | The whole conversation, per thread | The framework, by default |
+| Workflow history | Every activity argument, durably | The durability decision |
+| [Memory / fact store](/docs/context/memory) | Extracted assertions about a person | An extraction prompt |
+| Compaction summaries | Restated, unlabeled, unstructured | An automatic process |
+| Eval datasets | Sampled production runs | A quality initiative |
+| Model provider's logs | Whatever your contract permits | Your procurement, months ago |
+
+Read the third column. **Exactly one row was a data-protection decision.** The rest are engineering choices that produced personal-data copies as a side effect, made by people solving durability, debugging, or quality problems, in stores whose retention was configured for operational convenience.
+
+Two rows deserve singling out because they behave worst under a deletion request.
+
+**Compaction summaries and memory records are derived personal data, and they are unstructured.** A row keyed by `customer_id` is deletable. A summary sentence reading *"the customer was upset about the delayed Meridian order and mentioned their new address"* is personal data with no key, no schema, and no marker saying so. If your memory store keeps `subject_id` alongside every fact, as [the memory chapter argued for other reasons](/docs/context/memory), this is tractable. If it does not, you cannot honor an erasure request against it and you will discover that during an audit.
+
+**The eval set is the one that outlives everything.** It was extracted once, lives in a repository with different access rules, gets copied into CI caches and developer laptops, and nothing about your deletion pipeline knows it exists.
+
+## You cannot un-send, so minimize at the boundary
+
+There is one irreversible moment in the whole pipeline: the request leaving for the provider. Everything before it you control; nothing after it you do.
+
+Which sets where redaction has to happen:
+
+<Figure caption="Redaction at export protects your vendor relationship. Redaction at assembly is the only point that protects the data." frame={false}>
+
+```
+   ingest ──▶ store ──▶ ASSEMBLE ──▶ provider
+                            │           ✗ irreversible
+                            │
+                      redact HERE
+                            │
+                            ├──▶ checkpoint    ┐
+                            ├──▶ trace         │ all inherit
+                            ├──▶ summary       │ whatever the
+                            └──▶ eval sample   ┘ prompt contained
+```
+
+</Figure>
+
+Redacting on the way into the trace store, the common implementation, is worth doing and arrives one step too late: the provider already has the unredacted version, and so does the checkpoint. Redact at **assembly**, and every downstream copy inherits the reduction for free.
+
+The technique that makes this practical without breaking the agent is **pseudonymization**: replace the value with a stable handle the model can reason about and your code can resolve.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/privacy/fields.ts"
+// Classification lives on the field, assigned once, at the schema.
+// Not guessed from the value by a regex at prompt time.
+export type Sensitivity = 'public' | 'internal' | 'personal' | 'restricted';
+
+export interface Field<T> {
+  value: T;
+  sensitivity: Sensitivity;
+  /** How this field appears in a prompt. */
+  render: 'verbatim' | 'pseudonym' | 'omit';
+}
+
+// The model gets a handle it can carry through its reasoning and pass
+// back as a tool argument. Your dispatcher resolves it. The real value
+// never enters the prompt, the checkpoint, the trace, or the provider.
+export function forPrompt(f: Field<string>, vault: Vault): string {
+  switch (f.render) {
+    case 'verbatim':  return f.value;
+    case 'pseudonym': return vault.handleFor(f.value);   // → "person_a1"
+    case 'omit':      return '[redacted]';
+  }
+}
+
+// Atlas does not need the customer's email to draft a reply. It needs
+// to know a contact exists. send_reply resolves the handle server-side —
+// which is also why it has no recipient argument at all.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/privacy/fields.py"
+from dataclasses import dataclass
+from enum import Enum
+from typing import Literal
+
+
+class Sensitivity(str, Enum):
+    PUBLIC = "public"
+    INTERNAL = "internal"
+    PERSONAL = "personal"
+    RESTRICTED = "restricted"
+
+
+@dataclass(frozen=True)
+class Field:
+    """Classification lives on the field, assigned once, at the schema.
+    Not guessed from the value by a regex at prompt time."""
+
+    value: str
+    sensitivity: Sensitivity
+    render: Literal["verbatim", "pseudonym", "omit"]
+
+
+# The model gets a handle it can carry through its reasoning and pass
+# back as a tool argument. Your dispatcher resolves it. The real value
+# never enters the prompt, the checkpoint, the trace, or the provider.
+def for_prompt(f: Field, vault) -> str:
+    if f.render == "verbatim":
+        return f.value
+    if f.render == "pseudonym":
+        return vault.handle_for(f.value)   # → "person_a1"
+    return "[redacted]"
+
+
+# Atlas does not need the customer's email to draft a reply. It needs to
+# know a contact exists. send_reply resolves the handle server-side —
+# which is also why it has no recipient argument at all.
+```
+
+</Tab>
+</Tabs>
+
+The classification lives on the **field**, not on the document, and it is assigned at the schema rather than detected at runtime. That distinction is the same one [the untrusted-retrieval chapter](/docs/security/untrusted-retrieval) made about provenance, and it fails for the same reason when you get it backwards: a regex that spots email addresses in free text is a classifier, and a classifier misses. Here the miss is quieter than a security miss. Nobody attacks it, so nothing reveals the gap until a subject-access request asks what you hold.
+
+There is a bonus that has nothing to do with compliance. Handles are shorter than values, stable across turns, and cannot be [hallucinated into a plausible-looking wrong email address](/docs/tools/schema-and-granularity). Pseudonymization improves the agent slightly while making the privacy story dramatically simpler, which is rare enough to be worth noticing.
+
+## Residency: every model call is a transfer
+
+For a classical application, "where does the data live" is a question about your database region. For an agent it is a question about **every provider call in every run**, because each one ships context to someone else's infrastructure, and a single run may make thirty.
+
+Four things to settle, and they are procurement decisions with engineering consequences:
+
+**Region-pinned inference.** The endpoint you call determines the jurisdiction the data enters. If residency matters, that endpoint is a deployment constant, not a default.
+
+**Zero-retention terms.** Providers commonly buffer inputs for abuse monitoring for a fixed window unless a contract says otherwise. That buffer is a store you cannot delete from and did not inventory. Negotiate it or accept it explicitly.
+
+**Training use.** Whether your data trains a model is a contractual question with a durable answer, and it should be recorded next to the endpoint config rather than in someone's memory of a sales call.
+
+**The full subprocessor list.** Not just the model provider: the embedding service, the reranker, the observability vendor, the vector database, the sandbox host. [The retrieval chapter flagged this](/docs/retrieval/metadata-and-authorization) as a thing that arrives quietly when someone adds a reranker to improve relevance. Every one of them is a recipient of personal data.
+
+## Retention is a per-store decision, and the requirements genuinely conflict
+
+Here is where compliance for agents stops being an application of standard practice.
+
+| Force | Wants |
+| --- | --- |
+| [Durable execution](/docs/durability/agent-as-workflow) | Long histories: replay and investigation need them |
+| Debugging | Traces retained long enough to find a rare bug |
+| Data protection | The shortest retention that serves the purpose |
+| Regulated logging | A **minimum** retention, for some system classes |
+
+The last two point in opposite directions, and the resolution is not to pick a side.
+
+<Aside type="note" title="Where the floor comes from, and what it does not override">
+The EU AI Act uses three articles for duties that are easy to conflate. **Article 12** requires applicable high-risk systems to be capable of automatically recording events over their lifetime. **Article 19** sets a retention floor of at least six months for logs under the provider's control, subject to applicable data-protection law. **Article 18** covers separate technical-documentation and conformity records on a longer horizon.
+
+Those duties did **not** generally take effect on the old 2 August 2026 high-risk schedule. As of August 2026, the European Commission's [implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act) places the Annex III high-risk rules on 2 December 2027 and product-embedded high-risk rules on 2 August 2028. **Whether a given system is high-risk is a legal classification**. Whether Atlas qualifies is a question for counsel, not for this book. Where the obligations meet the GDPR, data-protection law remains the constraint on personal data: a record-keeping duty is not a licence to retain personal data you would otherwise have to minimize.
+
+Regulatory specifics date faster than anything else in these pages. Read the [current official regulation](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng) and implementation guidance before making a retention decision.
+</Aside>
+
+Which produces the actual engineering move, and it is a satisfying one because it dissolves the conflict rather than trading it off:
+
+> **If the record you must retain contains no personal data, the retention floor and the minimization duty stop competing.**
+
+A required log entry can say *run 4471 issued a credit of 250000 to account handle `acct_a1`, approved by staff 22, under policy v9* and retain for a decade without holding anything about a person. The full conversation, which is what actually contains the personal data, can expire in thirty days. That is one structured audit record written deliberately, plus an operational store with a short life, and it is precisely the split [the escalation and audit chapter](/docs/human-in-the-loop/escalation-and-audit) argued for on evidentiary grounds. The privacy argument lands on the same design from a different direction.
+
+So: **retention is set per store, from the purpose of that store**, and written down. Not inherited from whatever the vector database defaulted to.
+
+## Erasure is a fan-out, so build the registry
+
+Deletion in an agentic system is not an operation. It is a distributed job over a set of stores that nobody has ever written down.
+
+Which is the actionable finding of this chapter: **maintain a deletion registry**, an enumerated list of every store that can hold personal data, with, for each one, the key it is addressable by, the mechanism, and the expected latency. That file is the deliverable. Without it, "we deleted the customer" means "we deleted the rows we remembered."
+
+Three parts of the fan-out are harder than they look:
+
+**Derived data has no key.** A compaction summary or an extracted memory mentioning the subject is personal data with nothing to join on. The only real fix is upstream: record `subject_ids` on every derived artifact at the moment it is created. Retrofitting this is close to impossible, which is why it belongs in the design rather than in the remediation.
+
+**Some stores are append-only by design.** A workflow history is not a table you delete from. That is the property that makes replay work. The available answers are per-run retention that eventually expires the whole history, keeping personal data out of activity arguments in favor of handles, or [crypto-shredding](/docs/security/sandboxing): encrypt per subject and destroy the key, so the ciphertext remains and the data does not. The third is usually the honest answer for durable systems, and it has to be designed in at the start.
+
+**Some stores are not yours.** A provider's abuse buffer is deleted according to their terms, on their schedule. You can contract that away in advance; you cannot delete it on request.
+
+The subject-access side is the same registry read in the other direction: *what do you hold about me* is answerable exactly when *delete everything about me* is, and both are unanswerable without it.
+
+## Atlas, concretely
+
+| Store | Personal data | Retention | Erasure path |
+| --- | --- | --- | --- |
+| Application tables | Yes, schema'd | Per data class | Direct delete by `customer_id` |
+| Prompts to the provider | **Handles only** | Zero-retention contract | Nothing to erase, by construction |
+| Trace store | Handles; tool results scrubbed at assembly | 30 days | Expiry |
+| Checkpointer | Conversation text | 30 days after run completion | Expiry, plus targeted delete |
+| Workflow history | Handles in arguments; payloads encrypted per subject | 90 days | Crypto-shred by destroying the subject key |
+| Memory store | Facts, each tagged `subject_id` | Until erasure or 12 months | Direct delete by subject |
+| Compaction summaries | Derived; `subject_ids` recorded at creation | With the thread | Fan-out by subject |
+| Eval fixtures | Scrubbed and pseudonymized at extraction | Indefinite | **Nothing to erase, the point of scrubbing** |
+| Audit records | Handles, staff IDs, policy versions | 10 years | Not erased, contains no personal data |
+
+The last two rows are the design paying off. The eval set is permanent and harmless because the reduction happened at extraction; the audit record is retained for a decade and raises no minimization question because the pseudonymization happened at assembly. Both were free at design time and neither is achievable afterwards.
+
+## Where Part XVII leaves you
+
+Ten chapters, and one argument running through all of them.
+
+The [threat model](/docs/security/threat-model) established that the trust boundary moved somewhere you cannot put a check. [Injection](/docs/security/prompt-injection) showed that no amount of inspecting text recovers it, and [retrieval](/docs/security/untrusted-retrieval) showed that the hostile text may have been written a year before the query. [Least privilege](/docs/security/least-privilege) and [identity](/docs/security/identity) reduced what a compromised run can reach and as whom; [tenancy](/docs/security/tenant-isolation) and [sandboxing](/docs/security/sandboxing) put the enforcement below the application, where your own bugs cannot reach it. [The supply chain](/docs/security/agentic-supply-chain) added every external component and update channel that can change behavior at runtime, and [adversarial evals](/docs/security/adversarial-evals) made those paths executable tests. This chapter did the same thing to personal data: reduce at the boundary, so every copy downstream inherits the reduction.
+
+The through-line is that **every effective control in this part is structural and every ineffective one is a request.** Filters, careful prompts, instructions not to obey documents, and reminders to be careful with customer data are all the same shape, and they all fail in the same direction, quietly, against exactly the case you needed them for.
+
+The part is also, deliberately, not a bolt-on. Argument scoping is a schema decision from Part VIII. Provenance is an ingestion decision from Part IV. Delegation is a dispatcher decision from Part II. Retention is a durability decision from Part XI. There is no chapter here you could have implemented last, which is the actual reason security for agents fails: not because the controls are hard, but because they are all decisions someone else already made.
+
+Part XVIII assembles the whole thing: every component, every arrow, and which of them you can skip.
+
+## References
+
+- [Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng), the AI Act as adopted.
+- [European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act), the maintained official source for obligations and timeline.
+
+---
+
+Next: [AI Governance](/docs/production/ai-governance), inventory, ownership, impact, evidence, exceptions, literacy, and retirement before the architecture is approved.
+
+## Takeaways
+
+- A classical application reads personal data. An agent copies it, into prompts, traces, checkpoints, workflow histories, memory, summaries, and eval sets.
+- Inventory those stores by asking who decided personal data would land there. Usually exactly one of them was a data-protection decision.
+- Derived artifacts are the hard case: a summary or an extracted memory is personal data with no key. Record `subject_ids` at creation or you cannot erase it later.
+- Eval fixtures outlive everything around them and are copied into repositories, CI caches, and laptops. Scrub at extraction.
+- There is one irreversible step, the provider call. Redact at prompt *assembly*, not at trace export, and every downstream copy inherits the reduction.
+- Pseudonymize rather than strip: a stable handle the model can carry and your code resolves. It also shortens prompts and removes a hallucination surface.
+- Classify at the field, in the schema. A regex over free text is a classifier, and classifiers miss, quietly, because nobody attacks this one.
+- Every model call is a data transfer. Pin the region, settle zero-retention and training terms in the contract, and inventory the full subprocessor list including rerankers and sandbox hosts.
+- Durability wants long retention; minimization wants short; some regulated system classes impose a floor. The EU AI Act's relevant high-risk dates moved into 2027 and 2028, and where its duties meet the GDPR, data protection remains the constraint. Verify the current official schedule before making a retention decision.
+- The conflict dissolves if the record you must retain contains no personal data. One structured audit record with handles, retained for years; the conversation that carried the data, expired in weeks.
+- Set retention per store, from that store's purpose, and write it down.
+- Erasure is a fan-out. Build a deletion registry naming every store, its key, its mechanism, and its latency. The registry *is* the deliverable, and it answers subject-access requests read backwards.
+- Append-only stores need crypto-shredding: encrypt per subject, destroy the key. Designed in at the start or not available at all.
+- Every effective control in Part XVII is structural; every ineffective one is a request. None of them could have been implemented last.
