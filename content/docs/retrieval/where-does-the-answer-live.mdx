@@ -1,0 +1,141 @@
+---
+title: "Where Does the Answer Live?"
+description: "The routing decision that precedes every retrieval choice: semantic, lexical, SQL, graph, API, or just put it in the prompt."
+---
+
+
+The standard sequence goes: we need the agent to know things → we need RAG → we need a vector database → embed the corpus → ship.
+
+There is a decision missing from the front of that sequence, and skipping it is the most expensive habit in this field. Before choosing *how* to retrieve, you have to answer:
+
+> **Where does the answer actually live?**
+
+Not "where did we put a copy of it." Where it is true. Because Atlas's four tickets have four different answers to that question, and only one of them is a document.
+
+## Retrieval is a routing decision, not a technology
+
+The framing that causes the damage is treating retrieval as infrastructure you install once. Install a vector DB, embed everything, and now the agent "has knowledge."
+
+The framing that works is treating it as a **decision made per question**. A support agent at Meridian gets asked things whose answers live in genuinely different places, with different shapes, different freshness, and different correctness requirements. One index cannot be right for all of them, and forcing it produces a system that is mediocre at everything and confidently wrong at some things.
+
+Six destinations, and the question shape that points at each:
+
+| The question sounds like | The answer lives in | Because |
+| --- | --- | --- |
+| "similar to…", "about…", "what's our policy on…" | **Vector search** | Meaning matters more than wording |
+| "RB-400", "INC-93842", an exact name or code | **Lexical search** | Embeddings are bad at identifiers |
+| "how many", "total", "between these dates" | **SQL** | It's an aggregation, not a retrieval |
+| "who is connected to what", "why is this at risk" | **Graph** | The relationship *is* the answer |
+| "what is the status right now" | **A live API call** | An index is a stale copy by definition |
+| "what company are you", "what's the escalation limit" | **The prompt** | Small, stable, needed every time |
+
+That table appears in [the map](/docs/the-map) without its reasoning. Here is the reasoning, for the two rows that get misrouted most.
+
+## Identifiers: why the first chapter explains this
+
+Ticket #8812 mentions the RB-400 relay. Meridian has 60,000 SKUs. Ask a vector index for "RB-400" and you get back RB-380, RB-400-X, RB-420, in an order with no particular relationship to the thing you asked for.
+
+This is not a tuning problem, and the explanation is sitting in [Tokens](/docs/foundations/tokens), the first chapter of this book. Recall the token strip: identifiers fragment hard. `RB-400` is not a unit to the model; it is `RB`, `-`, `4`, `00`, and possibly not even that consistently. The embedding model averages those fragments into a vector that lands in the middle of a cluster of other identifier-shaped strings.
+
+The information you needed, **"this exact rare token appeared"**, is destroyed by the tokenizer before the embedding is ever computed. There is no `k` and no reranker that recovers it, because it isn't in the vector.
+
+Lexical search, by contrast, is built on exactly that signal: a rare term that matches is worth a great deal, precisely because it's rare. This is why adding a lexical retriever alongside a vector one is consistently the highest-impact single upgrade to a naive RAG system, and it's why Part IV has a [whole chapter on it](/docs/retrieval/lexical-search) rather than treating it as a legacy technique.
+
+<Aside type="note" title="The rule of thumb">
+If a human would find it with Ctrl-F, semantic search is the wrong tool. Part numbers, order IDs, error codes, contract clause numbers, people's names, table names, filenames: all of it.
+</Aside>
+
+## Aggregation: it was never a retrieval problem
+
+Ticket #8817 asks for tonnage shipped to Iberia in Q2 versus Q1.
+
+Consider what "retrieving" that means. The answer exists in no document. It is a `SUM` over rows that must first be filtered by date and joined to a region mapping. To answer it via a vector index you would have to embed row text, retrieve some number of allegedly relevant rows, and hope the model adds them up correctly.
+
+Every part of that is wrong. Retrieval returns top-*k*, and an aggregate needs *all* matching rows, so the answer is not merely imprecise, it is **structurally guaranteed to be incomplete**. Then you've asked a language model to do arithmetic over forty thousand values, in context, at output token rates.
+
+The right move is to give the agent a query tool and let the database do what databases do. It's faster, it's exact, it's cheaper by orders of magnitude, and it's auditable. [SQL Is Still the Answer](/docs/retrieval/sql-is-still-the-answer) is the chapter; the principle is that **a question requiring computation over many records is a computation, and you already own a computer that does that correctly.**
+
+The failure mode here is particularly nasty because it doesn't look like a failure. The agent returns a number. The number is plausible. Nobody checks.
+
+## Freshness decides more than you think
+
+The axis people leave out entirely.
+
+Every index is a copy, and every copy has an age. So for each kind of information, ask: **how fast does this change relative to how often I reindex?**
+
+| Information | Changes | Index it? |
+| --- | --- | --- |
+| Return policy | Quarterly | Yes; reindex on publish |
+| Product specs | Monthly | Yes |
+| Order status | Hourly | **No.** Call the API. |
+| Inventory | Continuously | **Never.** Call the API. |
+| Account owner | Rarely, but it matters exactly when it changes | Index, with a live check before acting |
+
+An agent that answers "your order shipped Tuesday" from a nightly-indexed snapshot will eventually tell a customer something that stopped being true this morning. And because it retrieved that from an index rather than inventing it, none of the [poisoning defenses](/docs/context/context-poisoning) from the last chapter fire. The system worked exactly as designed, and it was wrong.
+
+Live state gets fetched. Always.
+
+## Five questions that route anything
+
+Run these in order and the destination falls out.
+
+**1 · Is the answer a document, or a computation?** Documents retrieve. Computations query.
+
+**2 · Do I need one thing, or all matching things?** Top-*k* is fine for "find me something relevant" and disqualifying for "how many."
+
+**3 · Does it change faster than my index?** If yes, no index is correct.
+
+**4 · Is the query term exact and rare?** Then lexical, or hybrid, but not dense alone.
+
+**5 · Is the connection the answer?** "Why is Acme at risk" isn't about any single record; it's about the account *and* its tickets *and* its renewal date *and* its order trend. That's a traversal, and [Part V](/docs/graphs/when-relationships-are-the-query) is about when the index is worth its cost.
+
+## Who does the routing?
+
+Three implementations, and the third is usually right.
+
+**In code.** A classifier picks the route (the profile mechanism from [dynamic selection](/docs/context/dynamic-selection)). Deterministic, testable, cheap. Correct when the categories are stable and small.
+
+**A dedicated router model.** One call to decide the route, then execute. Adds latency, and mostly moves the problem: you now need to eval the router.
+
+**Differentiated tools.** Give the agent `search_policies`, `find_by_part_number`, `query_warehouse`, `get_order`, and `get_account_graph` as separate tools with descriptions that say exactly when each applies. The model routes by choosing, which handles cases you didn't enumerate.
+
+This last one is the recommendation, and it relocates the problem somewhere useful: **routing quality becomes tool-description quality.** From [Part II](/docs/first-agent/first-tools), boundaries must be explicit in both descriptions. *"For aggregate questions across many orders, use `query_warehouse` instead"* is the routing table, written where the model will read it. That makes Part VIII on tool design a retrieval chapter in disguise.
+
+The anti-pattern is a single `search` tool that hides five backends behind a heuristic. The model can't route what it can't see, you can't measure which backend was wrong, and the failure is, inevitably, silent.
+
+## Atlas, routed
+
+| Ticket | Question | Route |
+| --- | --- | --- |
+| #8812 | Return policy for opened relays | **Hybrid**: lexical on `RB-400`, vector on the policy question |
+| #8817 | Q2 vs Q1 tonnage to Iberia | **SQL**, and only SQL |
+| #8823 | Credit for a damaged pallet | **Live API** for the order, **vector** for the damage policy, **SQL** for the totals |
+| #8841 | Why is Acme at risk | **Graph** traversal, then live checks on what it surfaces |
+
+Note #8812 and #8823: most real questions need two or three routes, not one. Hybrid is the normal case rather than an advanced technique, and an architecture that assumes one retrieval path per question will bend every question toward the path it has.
+
+## Why this is the cost chapter
+
+The map claims this is, per page, the most cost-saving chapter in the book. Here is the arithmetic behind that.
+
+The default architecture embeds everything, retrieves twenty chunks per question, and stuffs them into context. Against Atlas's ticket mix, that means: the aggregate questions get wrong answers from incomplete row samples; the identifier questions get near-miss SKUs; the status questions get stale snapshots; and every one of them pays for twenty chunks of context, which, per [the budget chapter](/docs/context/context-as-budget), is not just twenty chunks of tokens but twenty chunks of *attention*, drawn from the distribution most likely to be confusable.
+
+Route correctly and the same questions get: an exact `SUM` in 30ms, an exact identifier match, a live status, and five well-chosen policy chunks instead of twenty. Cheaper, faster, more accurate, and auditable, all at once, from a decision that costs nothing to make and is nearly impossible to retrofit.
+
+That last part is the real argument. Choosing the route is free at design time and expensive later, because by then you have an embedding pipeline, a reindexing job, and a year of prompt tuning built on top of the wrong answer to a question nobody asked out loud.
+
+---
+
+Next: [Embeddings](/docs/retrieval/embeddings), what a vector represents, how similarity is measured, and the operational costs nobody mentions.
+
+## Takeaways
+
+- Ask where the answer *is true*, not where you put a copy. That decision precedes every retrieval technology choice.
+- Six destinations: vector, lexical, SQL, graph, live API, and the prompt itself. Most agents need at least four.
+- Vector search fails on identifiers because the tokenizer destroys the signal before the embedding exists. No amount of tuning recovers it. If Ctrl-F would find it, use lexical.
+- Aggregation is not retrieval. Top-*k* over rows is structurally incomplete for a question that needs all of them, and it returns a plausible number nobody checks.
+- Freshness is a routing axis. Any index is a stale copy; live state gets fetched.
+- Five questions route anything: document or computation, one or all, faster than my index, exact and rare, is the connection the answer.
+- Prefer differentiated tools over a single `search` that hides backends. Routing quality becomes tool-description quality, which you can measure.
+- Most real questions need two or three routes. Hybrid is the normal case.
+- The decision is free now and nearly impossible to retrofit later.
