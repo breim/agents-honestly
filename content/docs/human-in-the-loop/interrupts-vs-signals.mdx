@@ -1,0 +1,143 @@
+---
+title: "LangGraph Interrupts vs. Temporal Signals"
+description: "Two mechanisms for the same pause. Which one owns the wait, and what happens when both think they do."
+---
+
+Both frameworks can pause an agent for a human. They do it differently enough that using both without deciding which one is in charge produces a specific, confusing class of bug.
+
+## Same pause, two mechanisms
+
+| | **LangGraph `interrupt()`** | **Temporal signal / update** |
+| --- | --- | --- |
+| What it is | A call inside a node that suspends the graph | A message delivered to a running execution |
+| What persists the pause | A checkpointer | The event history |
+| Who resumes it | The caller, with `Command(resume=…)` | Whoever sends the signal |
+| **What re-executes on resume** | **The whole node, from the top** | **Nothing** |
+| Granularity | The node | The workflow |
+| Caller learns the outcome | On the next invocation | With an update, immediately |
+
+The bolded row is the deepest difference, and everything else in this chapter follows from it.
+
+**LangGraph re-executes.** `interrupt()` raises out of the node; on resume, the node runs again from its first line, and this time `interrupt()` returns the value the human supplied. Any code above it runs twice.
+
+**Temporal does not.** A workflow awaiting a condition resumes at the condition. Activities that already completed return their journalled results and never run again. The pause is not implemented by replaying the pausing code.
+
+## Which one owns the wait
+
+Three configurations, and only the third is ambiguous:
+
+<Figure caption="With both in play, the interrupt marks the place and the signal delivers the decision. They are not competing. They are two halves." frame={false}>
+
+```
+   ① LANGGRAPH ALONE          ② TEMPORAL ALONE          ③ BOTH (the plugin)
+
+   node calls interrupt()     workflow awaits           node calls interrupt()
+        │                     a condition                    │
+   checkpointer stores             │                    Temporal pauses the
+   position                   history stores             workflow durably
+        │                     position                        │
+   caller resumes with             │                    signal arrives ──▶
+   Command(resume=…)          signal arrives            plugin calls resume()
+        │                          │                         │
+   NODE RE-RUNS               nothing re-runs           node re-runs
+                                                        (LangGraph semantics)
+
+   interrupt owns the wait    the signal owns it        Temporal owns the WAIT
+                                                        interrupt owns the PLACE
+```
+
+</Figure>
+
+In the combined setup the division is clean once stated: **`interrupt()` declares where the graph may pause; Temporal owns how long the pause lasts and what survives it.** The human's answer arrives as a signal, the plugin turns it into the graph's resume value, and the node continues with LangGraph's own re-execution semantics intact.
+
+Which means the durable-wait properties come from Temporal: no process, no socket, months if necessary. The double-execution behaviour comes from LangGraph and does **not** go away because Temporal is underneath.
+
+<Aside type="caution" title="One persistence layer, or you have two positions">
+The failure that gives this chapter its subtitle: running a LangGraph checkpointer *and* Temporal, both persisting where the graph is.
+
+Now there are two records of position that can disagree: after a crash, after a redeploy, after a resume that one of them saw and the other did not. Worse is resuming through LangGraph's own client while Temporal holds the execution: the graph advances, the workflow does not, and the next signal arrives at a workflow whose idea of the current node is stale.
+
+[As the plugin chapter said](/docs/durability/langgraph-on-temporal), Temporal's history **replaces** the checkpointer rather than complementing it. Pick one owner of position and delete the other.
+</Aside>
+
+## The rule that survives either mechanism
+
+Because LangGraph re-executes the node, the official guidance is unambiguous and worth quoting in spirit: **never place side-effecting code before `interrupt()` in a node.** External API calls, database writes, sent messages: all of them run again when the human answers.
+
+```python
+# ✗ the credit is issued twice: once before the pause, once after the resume
+def approve_and_pay(state):
+    credit = issue_credit(state["order_id"])   # ← runs twice
+    decision = interrupt({"credit": credit})
+    return {"decision": decision}
+
+# ✓ nothing above the interrupt has an effect
+def approve(state):
+    decision = interrupt({"proposed": state["proposal"]})
+    return {"decision": decision}
+
+# …and the effect lives in its own node, after the decision
+def pay(state):
+    return {"credit_id": issue_credit(state["order_id"])}
+```
+
+That is [the one-effect-per-node rule](/docs/langgraph/persistence) arriving from a third direction. Part VII derived it from checkpoint replay, [Part XI derived it from compensation ordering](/docs/durability/compensation), and here it falls out of interrupt semantics. Three independent arguments for the same constraint is usually a sign the constraint is real.
+
+## One interrupt per node, and this one is not style
+
+Multiple `interrupt()` calls in a single node are supported, and resume values are matched to them **by their order in the node**. That ordering dependency is fragile on its own. Inserting a conditional interrupt above an existing one silently re-maps every answer below it.
+
+It is also, currently, incompletely implemented. Three things are worth knowing before you rely on the multi-interrupt path:
+
+- A node containing two interrupts **re-runs after only the first is resumed**. The maintainers' own issue notes this cannot be fixed without tracking interrupt IDs, which the currently stored metadata does not support.
+- Interrupts raised from **parallel** branches can generate identical IDs, which makes resuming them individually impossible.
+- Worse than either, and reported from more than one direction, resume values can be **misrouted**: reused across a parent resume when a subgraph holds several interrupts, or applied to the wrong call inside a tool node. Ordering is the matching key, so anything that perturbs the order at run time can land one person's answer on a different decision. This is the failure that does not announce itself: an approval was given, an approval was recorded, and they were not the same approval.
+
+So the practical rule is not an aesthetic preference:
+
+> **One interrupt per node.** If a step needs two human decisions, it is two nodes.
+
+And one more thing about the blast radius, because "the node re-runs" understates it. When the `interrupt()` sits inside [a subgraph](/docs/langgraph/routing-and-subgraphs), resuming re-executes **both** the subgraph node that raised it *and* the parent node that invoked the subgraph, each from its own first line. So the rule *put side effects after the interrupt* is not sufficient at one level up: work the parent did before calling the subgraph runs again too, with no `interrupt()` anywhere near it to warn you. Atlas's agent loop is a subgraph, which puts this squarely on the path this book recommends.
+
+Check the current state of those issues before designing around them. This is a moving target, and the shape of the constraint is more durable than its details.
+
+## Choosing
+
+| Situation | Use |
+| --- | --- |
+| LangGraph, no durable backend | `interrupt()`, and accept node re-execution as your problem |
+| Temporal, no graph | Signal, or **update** when the caller needs the outcome |
+| Both, via the plugin | `interrupt()` for the place; Temporal owns the wait |
+| Reviewer must learn whether their decision was accepted | An **update**, wrapped around whatever the graph needs |
+
+That last row is the one to be deliberate about. The documented plugin path delivers the human's answer as a **signal**, and [a signal is acknowledged before the workflow processes it](/docs/durable-execution/signals-and-children). So the approval UI learns that the message was accepted, not that the decision was valid. If your gate has an expiry or a validator, as [the previous chapter argued it should](/docs/human-in-the-loop/approval-gates), the acceptance check belongs in an update in front of it.
+
+## Atlas, concretely
+
+Atlas runs the workflow directly rather than through the plugin. [The port was forty lines](/docs/durability/agent-as-workflow) and the topology is one loop with two exits, so the graph was never carrying its weight.
+
+That makes the choice easy and worth stating as the general recommendation it is: **when you own the code, prefer the mechanism that does not re-execute.** Temporal's update-plus-condition has no double-execution problem to design around, no ordering dependency between multiple pauses, and no second persistence layer to keep consistent with the first.
+
+`interrupt()` earns its place when the graph already exists and represents real work, the same condition [that justifies the plugin at all](/docs/durability/langgraph-on-temporal). Then the rules above are not workarounds; they are the operating manual.
+
+## References
+
+- [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), node re-execution on resume and the side-effect caveat that follows from it.
+- [The `Durability` type](https://reference.langchain.com/python/langgraph/types/Durability), checkpoint granularity per invocation.
+
+---
+
+Next: [Escalation, Timeouts, and Audit Trails](/docs/human-in-the-loop/escalation-and-audit), what happens when nobody approves, and how to prove afterwards what the agent did and why.
+
+## Takeaways
+
+- Both mechanisms pause for a human. The difference that matters is what re-executes on resume: LangGraph re-runs the whole node from the top, Temporal re-runs nothing.
+- With the plugin, `interrupt()` declares **where** the graph may pause and Temporal owns **how long** the pause lasts. They are two halves, not competitors.
+- The durable-wait properties come from Temporal; the double-execution behaviour comes from LangGraph and does not disappear because Temporal is underneath.
+- Running a LangGraph checkpointer alongside Temporal gives you two records of position that can disagree. Temporal's history replaces the checkpointer. Delete the other.
+- Never put side-effecting code above `interrupt()` in a node. It runs again when the human answers. And if the interrupt is inside a subgraph, so does the parent node's work before the subgraph call, where there is no `interrupt()` in sight to remind you.
+- One effect per node now has three independent derivations: checkpoint replay, compensation ordering, and interrupt semantics.
+- Multiple interrupts per node match resume values by position, and the path has known gaps: a two-interrupt node re-runs after one resume, and parallel interrupts can collide on ID.
+- One interrupt per node. Two human decisions is two nodes.
+- The plugin delivers the answer as a signal, which is acknowledged before processing. If your gate has a validator or an expiry, put an update in front of it.
+- When you own the code, prefer the mechanism that does not re-execute. `interrupt()` earns its place when the graph already exists, the same condition that justifies the plugin.
