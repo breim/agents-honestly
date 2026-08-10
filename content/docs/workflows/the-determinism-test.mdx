@@ -1,0 +1,153 @@
+---
+title: "The Determinism Test"
+description: "One question that decides between a function, a workflow, and an agent, before you write anything."
+---
+
+[Part I argued](/docs/foundations/when-not-to-build-an-agent) that most systems built as agents shouldn't be. This part is about what to build instead, and it starts by turning that argument into a procedure you can actually run.
+
+The procedure has one refinement that changes everything, and it's the reason this is a separate chapter rather than a restatement:
+
+> **Apply the test per step, not per system.**
+
+"Is this an agent or a workflow" is close to a meaningless question about a real system, because almost every good one is both. The shape that works is a **deterministic backbone with intelligence deployed at specific steps, where control returns to the backbone after each one.** That is also the shape the field has converged on.
+
+So the unit of decision is the step. You will run this test a dozen times on one feature, and get different answers.
+
+## The test
+
+For each step, three questions in order.
+
+**1 · Given the same input, must the same thing happen?**
+
+If yes, it's code. Not "should usually," not "we'd prefer". Must. Compliance checks, authorization, money movement, anything with a legal or contractual meaning. You cannot delegate a step where variance is unacceptable to a [component that varies](/docs/foundations/nondeterminism), and no prompt makes it not vary.
+
+**2 · Can I enumerate the outcomes?**
+
+If the step produces one of a known set, say a category, a route, or a boolean, then the model's job is **classification**, and its output goes into your control flow rather than being it. This is a bounded model call: [structured output](/docs/foundations/structured-output), an enum, and a `switch` you wrote. The model decides *which*, you decide *what happens next*.
+
+**3 · Does the next step depend on what this one returned?**
+
+This is the one that actually distinguishes an agent. Not "is the task hard," not "is the input varied." **Does the choice of the next action require having seen the result of the last one?** If you can write the sequence in advance, write it. If the third call is only knowable after reading the second's output, you need a loop.
+
+Two things about that sequence are worth making explicit, because a step can otherwise fall out of it.
+
+**The second question is about your control flow, not about list length.** A drafted reply is not enumerable in any useful sense, and it is still a single bounded call, because nothing downstream branches on its contents. Read Q2 as *can one call hand my code a value it knows what to do with*, and generation passes it as readily as classification does. A step that answers no to all three is a bounded call by construction: one call, with nothing depending on its result, has nothing to loop over.
+
+**The three questions separate ①, ② and ③. They do not separate ③ from ④.** That last boundary is not a property of the step at all. ④ is what ③ becomes when you decline to bound it, which is a decision you make rather than one the test reports.
+
+Run those three and every step lands in one of four places:
+
+<Figure caption="Four placements. Most steps in a working system are in the first two columns." frame={false}>
+
+```
+   ①  CODE            ②  BOUNDED CALL    ③  BOUNDED LOOP    ④  OPEN LOOP
+
+   deterministic      one model call,    model chooses      model decides
+   logic you wrote    typed output,      from a fixed       what to do
+                      no control          toolset, you       until it stops
+                                          bound the steps
+
+   auth checks        classify a ticket   look up an order   investigate an
+   policy limits      extract entities    then decide what   account, follow
+   money movement     draft a reply       else to fetch      the evidence
+   formatting         summarize
+
+   unit tests         eval with a         eval + trace       eval + trace
+                      threshold           + step bound       + everything
+                                                              in Parts X–XVII
+```
+
+</Figure>
+
+## The determinism budget
+
+Here is the argument for keeping steps in the left columns, stated as arithmetic rather than taste.
+
+Every nondeterministic step multiplies the number of paths your system can take. A workflow with one bounded classification into four categories has four paths. You can enumerate them, test them, and reason about all of them. Add a second, and it's sixteen. A step-4 open loop with six tool choices per step and up to eight steps has a path space you cannot write down, let alone test.
+
+That is not an argument against ever doing it. It is an argument for **spending nondeterminism where it buys something**, exactly like any other budget:
+
+| Step | Adaptive buys you | Cost |
+| --- | --- | --- |
+| Classifying an inbound ticket | Handling phrasings you didn't anticipate | 4 paths, testable |
+| Drafting a reply | Natural language you can't template | 1 path, quality is a rate |
+| Deciding which lookups to run | Handling questions you can't enumerate | Path space explodes |
+| Checking the refund limit | **Nothing** | Correctness becomes probabilistic |
+
+That last row is the one to watch for. A step where the adaptive version buys nothing but costs determinism is a pure loss, and it is common. Usually the step got absorbed into an agent's tool list rather than being placed on purpose.
+
+## Atlas, decomposed
+
+Run the test over one ticket end to end:
+
+| Step | Q1: must be same? | Q2: enumerable? | Q3: depends on last? | → |
+| --- | --- | --- | --- | --- |
+| Load ticket, resolve customer | Yes | — | — | **① code** |
+| Classify category and urgency | No | Yes (4) | No | **② bounded call** |
+| Extract order IDs, part numbers | No | Structured | No | **② bounded call** |
+| Select tool profile for category | Yes | Yes | No | **① code** |
+| Gather the facts needed to answer | No | No | **Yes** | **③ bounded loop** |
+| Check credit against policy limit | **Yes** | — | — | **① code** |
+| Decide escalate vs answer | No | Yes (2) | No | **② bounded call** |
+| Draft the reply | No | One value | No | **② bounded call** |
+| Attach citations, log, send | Yes | — | — | **① code** |
+
+Nine steps. **One** is an agent loop. Six are deterministic code or single bounded calls, and the two that involve judgment produce typed values that your code consumes.
+
+That is what "Atlas is an agent" actually means in practice, and it is a very different system from one where you hand a model nine tools and a goal. The loop is contained: it runs at a known point, it returns to the backbone, and everything before and after it is ordinary software.
+
+<Aside type="caution" title="The inversion most teams get backwards">
+A common shape is **adaptive control flow with templated content.** The model decides what to do, and then the code assembles the reply from canned paragraphs.
+
+That is backwards on both halves. Control flow is where you most want determinism. It's what you audit, test, and reason about. Content is where a model is genuinely irreplaceable, because you cannot template your way through the variety of real customer situations.
+
+Deterministic flow with generated content is almost always the better trade, and it is the one that reads as *more* intelligent to the user, because what they see is the part that adapted.
+</Aside>
+
+## Choose the assurance you need
+
+A different way to run the same test, and often faster: **decide what kind of evidence you need that the step works.**
+
+A deterministic step gets a **unit test**. Input, expected output, passes or fails, runs in milliseconds, and once fixed it stays fixed.
+
+An adaptive step gets an **eval with a threshold**: a rate over a dataset, a number you chose deliberately, and a regression check. It never reaches certainty; that isn't the kind of thing it is.
+
+So ask: *for this step, would "it works 97% of the time" be an acceptable sentence?* For drafting a reply, yes. For checking whether a credit exceeds the policy limit, that sentence describes an incident with a frequency.
+
+This reframing tends to end arguments faster than the three questions do, because it makes the consequence concrete rather than architectural.
+
+## Failure containment
+
+The last reason to keep steps left, and the one that shows up six months in.
+
+**A bug in a deterministic step is fixed once and stays fixed.** You reproduce it, correct the logic, add a test, and it never happens again.
+
+**An error in an adaptive step is a rate.** You can reduce it with a better prompt, a better model, or more context. You cannot eliminate it. Every fix is a shift in a distribution, and the residual is permanent.
+
+That difference compounds across a system. Six deterministic steps converge toward correct as you fix them. Six adaptive steps multiply their residual error rates: at 97% each, the end-to-end success rate is about 83%, and no individual step looks broken.
+
+## Migrating in both directions
+
+The test isn't run once. Two signals tell you a step is in the wrong column.
+
+**Promote to code when you've seen the distribution.** [Part I](/docs/foundations/when-not-to-build-an-agent) made the point: read your traces, and if a step's adaptive decision is the same decision every time, it's a function that's been paying model prices. This is the normal, healthy outcome of shipping an agent to learn the traffic.
+
+**Demote to adaptive when the branch list keeps growing.** This is the inverse signal, and the one people resist: your routing `switch` has fourteen cases, someone added three of them last month, and each new one is a small PR that another person has to remember. That is a system telling you the input space is not enumerable, and you are maintaining by hand a classification the model would do.
+
+Neither direction is a failure. A system where every step is in the right column *today* is a system whose steps have moved at least once.
+
+---
+
+Next: [Sequential, Parallel, Fan-Out](/docs/workflows/composition-patterns), the composition shapes that cover most of what people reach for an agent to do.
+
+## Takeaways
+
+- Apply the test per step, not per system. Real systems are a deterministic backbone with intelligence at specific steps, and control returns to the backbone after each.
+- Three questions: must the same thing happen, can I enumerate the outcomes, and does the next step depend on this one's result. Only the third indicates an agent.
+- "Does the next action require having seen the last result" is the distinguishing question, not whether the task is hard or the input varied.
+- Each adaptive step multiplies the path space. Spend nondeterminism where it buys something, and watch for steps where it buys nothing.
+- A realistic agent has one loop among nine steps, not nine tools and a goal.
+- Adaptive control flow with templated content is backwards. Determinism belongs in the flow; the model belongs in the content.
+- Ask what assurance you need: a unit test, or a rate with a threshold. "It works 97% of the time" is fine for a draft and describes an incident for a policy check.
+- Deterministic bugs are fixed forever; adaptive errors are permanent rates that multiply across steps.
+- Promote a step to code when traces show the decision is always the same. Demote to adaptive when your branch list keeps growing. That's the input space telling you it isn't enumerable.
