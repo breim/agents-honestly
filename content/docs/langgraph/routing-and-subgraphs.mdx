@@ -1,0 +1,155 @@
+---
+title: "Conditional Edges and Subgraphs"
+description: "Branching, loops, and composing graphs into reusable components."
+---
+
+Two mechanisms, one for branching within a graph and one for composing graphs. Both are simple. Both have a design question underneath that determines whether your graph stays readable at twenty nodes.
+
+## Conditional edges are functions you can test
+
+A conditional edge is a function from state to the name of the next node, plus a declared list of destinations:
+
+```python
+def route(state: AtlasState) -> str:
+    if state["category"] == "human_only":
+        return "escalate"
+    if state["entities"]["order_ids"]:
+        return "gather"
+    return "compose"
+
+g.add_conditional_edges("triage", route, ["gather", "compose", "escalate"])
+```
+
+The destination list is not decoration. It's what makes the graph statically analysable. That's how `compile()` can tell you a node is unreachable, and how the generated diagram knows what edges exist. A router that can return anything produces a graph nobody can draw.
+
+And now the payoff for [splitting the schema](/docs/langgraph/reducers-and-state) into decision state and transcript:
+
+```python
+def test_route_prefers_escalation():
+    assert route({"category": "human_only",
+                  "entities": {"order_ids": ["4921"]}}) == "escalate"
+
+def test_route_gathers_when_order_present():
+    assert route({"category": "order_status",
+                  "entities": {"order_ids": ["4921"]}}) == "gather"
+```
+
+Two lines each, no model, no fixtures, no mocking. **That is what "the control flow is deterministic" buys you in practice.** Your branching logic has unit tests, in a system where most things only have rates.
+
+The rule that keeps it that way: **a conditional edge reads decision state and nothing else.** The moment a router parses `state["messages"][-1].content` to decide, you have a router you cannot test without constructing a conversation, and one whose behaviour changes when a prompt changes. If the model's judgment should drive the branch, have the node write a typed field and let the router read the field.
+
+## Loops need two bounds, and they're different
+
+A loop is a conditional edge pointing backward. The `gather → gather` self-edge from [the Atlas graph](/docs/langgraph/state-nodes-edges) is the whole agent loop.
+
+What's easy to get wrong is that you need **two** limits, and they do different jobs:
+
+| Bound | Where | Job |
+| --- | --- | --- |
+| **Semantic bound** | Your edge function: `if state["step"] >= MAX: return "halt"` | Produces a *result*, a `halted` outcome you can report |
+| **Framework backstop** | The runtime's recursion/step limit, which raises | Stops a runaway graph you failed to bound |
+
+Confusing these is a real bug. If your only protection is the framework's limit, then hitting it is an **exception**, not an outcome. And [Part II was emphatic](/docs/first-agent/the-loop-by-hand) that "the agent could not finish" is a first-class result that routes to a human, not a stack trace in your logs.
+
+So bound it yourself, in the edge, using a state field with a commutative reducer (`step: Annotated[int, operator.add]`). Then set the framework limit *above* your bound, as a backstop for the case where your logic is wrong. If the backstop ever fires, that's a bug report about your edge function, not a capacity problem.
+
+**Which requires knowing where it starts.** LangGraph's `recursion_limit` defaults to **25** and raises `GraphRecursionError`. It counts *super-steps*, not iterations of your loop. A cycle that runs three nodes per pass reaches 25 in about eight passes, so a semantic bound of twelve iterations sits at roughly thirty-six super-steps, comfortably *above* the backstop, which inverts the arrangement this section just asked for. Raise the limit deliberately when you set your own bound, or the exception you meant as a last resort becomes the thing that stops your runs.
+
+## Fan-out, and the reducer it requires
+
+A conditional edge can return a **list** of destinations, and all of them run in parallel:
+
+```python
+g.add_conditional_edges("compose", checks_to_run,
+                        ["check_citations", "check_amounts", "check_tone"])
+```
+
+That's [sectioning from Part VI](/docs/workflows/composition-patterns) expressed as a graph. And it immediately invokes the constraint from last chapter: those three nodes all write `findings`, so `findings` needs a commutative reducer, and nothing downstream may depend on their order.
+
+The more interesting case is when the branch *count* is only known at run time. One branch per retrieved document, per line item, per ticket in a batch. That's dynamic fan-out, and graph frameworks provide a way to emit N parallel work items from one node rather than declaring N edges up front. It's [map](/docs/workflows/composition-patterns) with checkpointing, and the same rules apply: results merge through a reducer, the reducer must be commutative, and you need a concurrency cap somewhere or you'll fan out into a rate limit.
+
+## Subgraphs: two modes, one design question
+
+A subgraph is a compiled graph used as a node inside another graph. There are exactly two ways to wire it, and choosing between them is the actual decision.
+
+<Figure caption="The same subgraph, two interfaces. The left is convenient; the right is reusable." frame={false}>
+
+```
+   SHARED SCHEMA                      TRANSFORMED SCHEMA
+   subgraph reads/writes              subgraph has its own state;
+   the parent's keys directly         a node adapts in and out
+
+   parent ──▶ [ subgraph ] ──▶        parent ──▶ ┌─────────────┐
+              same state              │          │ to_sub()    │
+              flows straight          │          │ invoke()    │
+              through                 │          │ from_sub()  │
+                                      │          └─────────────┘
+   add_node("x", compiled_sub)        add_node("x", wrapper_fn)
+
+   • zero adapter code                • subgraph reusable anywhere
+   • coupled: parent schema           • parent schema can change
+     changes break the subgraph         without touching it
+   • subgraph sees everything,        • subgraph sees only what
+     including things it shouldn't      you pass — including
+                                        tenancy scoping
+```
+
+</Figure>
+
+Mechanically, if the two share state keys, you can add the compiled subgraph directly as a node, and updates merge automatically. If the schemas differ, you wrap it in a node function that maps parent state → subgraph state, invokes, and maps the result back. Passing a subgraph with no shared keys directly is an error, which is again the framework failing loudly in the right place.
+
+The design guidance:
+
+**Shared schema is right for decomposition.** You're splitting one long graph into readable pieces that are conceptually the same machine. Low ceremony, and the coupling is honest because they were always one thing.
+
+**Transformed schema is right for reuse and isolation.** That's a component used by two parents, owned by another team, or handling something you'd rather quarantine. The adapter functions are a **contract**, and paying for it buys you a component whose blast radius is its declared inputs.
+
+<Aside type="tip" title="A transformed subgraph is sub-agent isolation with a type signature">
+[Part III argued](/docs/patterns/context/subagent-isolation) that noisy work should run in its own context and return only a conclusion, so whatever confusion happened inside doesn't [poison](/docs/context/context-poisoning) the main thread.
+
+A transformed-state subgraph is exactly that, with two additions: the interface is typed rather than conventional, and the schema enforces the isolation instead of discipline. The subgraph cannot see the parent's transcript, because it isn't in its state.
+
+If you were going to write "spawn a sub-agent with a clean context," this is the version of that with a contract.
+</Aside>
+
+## When a subgraph earns it
+
+**Yes:** used by more than one parent; developed or owned separately; genuinely needs isolation; or you want to test it independently with its own state fixtures.
+
+**No:** "this graph is getting long." A subgraph used once, sharing all state, with no independent tests, is a section header with a checkpointing cost, and it makes the run harder to read, because now the trace has a nesting level. That's the [node-or-function question](/docs/langgraph/node-or-function) one level up, and the answer has the same shape.
+
+Two practical gotchas worth knowing before you commit:
+
+**Key collisions in shared mode.** Two subgraphs that both use a generic key like `result` will merge into the same parent field. Namespace your keys or transform.
+
+**Checkpoints nest.** The runtime checkpoints subgraph state within the parent's checkpoint, which means the [size arithmetic](/docs/langgraph/reducers-and-state) compounds and the replay view has depth. Nice for debugging, less nice for storage.
+
+## Atlas, concretely
+
+Two subgraphs, both transformed.
+
+**`gather`**, the agent loop, takes `{ticket_text, entities, tenant_id, budget}` and returns `{facts, tools_called, steps_used, halted}`. It does not see the parent's transcript, the policy state, or the outcome field. Everything it learns comes back as typed facts, which is what lets the policy check downstream trust them. This is the one genuinely open-ended part of Atlas, and it is the one most tightly wrapped.
+
+**`verify`**, the three outbound checks, takes `{draft, facts, policy_ref}` and returns `{findings}`. The nightly account-health job reuses it from an entirely different parent graph, which is precisely why it earned a transformed interface.
+
+Everything else is plain nodes with conditional edges, and the routers are the boring functions with unit tests from the top of this chapter.
+
+Note the pattern: **draw the subgraph boundaries where the uncertainty is.** The unbounded, model-driven, hard-to-reason-about part gets the tightest contract. That is a general principle worth more than the framework mechanics.
+
+---
+
+Next: [Checkpoints, Persistence, Resumability](/docs/langgraph/persistence), pausing a graph and picking it up later, and the exact point where this stops being enough.
+
+## Takeaways
+
+- A conditional edge is a pure function of state plus a declared destination list. The list is what makes the graph statically analysable.
+- Routers that read only decision state get real unit tests: two lines, no model, no mocks. Routers that parse the transcript don't.
+- Loops need two bounds: your semantic one, which produces a reportable `halted` outcome, and the framework's backstop, which raises. Relying on the backstop turns an outcome into an exception.
+- `recursion_limit` defaults to 25 super-steps, not 25 iterations. A three-node cycle exhausts it in eight passes, so set it above your semantic bound rather than assuming it already is.
+- A conditional edge returning a list is sectioning; every key those branches write needs a commutative reducer.
+- Dynamic fan-out is map with checkpointing: same rules, plus a concurrency cap.
+- Subgraphs wire two ways: shared schema (direct mount, zero ceremony, coupled) or transformed schema (adapter functions, reusable, isolated).
+- Shared is for decomposing one machine; transformed is for reuse, separate ownership, and isolation.
+- A transformed subgraph is sub-agent context isolation with a type signature, enforced by schema rather than discipline.
+- A single-use subgraph sharing all state is a section header with a checkpointing cost.
+- Draw subgraph boundaries where the uncertainty is: the most open-ended component deserves the tightest contract.
