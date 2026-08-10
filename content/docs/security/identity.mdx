@@ -1,0 +1,209 @@
+---
+title: "The Agent Is Not a Superuser"
+description: "Propagating user identity through the agent so it can never read what the user could not."
+---
+
+An agent that answers questions about internal documents ships to two hundred employees. Someone in marketing asks about severance terms. It answers, in detail, from an HR planning document.
+
+The security review that follows finds nothing broken. The document's ACL is correct. The retrieval filter runs. Authentication works and the session was valid.
+
+The problem is one line in the deployment config. The agent connects to the document store with its own service credential, the one provisioned during the pilot so the indexer could see everything, and the retrieval filter it applies is *the agent's* access, which is all of it. Every user's question is answered by a principal with universal read.
+
+> **The agent authenticated the user. It just didn't use the result for anything.**
+
+That gap is the most common serious authorization defect in production agents, and it survives review because every individual component is behaving correctly.
+
+## Three identity models, and only one is right
+
+There are exactly three answers to "as whom does the tool call execute," and teams arrive at the wrong one by default rather than by decision.
+
+<Figure caption="The service-identity model is what you get by wiring an integration the normal way. It is also the confused deputy, drawn." frame={false}>
+
+```
+   ① SERVICE IDENTITY            ② IMPERSONATION            ③ DELEGATION
+      (the default)                 (the trap)                 (correct)
+
+   user ──▶ agent                user ──▶ agent            user ──▶ agent
+              │                            │                          │
+              │ svc_token                  │ user_token               │ token where
+              │ (all access)               │ (agent is                │  sub = user
+              ▼                            ▼  invisible)              │  act = agent
+           backend                      backend                       ▼
+                                                                   backend
+
+   agent's rights, not          user's rights, but the      user's rights, and
+   the user's. every            log says the user did       the log says which
+   ask is a superuser ask       it — attribution lost       agent, for which user
+```
+
+</Figure>
+
+Model ① is the opening scene. Model ② fixes authorization and destroys accountability: the backend's audit log records the *user* performing four hundred queries at 3am, with nothing indicating an agent was involved. That makes both incident response and the eventual compliance conversation impossible.
+
+Model ③ is the one to build. The token the backend receives carries two facts: **the user whose rights apply**, and **the agent that is exercising them**. Authorization uses the first; the audit log records both.
+
+## The delegation chain, concretely
+
+The mechanism is not new and does not need inventing. **OAuth 2.0 Token Exchange (RFC 8693)** exists precisely for this: a service presents an incoming token and receives a new one, downscoped, that records itself as the actor. The claim is `act`, and it nests. `sub` is the user, `act.sub` is the agent, and the chain can extend if a [sub-agent](/docs/multi-agent/supervisor-and-handoff) is involved.
+
+```json
+{
+  "sub":   "user:8841",              ← whose rights apply
+  "act":   { "sub": "agent:atlas" }, ← who is exercising them
+  "azp":   "app:support-console",    ← which client started this
+  "scope": "orders:read credits:write",
+  "exp":   1754745600                ← minutes, not months
+}
+```
+
+Everything the previous chapter asked for is expressible here: the scope is the [minimum mined from traces](/docs/security/least-privilege), the expiry makes it a run-scoped credential, and `act` is what turns "the service account did it" into "Atlas did it for user 8841 during run 4471."
+
+<Aside type="note" title="On the standards churn">
+Vendor-specific on-behalf-of flows implement RFC 8693, and there is active IETF work on an agent-specific extension adding an explicit actor token and consent step. That work is a draft and not settled, so build against Token Exchange itself, which has been a published RFC since 2020, and treat the agent-specific additions as something to adopt when they stabilize rather than something to wait for.
+
+The design does not depend on which draft wins. It depends on the token carrying both principals.
+</Aside>
+
+## Downscope on the way in, not on the way out
+
+The failure the delegation model prevents is subtler than the opening scene, and it is the one that survives a first pass at fixing this.
+
+Suppose you keep the service credential for retrieval but filter the *results* by the user's access before showing them. Authorization now happens, and the system is still wrong in three ways, all of which [the retrieval chapter](/docs/retrieval/metadata-and-authorization) established and which generalize past retrieval:
+
+- The restricted content was read out of storage, so it existed in your process, your logs, and anything that ran before the filter.
+- The model saw it. A summary, a [memory write](/docs/context/memory), or a cached intermediate now carries content the user cannot access, and the filter does not follow it there.
+- The backend's own audit log records a read that the user's access would have denied, so the system of record disagrees with your policy, and it is the system of record.
+
+> **Authorization applied after retrieval is a display preference. Authorization applied at the query is a boundary.**
+
+The token is what makes the second one available, because it lets the *backend* enforce, and a backend that enforces cannot be bypassed by a bug in your agent.
+
+## Where it actually breaks: the run outlives the session
+
+Everything above is standard practice and would be unremarkable, except that agents break its central assumption. Token exchange assumes a request-scoped flow: a user token arrives, you exchange it, you call the backend, you respond. Agents [pause for approval](/docs/human-in-the-loop/approval-gates), run for hours, [resume from a checkpoint](/docs/langgraph/persistence) three days later, and execute on schedules with no user present at all.
+
+The user's token expired long before the run finished. Four situations, four different answers:
+
+| Situation | What the run has | Correct handling |
+| --- | --- | --- |
+| Synchronous, user present | A live token | Exchange it per call. The easy case |
+| Long run, user still logged in | An expired access token | A refresh token stored against the run, exchanged on resume |
+| Resumed after approval, days later | Nothing live | Re-validate the delegation **and** re-check the user still holds the rights |
+| Scheduled, no user at all | Only a service identity | A **named** authority: an owner who granted it, recorded, revocable, reviewed |
+
+Row three is where correctness usually gets lost. A run that paused on Monday and resumes on Thursday must not simply replay Monday's authorization. The person may have changed roles, left the company, or had the relevant grant revoked. An agent that resumes with Monday's rights is a revocation that silently didn't happen, the same defect as [caching group membership in an index](/docs/retrieval/metadata-and-authorization).
+
+So the rule for durable agents:
+
+> **Authorization is re-derived at the moment of the action, never restored from the checkpoint.**
+
+Store the *delegation reference* in the run's state: which user, which grant. Never store the token. On resume, mint a fresh one, and treat a failure to mint as a legitimate outcome that escalates rather than an error that retries.
+
+Row four deserves its own sentence, because "no user is present" is where least privilege quietly evaporates. A scheduled agent still needs a principal; the honest version is a service identity with a **named human owner**, a documented grant, an expiry that forces annual re-approval, and a scope that is not "everything the integration ever needed." A cron job that runs as root is a bad idea for the same reasons it always was.
+
+## Making it structural
+
+Identity that is a parameter someone can forget is identity that someone will forget. The same discipline the retrieval chapter applied to the principal applies to every backend call: **the caller cannot construct a client without one.**
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/security/delegation.ts"
+export interface Delegation {
+  userId: string;        // sub — whose rights apply
+  agentId: string;       // act.sub — who is exercising them
+  runId: string;         // for the downstream audit log
+  scope: string[];       // the mined minimum, not the integration's grant
+}
+
+// Minted per call, expiring in minutes. Never checkpointed.
+export async function mintToken(d: Delegation): Promise<string> {
+  return exchangeToken({
+    subject: d.userId,
+    actor: d.agentId,
+    scope: d.scope,
+    lifetimeSeconds: 300,
+  });
+}
+
+// There is no zero-argument constructor. A background job that wants a
+// client has to name a delegation, which forces the question to be asked.
+export function backendClient(d: Delegation) {
+  return new Backend({ tokenProvider: () => mintToken(d) });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/security/delegation.py"
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Delegation:
+    user_id: str      # sub — whose rights apply
+    agent_id: str     # act.sub — who is exercising them
+    run_id: str       # for the downstream audit log
+    scope: tuple[str, ...]  # the mined minimum, not the integration's grant
+
+
+async def mint_token(d: Delegation) -> str:
+    # Minted per call, expiring in minutes. Never checkpointed.
+    return await exchange_token(
+        subject=d.user_id,
+        actor=d.agent_id,
+        scope=list(d.scope),
+        lifetime_seconds=300,
+    )
+
+
+def backend_client(d: Delegation) -> Backend:
+    # No zero-argument constructor. A background job that wants a client
+    # has to name a delegation, which forces the question to be asked.
+    return Backend(token_provider=lambda: mint_token(d))
+```
+
+</Tab>
+</Tabs>
+
+Then the audit requirement falls out for free, and it is worth stating as its own rule because it is what a regulator, an incident responder, and an angry customer all separately need:
+
+> **Every privileged action must name three things: the user, the agent, and the run.**
+
+Two of the three are useless alone. "User 8841 issued a credit" hides the automation. "Atlas issued a credit" hides the authority it was borrowing. Only the triple lets you answer *why was this allowed*, which is the actual question. And it is the same triple [the trace has to carry](/docs/observability/what-a-trace-must-answer) for entirely different reasons.
+
+## Atlas, concretely
+
+| Call | Before | After |
+| --- | --- | --- |
+| `get_order` | Service credential, full read | Token with `sub` = the ticket's customer contact |
+| Corpus retrieval | Indexer credential, universal | `sub` = requesting agent's staff operator; docs filtered by the backend |
+| `issue_credit` | Service credential | `sub` = the staff owner of the queue, `act` = Atlas, scope `credits:write` |
+| Resume after approval | Replayed the stored token | Re-mints; re-checks the approver still holds the grant |
+| Nightly backlog sweep | Ran as the service account | Named owner, documented grant, annual expiry, scope-limited |
+| Backend audit log | `svc-atlas` on every row | `sub`, `act`, and `run_id` on every row |
+
+The last row is the one that changes what happens *after* an incident. Before, the log said the service account did everything and the investigation started from nothing. After, one query returns every action any run took on behalf of any user. And that query is also what makes it possible to bound a compromise instead of assuming the worst.
+
+## References
+
+- [RFC 8693: OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693), delegation and impersonation semantics, and the `act` claim.
+- [OAuth for AI agents acting on behalf of a user](https://www.ietf.org/archive/id/draft-oauth-ai-agents-on-behalf-of-user-01.html), the agent-specific extension: an Internet-Draft, and treated here as one.
+
+---
+
+Next: [Multi-Tenant Isolation](/docs/security/tenant-isolation), RBAC, ABAC, row-level security, and retrieval filters as an authorization boundary.
+
+## Takeaways
+
+- The common defect: the agent authenticates the user and then calls every backend with its own service credential. Nothing is broken; everything is wrong.
+- Three models: service identity (the confused deputy), impersonation (authorization right, accountability destroyed), delegation (correct).
+- Delegation means the token names both principals: `sub` is the user whose rights apply, `act` is the agent exercising them. RFC 8693 Token Exchange has done this since 2020.
+- Agent-specific identity drafts are in flux. Build on Token Exchange, which is settled, and adopt the extensions when they stabilize.
+- Downscope on the way in. Filtering results after a privileged read is a display preference. The content was still read, still logged, still seen by the model, and the backend's own audit log now disagrees with your policy.
+- Agents break the request-scoped assumption. Runs pause, resume days later, and execute with no user present.
+- Re-derive authorization at the moment of the action. Store the delegation reference in the run state, never the token. A resumed run replaying Monday's rights is a revocation that silently didn't happen.
+- A scheduled agent with no user still needs a named human owner, a documented grant, and an expiry that forces re-approval.
+- Make it structural: no client constructor without a delegation. Identity that can be forgotten will be.
+- Every privileged action names the user, the agent, and the run. Any two of the three leave the "why was this allowed" question unanswerable.
