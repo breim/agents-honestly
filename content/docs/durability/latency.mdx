@@ -1,0 +1,174 @@
+---
+title: "Paying for Durability in Milliseconds"
+description: "Local activities, early return, eager start: where durability costs latency and where it does not."
+---
+
+Start with the number that says not to read this chapter.
+
+[Production agent runs](/docs/durability/not-a-background-job) in one measured fleet took five to eleven minutes, of which model reasoning was 26–44% and initialization another 31–48%. Against that, journalling a step costs single-digit milliseconds, a rounding error on a run measured in minutes. **Every hour spent optimizing durability inside the agent loop is an hour not spent on the half of the latency that is initialization overhead.**
+
+So the honest guidance for most of the system is: leave it alone.
+
+## The exception is the first two hundred milliseconds
+
+There is one stretch where durability overhead is not hidden behind anything, and it is the stretch the user actually experiences.
+
+<Figure caption="Between the click and the first visible response, no model call has happened yet to absorb the overhead." frame={false}>
+
+```
+   user clicks ──▶ start workflow ──▶ first task dispatched ──▶ first activity
+                        │                    │                       │
+                        └── round trip ──────┴── round trip ─────────┘
+                                                                     │
+                            nothing has appeared on screen yet ──────┘
+                                             ▲
+                        ┌────────────────────┴────────────────────┐
+                        │  8 minutes of model work start HERE     │
+                        └─────────────────────────────────────────┘
+```
+
+</Figure>
+
+Two round trips and a dispatch, before anything the user can see. In an eight-minute run that is rounding error; in the interval that decides whether the product feels alive, it is the entire budget. This is the only place in Part XI where milliseconds are worth engineering.
+
+Three mechanisms address it, and they compose.
+
+## 1 · Local activities
+
+A local activity executes **inside the workflow worker process**. It never enters an activity task queue, never makes the round trip through the service, and produces fewer event-history entries. For a short operation that is a large relative saving.
+
+Good candidates are exactly what they sound like: input validation, a cheap lookup, formatting, a fast idempotent write. Short-lived, including retries.
+
+The costs are the part people skip, and two of them matter enormously for agents:
+
+**No heartbeats.** Local activities do not support them. The SDK instead heartbeats the *workflow task*. At roughly 80% of the workflow task timeout, ten seconds by default, the worker completes the current task and requests a new one. So a local activity that runs long fights a mechanism it cannot participate in.
+
+**Signals are not processed while local activities run.** Nothing external reaches the workflow until they finish.
+
+That second one is disqualifying on the main path of a steerable agent. [Everything Part XI has built](/docs/durability/not-a-background-job) depends on a running execution being reachable: approvals, cancellations, customer replies. A local activity blocks exactly that, for its duration.
+
+**And on a crash, local activities are retried from the workflow task boundary**, not from where the local activity was scheduled. That is a different recovery granularity than regular activities, and one worth knowing before you rely on it.
+
+<Aside type="caution" title="Never make a model call a local activity">
+It is long, it needs heartbeating to prove liveness, it needs [cancellation propagation](/docs/durability/agent-as-workflow) so an abandoned run stops paying for tokens, and while it runs no signal can reach the workflow.
+
+Local activities lose all four properties. The saving would be a few milliseconds against a call that takes seconds, a bad trade made worse by the fact that it breaks steering.
+
+Local activities are for the cheap deterministic-ish helpers on the entry path. Regular activities for everything the model touches.
+</Aside>
+
+## 2 · Eager workflow start
+
+Ordinarily, starting a workflow means the client tells the service, the service enqueues the first workflow task, and a worker eventually polls for it. Eager start collapses that: the client sets `request_eager_start`, and the SDK finds a **local worker willing to execute the first workflow task** and reserves a slot for it directly.
+
+One dispatch round trip disappears. It requires a reachable worker able to run that first task, and it pays off only if the first task does something worth doing immediately. That is why it composes with local activities rather than standing alone.
+
+## 3 · Early return, via update-with-start
+
+The one that matters most for agents.
+
+Update-with-start begins a new workflow execution **and synchronously returns a response**, in one call, while the execution continues running to completion. You get a validated answer in a single round trip and an eight-minute run behind it.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/api/tickets.ts"
+// One call: start the run, and get back a validated acknowledgement.
+const { workflowId, accepted } = await client.workflow.startUpdateWithStart(
+  acknowledge,                         // the update handler
+  {
+    args: [inbound],
+    startWorkflowOperation: {
+      workflowType: ticketWorkflow,
+      workflowId: `ticket-${ticket.id}`,
+      taskQueue: 'atlas',
+      args: [ticket],
+    },
+  },
+);
+
+// The run continues for minutes. The user already has an answer.
+res.status(202).json({ workflowId, accepted, stream: `/tickets/${ticket.id}/events` });
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/api/tickets.py"
+# One call: start the run, and get back a validated acknowledgement.
+handle = await client.start_update_with_start_workflow(
+    TicketWorkflow.acknowledge,          # the update handler
+    inbound,
+    start_workflow_operation=WithStartWorkflowOperation(
+        TicketWorkflow.run,
+        ticket,
+        id=f"ticket-{ticket.id}",
+        task_queue="atlas",
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+    ),
+)
+accepted = await handle.result()
+
+# The run continues for minutes. The user already has an answer.
+return {"ticket_id": ticket.id, "accepted": accepted,
+        "stream": f"/tickets/{ticket.id}/events"}
+```
+
+</Tab>
+</Tabs>
+
+This is a strict improvement on [the `202` this part opened with](/docs/durability/not-a-background-job). There, the response said *"received."* Here it can say *"received, and here is what I understood, and no, that account ID does not exist"*, because an update runs a handler and can carry a [validator](/docs/durable-execution/signals-and-children). The user gets a real answer to the cheap question immediately, and the expensive question keeps running.
+
+## What the combination is worth
+
+Reported measurements on a latency-optimized workflow: **850 ms down to 160 ms** by combining early return with local activities, about 20% better than early return alone, and a little over **five times faster** than the unoptimized version. That is 81% off the clock, which is the number to quote if someone wants a percentage.
+
+Treat the figures as illustrative, and the shape as reliable. The target case is a short-lived workflow that talks to other services via local activities in its **first** workflow task, with a happy path that needs to respond in low tens of milliseconds. That is exactly the entry path, and it is not the agent loop.
+
+## Where the latency actually is
+
+Having spent a chapter on milliseconds, the honest redirect:
+
+**Initialization is 31–48% of end-to-end time.** Worker warmth, connection pools, and cold starts are the largest single line item, and none of them are durability. If you have an hour for latency work, spend it there.
+
+**Fewer round trips beats faster round trips.** [Consolidating three chained tool calls into one](/docs/tools/tools-are-apis-for-models) removes two full model turns. That is seconds, not milliseconds. Part VIII is a latency chapter that does not announce itself.
+
+**Prompt caching** removes re-processing of a stable prefix on every turn, which is [a large fraction of input tokens](/docs/foundations/prompt-caching) and therefore of time-to-first-token.
+
+And the reframe that outranks all of it:
+
+> **Perceived latency is a different quantity from actual latency, and only one of them is what the user has.**
+
+An eight-minute run that streams its reasoning, names the tool it is calling, and shows what it found feels responsive. The same run behind a spinner feels broken at ninety seconds. No amount of durability tuning changes that, and [streaming](/docs/interface/streaming-ux) changes it completely. That is why Part XIII exists and why this chapter is the shortest in Part XI.
+
+## Atlas, concretely
+
+| Path | Choice |
+| --- | --- |
+| Inbound event → acknowledgement | Update-with-start, eager start enabled |
+| Validation and persisting the inbound event | **Local** activity: short, cheap, on the entry path |
+| Model calls | Regular activities, heartbeating, never local |
+| Tool calls | Regular activities |
+| Everything after the acknowledgement | Unoptimized, deliberately |
+
+The last row is the point. Atlas optimizes one path, the one between a person acting and the system visibly responding. It leaves the other eight minutes alone, because the eight minutes are not where the impatience lives.
+
+---
+
+Next: [Mapping Temporal Patterns to Agent Patterns](/docs/durability/temporal-pattern-map), a direct cross-reference from the Temporal design-pattern catalog to the agent problem each one solves.
+
+## Takeaways
+
+- Median agent runs are near eight minutes, and journalling a step costs single-digit milliseconds. Optimizing durability inside the loop is optimizing the wrong thing.
+- The exception is the entry path. Between the user's action and the first visible response, there is no model call to hide the overhead behind.
+- Local activities run in the worker process, skip the task-queue round trip, and produce fewer history events. Use them for validation, cheap lookups, and formatting.
+- Local activities have no heartbeats; the SDK heartbeats the workflow task at ~80% of its ten-second timeout instead.
+- **Signals are not processed while a local activity runs**, which is disqualifying on the main path of a steerable agent.
+- On a crash, local activities retry from the workflow task boundary rather than from where they were scheduled.
+- Never make a model call a local activity: it is long, needs heartbeating and cancellation, and would block steering while it runs.
+- Eager workflow start reserves a slot on a local worker for the first workflow task, removing a dispatch round trip. It pays off only when that first task does something immediately.
+- Update-with-start returns a validated response in one call while the run continues, a strict improvement on a bare `202`, because a validator can reject nonsense before the expensive work begins.
+- Reported combination: 850 ms to 160 ms, a little over 5×, or 81% off the original. The target is a short entry path, not the agent loop.
+- Initialization is 31–48% of end-to-end time. Worker warmth and connection pooling outrank every mechanism in this chapter.
+- Fewer round trips beats faster round trips: consolidating chained tools removes whole model turns.
+- Perceived latency is a different quantity from actual latency, and streaming is the only thing that moves it.
