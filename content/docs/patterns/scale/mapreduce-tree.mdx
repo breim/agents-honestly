@@ -1,0 +1,178 @@
+---
+title: "MapReduce Tree"
+description: "Hierarchical fan-out for jobs too wide for one parent."
+---
+
+## Problem
+
+A due-diligence job needs 40,000 documents summarized and rolled up into one report. The items are independent and order does not matter, so [fan-out](/docs/patterns/scale/fan-out) is the right shape, until you try it with one parent.
+
+Three ceilings arrive at once. The platform caps **pending child workflows or activities at 2,000 per execution** by default, with the practical guidance being to keep concurrent operations at 500 or fewer. The parent's [event history](/docs/patterns/durability/continue-as-new-memory) accumulates start and completion events for every child and crosses its 50 MB limit. And the reduce step needs to hold 40,000 summaries in one context, which no window fits.
+
+[A batch iterator](/docs/patterns/scale/batch-iterator) removes the width problem and reintroduces serialism: 80 pages walked in sequence when the work is embarrassingly parallel.
+
+What is needed is width *and* depth: a tree.
+
+## Forces
+
+- **Items are independent**, so parallelism is available in principle.
+- **One parent has hard limits** on pending children, history size, and reduce context.
+- **Reduction is associative** for summaries, counts, and rankings: partial results can be combined.
+- **Each level adds latency** and another place for a failure to propagate.
+- **Partial failure must not lose a subtree**, and a lost subtree at level 1 loses a thousand items.
+- **Fan-in is where the context problem reappears**, one level up.
+
+## Solution
+
+**Split the input into shards, one child per shard, and reduce hierarchically**: each level combining its children's partial results into one.
+
+<Figure caption="Branching factor keeps every node under its limits. Reduction happens at every level, so no node ever holds everything." frame={false}>
+
+```
+                        ROOT
+                   reduce 40 partials → 1
+                          │
+        ┌─────────────────┼─────────────────┐
+        ▼                 ▼                 ▼
+     LEVEL 1           LEVEL 1           LEVEL 1     × 40
+   reduce 25 → 1     reduce 25 → 1     reduce 25 → 1
+        │                 │                 │
+   ┌────┼────┐       ┌────┼────┐       ┌────┼────┐
+   ▼    ▼    ▼       ▼    ▼    ▼       ▼    ▼    ▼
+  LEAF LEAF LEAF ... (40 items each) ...        × 1,000 leaves
+
+   40,000 items · branching 40 × 25 × 40
+   no node exceeds 40 children · no node reduces more than 40 partials
+   depth 3 · latency ≈ 3 levels, not 40,000 items
+```
+
+</Figure>
+
+Four rules:
+
+**Choose the branching factor from the limits, not from tidiness.** Keep children per node well under the pending-operation cap: a few dozen is comfortable and leaves room for retries. Depth is `log_b(N)`, so even a small branching factor reaches enormous N in three or four levels.
+
+**Reduce at every level.** A tree that fans out hierarchically and then sends every leaf result to the root has moved the problem, not solved it. Each internal node combines its children's partials into one partial, so the root reduces forty things rather than forty thousand.
+
+**Pass references down and up.** Shard descriptors go down, a cursor range, a key prefix, not the data. Partial results come up as storage keys with small summaries, not as payloads. This is the rule that keeps every node's history flat.
+
+**Make the reduction associative and record it.** Counts, sums, top-K, and set unions combine cleanly. Model-written summaries do not: a summary of summaries at depth 3 is [three lossy compressions deep](/docs/patterns/context/rolling-summary), and the root's output can be measurably worse than a flat reduce would have produced. Record the depth on the result so a reader knows how far from the source it is.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/mapreduce.ts"
+const BRANCH = 40;   // well under the 2,000 pending-child cap, with headroom
+
+export interface Shard { cursorFrom: string; cursorTo: string; depth: number }
+
+export async function mapReduce(shard: Shard): Promise<PartialRef> {
+  const size = await countItems(shard);
+
+  // ── LEAF: small enough to process directly ──
+  if (size <= BRANCH) {
+    const results = await processWithWindow(await loadItems(shard), CONCURRENCY);
+    return writePartial(results, shard.depth);          // a KEY, not payloads
+  }
+
+  // ── INTERNAL: split, recurse, reduce ──
+  const children = splitIntoShards(shard, BRANCH);       // descriptors, not data
+
+  const partials = await Promise.all(
+    children.map(c => startChild(mapReduce, { ...c, depth: shard.depth + 1 })
+      // A failed subtree loses thousands of items. Record it and carry on;
+      // the manifest says which ranges are missing.
+      .catch(err => writeFailedShard(c, err))),
+  );
+
+  // Reduce HERE, at every level. A tree that forwards every leaf to the
+  // root has moved the problem rather than solved it.
+  return reducePartials(partials.filter(isOk), shard.depth);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/mapreduce.py"
+BRANCH = 40   # well under the 2,000 pending-child cap, with headroom
+
+
+@dataclass(frozen=True)
+class Shard:
+    cursor_from: str
+    cursor_to: str
+    depth: int
+
+
+@workflow.defn
+class MapReduce:
+    @workflow.run
+    async def run(self, shard: Shard) -> PartialRef:
+        size = await workflow.execute_activity(count_items, shard)
+
+        # ── LEAF: small enough to process directly ──
+        if size <= BRANCH:
+            items = await workflow.execute_activity(load_items, shard)
+            results = await process_with_window(items, CONCURRENCY)
+            return await write_partial(results, shard.depth)   # a KEY
+
+        # ── INTERNAL: split, recurse, reduce ──
+        children = split_into_shards(shard, BRANCH)            # descriptors
+        partials = await asyncio.gather(
+            *[start_child(MapReduce.run, replace(c, depth=shard.depth + 1))
+              for c in children],
+            return_exceptions=True,     # a failed subtree is recorded, not fatal
+        )
+
+        ok = [p for p in partials if not isinstance(p, Exception)]
+        for c, p in zip(children, partials):
+            if isinstance(p, Exception):
+                await write_failed_shard(c, p)
+
+        # Reduce HERE, at every level.
+        return await reduce_partials(ok, shard.depth)
+```
+
+</Tab>
+</Tabs>
+
+`return_exceptions=True` and the failed-shard record are what stop one subtree from losing a thousand items silently. The manifest ends up saying *which cursor ranges are missing*, which is the difference between a job you can repair and a job you have to re-run.
+
+## Trade-offs
+
+**Reduction quality degrades with depth.** For counts and sums this is exact and free. For anything the model writes, each level is a compression of a compression: a three-level summary tree produces a root summary meaningfully further from the source than a flat one. Keep model-written reduction shallow, or reduce mechanically at the lower levels and let a model write only the top.
+
+**Latency is levels, not items, and each level has a tail.** Every internal node waits on its slowest child, so the [slowest-member problem](/docs/patterns/scale/sliding-window) appears once per level. Depth 3 means three tail waits stacked.
+
+**Debugging is a tree walk.** A wrong number at the root means descending until you find the subtree that produced it. Carry a stable job ID and the shard descriptor on every [trace](/docs/observability/what-a-trace-must-answer), or this is genuinely hard.
+
+**More nodes is more history in aggregate.** Each internal node is a workflow with its own history. The tree keeps any *single* history flat and it multiplies the number of them, which is a real load on the service at large N.
+
+## When not to use it
+
+**When one parent suffices.** A few thousand items fit comfortably under a plain [fan-out](/docs/patterns/scale/fan-out) with a bounded window: nothing is pending in bulk, and the parent's history is nowhere near its ceiling at that size. The tree is machinery for the order of magnitude above, and it has depth to reason about that a single level does not.
+
+**When order matters.** Trees reduce out of order by construction. Use [a batch iterator](/docs/patterns/scale/batch-iterator).
+
+**When the reduction is not associative.** If combining partials is not equivalent to processing the union, a global median, a ranking that needs all candidates, a dedup across the full set, hierarchical reduction gives a wrong answer that looks right. Reduce flat, or accept an approximation deliberately and document it.
+
+**When items are not independent.** Any cross-item dependency breaks the shard boundary, and the failures are subtle rather than loud.
+
+<Aside type="note" title="This is fan-out, recursed, and it is still not a multi-agent system">
+[Part XIX endorses fan-out over disjoint inputs](/docs/multi-agent/when-not-to) and is skeptical of agent teams. A three-level tree with a thousand leaves might look like the largest multi-agent system in this book. It is not one, and the reason is the same at every level.
+
+No node talks to a sibling. No node negotiates. Termination is owned by construction: a node completes when its children complete. The reduce step is code, or a single constrained model call over a small set of partials.
+
+Everything the failure taxonomy identifies as the source of multi-agent fragility requires *communication between peers*, and there is none here. What you have is deterministic orchestration over isolated model calls, which is the shape that works, repeated at scale, with the coordination tax staying at the token multiplier instead of the correctness one.
+</Aside>
+
+## Related
+
+- [Fan-Out Over Items](/docs/patterns/scale/fan-out): one level of this, and the right choice for a few thousand items
+- [Batch Iterator](/docs/patterns/scale/batch-iterator): the serial alternative when order matters
+- [Sliding Window](/docs/patterns/scale/sliding-window): the within-node concurrency each leaf should use
+- [Sub-Agent Context Isolation](/docs/patterns/context/subagent-isolation): what each leaf is, from the context side
+- [When Not To](/docs/multi-agent/when-not-to): why this is not the multi-agent architecture it resembles
