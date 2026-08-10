@@ -1,0 +1,149 @@
+---
+title: "Checkpoints, Persistence, Resumability"
+description: "Pausing a graph and picking it up later, and the exact point where this stops being enough."
+---
+
+This is the chapter that justifies the graph. Everything in Part VII so far, state as a value and position as data, pays off here and then runs out. Knowing exactly where it runs out is worth more than the feature itself.
+
+## What a checkpoint is
+
+After each superstep, the framework writes the current state and position to a store, keyed by a **thread**. That's it. A thread groups the checkpoints of one run: a conversation, a ticket, a task. Resuming means loading the latest checkpoint for that thread and continuing.
+
+Four things fall out, and they're the headline features of every graph framework:
+
+**Multi-turn conversation.** The thread *is* the conversation. Turn two loads turn one's state. This is what "memory" means at the graph level, and it's [thread state](/docs/context/memory), not durable facts, not a knowledge base.
+
+**Crash resumption.** The process dies at superstep six; a new process loads checkpoint six and continues.
+
+**Human-in-the-loop.** Interrupt at a node boundary, return control to the caller, and resume later with the human's input injected into state. No thread held open, no process waiting.
+
+**Time travel.** Load an earlier checkpoint, change something, and re-run from there. Excellent for debugging a nondeterministic system.
+
+The checkpointer choice is a durability choice, so make it deliberately: in-memory for tests, a local file store for single-node development, and Postgres for anything real. An in-memory checkpointer gives you the API without the property, which is fine right up until someone concludes the system is durable.
+
+## The mechanic everything else follows from
+
+Here is the sentence that determines what checkpointing can and cannot promise:
+
+> **On resume, execution restarts at the beginning of the node.**
+
+The framework captures state *between* nodes. Nothing inside a node is memoized. A node that made three API calls and crashed on the fourth does not resume at the fourth. It starts again at the first.
+
+<Figure caption="The checkpoint boundary is the node boundary. Everything inside a node runs again." frame={false}>
+
+```
+   ┌──── node: issue_credit ─────────────────────┐
+   │                                             │
+   │   ① fetch order        ← re-runs on resume  │
+   │   ② compute amount     ← re-runs            │
+   │   ③ POST /refunds      ← RE-RUNS ⚠          │
+   │   ④ send email         ← crash here         │
+   │                                             │
+   └─────────────────────────────────────────────┘
+        ▲                                    ▲
+   checkpoint                          no checkpoint
+   (state before)                      (crash)
+
+   resume → the whole node again → a second refund
+```
+
+</Figure>
+
+For pure nodes this is harmless and even elegant. For nodes that touch the world, it is the central hazard of the entire pattern.
+
+## Three consequences
+
+**1 · Side effects re-fire.** If a node writes to an external system and then the process dies before the checkpoint lands, resumption re-runs it. The refund happens twice. There is no configuration that prevents this, because the framework has no record that the call occurred. It records state between nodes, not effects within them.
+
+The mitigation is the one [Part VIII will make a chapter of](/docs/tools/idempotency): **idempotency keys on every external call**, derived deterministically from the run so a replay produces the same key and the downstream system deduplicates. That works. Note where the burden sits, though: on you, and on the remote system's willingness to honour it.
+
+**2 · Human-in-the-loop has a double-execution problem.** This one is subtle and worth stating precisely, because it's the most common production surprise in graph-based approvals.
+
+A node contains three tool calls. One requires approval, two don't. The graph interrupts for the approval. On resume, **the node re-executes from the top**. The interrupted call returns its recorded result, but the other two calls run again, and if they had side effects, they've now happened twice.
+
+The fix is structural and cheap:
+
+> **One side-effecting tool per node.** Better: a dedicated approval node containing exactly one call, with nothing else in it.
+
+That way re-execution on resume cannot double-fire anything, because there is nothing else in the node to re-fire. It's an unglamorous rule that prevents a category of incident, and it's the kind of thing you only learn from the mechanic above.
+
+**3 · Nothing coordinates concurrent resumption.** Two processes can load and resume the same thread at the same time. That is not exotic, it's what happens when a partially-failed system recovers. The framework does not prevent it. Distributed locking or leasing is **yours to build**, and if you're running more than one worker, you need it before you need most of the other things in this chapter.
+
+<Aside type="caution" title="An in-memory checkpointer is a demo, and a Postgres one is not a distributed system">
+Two upgrades people conflate. Moving from in-memory to Postgres makes checkpoints *survive a process*. It does not make resumption *coordinated*, *automatic*, or *exactly-once*.
+
+Nothing in the checkpointer notices that a process died and starts a new one. A crashed run leaves a checkpoint sitting in a table, and something outside the graph has to find it and resume it: a supervisor, a queue, a cron. If nothing does, the run is durable and permanently stopped, which looks identical to a run that finished.
+</Aside>
+
+## The exact point where it stops being enough
+
+Both a graph checkpointer and a durable execution engine will tell you they do "replay." They mean different things, and the difference is the **unit of memoization**.
+
+| | Graph checkpointing | Durable execution |
+| --- | --- | --- |
+| What's recorded | State between nodes | The **result of every effect** |
+| On replay | Nodes re-execute from the top | Completed activities are skipped; results are reused |
+| A completed API call | Runs again | Never runs again |
+| Guarantee | The graph resumes | A crash does not repeat a completed effect |
+| Retries, timers, signals | You build them | First-class |
+| Who resumes a dead run | You | The platform |
+
+Read the third row twice. **Checkpointing gives you resumability of the graph; durable execution also guarantees that a replay never re-executes a completed effect.** Those are different products, and a system that needs the second cannot get there by choosing a better checkpointer.
+
+What it still does not give you is *exactly-once against the outside world*. The platform retries an activity that timed out with no response, and that retry can duplicate the effect, because the platform never saw whether the first attempt landed. Closing that gap is [idempotency](/docs/tools/idempotency), which you supply; durable execution removes the crash-replay half of the problem and not the other half.
+
+The mechanism behind the difference is the separation durable engines force: deterministic orchestration code the engine may replay freely, and effectful work whose results it records so it never replays them. A graph node is both at once, orchestration and effects in the same function, which is exactly why replaying it re-does the effects.
+
+That is [Part X](/docs/durable-execution/why-durable-execution), and this chapter is its motivation.
+
+## What to do in the meantime
+
+You do not need to adopt a durable engine today. Four practices get a checkpointed graph a long way:
+
+**One effect per node, effects last.** If a node must do a side effect, it should do nothing else after it, so the crash window between "effect happened" and "checkpoint written" contains no additional work you'd lose.
+
+**Idempotency keys everywhere.** Deterministic, derived from thread ID plus node plus a stable discriminator. Never a random UUID generated inside the node, which changes on replay and defeats the whole mechanism.
+
+**A lease per thread.** Even a simple one: a row with an owner and an expiry, taken before resuming. It costs an hour and it prevents the double-resume case.
+
+**Something that notices stopped runs.** A sweeper that finds threads with no progress since some deadline and resumes or escalates them. Without it, "durable" means "the state survived," not "the work completed."
+
+## When checkpointing is enough
+
+**Enough when:** single process or a coordinated worker pool; runs measured in seconds to minutes; side effects that are read-only or already idempotent; human pauses where a UI holds the thread and a person comes back; and a domain where a duplicated action is annoying rather than expensive.
+
+**Not enough when:** money moves; waits are measured in days; deploys happen mid-run; multiple workers can pick up the same work; or the count of an action is contractually meaningful.
+
+Atlas is on both sides of that line, which is the honest answer for most real systems.
+
+## Atlas, concretely
+
+**Safe under checkpointing:** triage, gather, check, compose. All read-only or pure. A crash mid-`gather` re-runs some lookups, which costs a few cents and returns the same answers. Resume freely.
+
+**Not safe:** `issue_credit` and `send_reply`. Both move something in the world, and node-level replay means both can happen twice.
+
+So today, in the graph-only version: each lives in its own node, does nothing after the effect, and carries an idempotency key of `f"{thread_id}:issue_credit:{order_id}"`, deterministic across replays, so the payments provider deduplicates. Threads take a lease before resuming. A sweeper finds runs stalled more than an hour and escalates them to a human rather than retrying, because a stalled credit is a thing a person should look at.
+
+That is a defensible production system, and every one of those four mitigations is something Part X gets from the platform instead of from discipline. Which is the argument, and it will keep until then.
+
+## References
+
+- [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), checkpoint timing and what each durability mode guarantees.
+- [The `Durability` type](https://reference.langchain.com/python/langgraph/types/Durability), the `sync`, `async`, and `exit` values and where each applies.
+
+---
+
+Next: [Streaming and Control](/docs/langgraph/streaming-and-control), emitting intermediate state and putting hard ceilings on an autonomous loop.
+
+## Takeaways
+
+- A checkpoint is state plus position, written per superstep, keyed by a thread. The thread is the conversation.
+- It buys multi-turn state, crash resumption, interrupt-based human-in-the-loop, and time-travel debugging, all downstream of position being data.
+- On resume, execution restarts at the **beginning of the node**. Nothing inside a node is memoized.
+- Therefore side effects re-fire. Idempotency keys are the mitigation, and the burden is yours.
+- Human-in-the-loop has a double-execution trap: on resume the whole node re-runs, so non-approval calls in the same node fire twice. Put one side-effecting tool per node, ideally a dedicated approval node.
+- Nothing coordinates two processes resuming the same thread. Leasing is yours to build before you run a second worker.
+- Postgres checkpointing makes state survive a process; it does not make resumption automatic, coordinated, or exactly-once.
+- Checkpointing and durable execution both say "replay" and differ in the unit of memoization: state between nodes versus the result of every effect.
+- Checkpointing gives resumability of the graph. Durable execution also guarantees a replay never re-executes a completed effect. A better checkpointer does not get you the second, and neither gets you exactly-once against the world, which needs idempotency you supply.
+- Enough for short, single-process, read-only-ish runs. Not enough when money moves, waits span days, or multiple workers exist.
