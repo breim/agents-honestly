@@ -1,0 +1,102 @@
+---
+title: "Further Reading"
+description: "Primary sources worth your time."
+---
+
+A short list, not a bibliography. Everything here is a **primary source**, a specification, a paper, or a first-hand engineering account, that this book leans on somewhere, chosen because reading it directly gives you something the summary cannot.
+
+The bibliography is [Sources and Attribution](/docs/appendix/sources): every source the book used, grouped by part, with the licensing and fair-use statement that governs the use.
+
+<Aside type="note" title="On staleness">
+Links rot and papers get superseded, faster in this field than in most. Where a source has a version or a date, that is the version this book read. Treat the list as a set of pointers to *go and check the current state*, which is the same posture the chapters take toward prices, model behavior, and regulation.
+</Aside>
+
+## Architecture and the agent/workflow line
+
+**[Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents)** — Anthropic. The clearest statement of the distinction [Part VI](/docs/workflows/the-determinism-test) is built on: workflows orchestrate LLMs through code paths you wrote; agents let the model direct its own process. Short, and it will save you from building the second when you needed the first.
+
+**[Temporal Design Patterns](https://temporal-sa.github.io/temporal-design-patterns/)** — the catalog [Part XI](/docs/durability/temporal-pattern-map) maps onto agents. Entity workflow, signal-with-start, continue-as-new, saga. Worth reading even if you never adopt Temporal, because the patterns describe problems you will have regardless of the runtime.
+
+## Multi-agent
+
+**[How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system)** — Anthropic. The source of the numbers in [the coordination tax](/docs/multi-agent/the-coordination-tax): roughly 15× the tokens of a chat interaction, token usage explaining most of the performance variance, and the orchestrator-worker shape with a separate citation pass. Read it for the architecture and for the cost honesty, both of which are rare in public write-ups.
+
+**Why Do Multi-Agent LLM Systems Fail?** — Cemri et al., [arXiv:2503.13657](https://arxiv.org/abs/2503.13657). Over 1,600 annotated traces across seven frameworks, 41–86.7% failure rates, and the MAST taxonomy: fourteen failure modes in three families, with inter-annotator agreement of κ = 0.88. The finding that should change your design: the great majority of failures are specification and coordination, not model capability.
+
+**Single-Agent LLMs Outperform Multi-Agent Systems on Multi-Hop Reasoning Under Equal Thinking Token Budgets** — [arXiv:2604.02460](https://arxiv.org/abs/2604.02460). The control the benchmarks usually lack. Read it next to the Anthropic post; the two together are the whole argument of [Part XIX](/docs/multi-agent/when-not-to).
+
+## How agents fail
+
+**Beyond the Leaderboard: A Synthesis of Tool-Use, Planning, and Reasoning Failures in Large Language Model Agents** — [arXiv:2607.05775](https://arxiv.org/abs/2607.05775). Twenty-seven benchmark, taxonomy, and audit papers from 2023–2026 across nineteen benchmarks, reduced to the six failure clusters [Part X opens with](/docs/durable-execution/everything-that-breaks). Two of its cross-cutting findings are worth more than the taxonomy: failures compound *nonlinearly* with task length, and additional scaffolding does not reliably improve reliability. The second one is expensive to learn by experiment.
+
+**When Errors Become Narratives: A Longitudinal Taxonomy of Silent Failures in a Production LLM Agent Runtime** — [arXiv:2606.14589](https://arxiv.org/abs/2606.14589). Twenty-two incidents with full postmortems over eight weeks of one runtime in continuous production, and the rarest thing in this literature: failures observed rather than benchmarked. Its meta-pattern — an error signal that never reaches a human in actionable form — appeared at least 28 times across 22 incidents, which is why [the chapter on what breaks](/docs/durable-execution/everything-that-breaks) treats invisibility as the failure mode rather than as a property of other failures.
+
+## Security
+
+**[OWASP Top 10 for LLM Applications — LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)** — the standard reference, and the starting point for a conversation with anyone who needs a citation rather than an argument. The [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/) extends it to ASI01–ASI10, which [the threat model chapter](/docs/security/threat-model) uses as a coverage checklist.
+
+**Design Patterns for Securing LLM Agents against Prompt Injections** — Beurer-Kellner et al., [arXiv:2506.08837](https://arxiv.org/abs/2506.08837). Six patterns — action-selector, plan-then-execute, map-reduce, dual LLM, code-then-execute, context-minimization — with their utility costs stated honestly. The core principle is the sentence [Part XVII](/docs/security/prompt-injection) is organized around: once an agent has ingested untrusted input, it must be *impossible* for that input to trigger a consequential action.
+
+**Adaptive Attacks Break Defenses Against Indirect Prompt Injection Attacks on LLM Agents** — [arXiv:2503.00061](https://arxiv.org/abs/2503.00061). Eight published defenses, all bypassed, attack success consistently above 50%. This is the paper to hand to anyone proposing a classifier as a security boundary.
+
+**[The lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)** and **[CaMeL](https://simonwillison.net/2025/Apr/11/camel/)** — Simon Willison. The first is the most useful per-path review checklist in this book: private data, untrusted content, an exfiltration vector. The second is the clearest explanation of the capabilities-and-taint approach, including its acknowledged limitation.
+
+**PoisonedRAG: Knowledge Corruption Attacks to Retrieval-Augmented Generation** — Zou et al., USENIX Security 2025, [arXiv:2402.07867](https://arxiv.org/abs/2402.07867). Five malicious texts injected *for each target question* achieve a 90% attack success rate. That qualifier is the whole finding: it reframes corpus poisoning from a scale problem into a targeting problem, and it is the basis of [Part XVII's retrieval chapter](/docs/security/untrusted-retrieval).
+
+## Evaluation and retrieval
+
+**Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena** — Zheng et al., [arXiv:2306.05685](https://arxiv.org/abs/2306.05685). The measurement that named the judge biases [the scoring chapter](/docs/evals/scoring) tabulates, and the reason to read it directly is the spread rather than the headline: GPT-4 favoured its own outputs by about 10 points of win rate and Claude-v1 by about 25, so self-preference is a property of the judge you picked and not a constant you can subtract. It also reports strong judges matching human preference at over 80% agreement — roughly the agreement humans reach with each other, which is the honest ceiling on the technique.
+
+**Spider 2.0: Evaluating Language Models on Real-World Enterprise Text-to-SQL Workflows** — [ICLR 2025](https://proceedings.iclr.cc/paper_files/paper/2025/file/46c10f6c8ea5aa6f267bcdabcb123f97-Paper-Conference.pdf). 632 instances from real data applications, with the dialects, metadata sprawl, and multi-step workflows that academic benchmarks exclude. Frontier models score 17–21% here against 91.2% on the original Spider, which is the entire argument of [the SQL chapter](/docs/retrieval/sql-is-still-the-answer) and a good general lesson about the regime a published number was measured in.
+
+## Interface and trust
+
+**To Trust or to Think: Cognitive Forcing Functions Can Reduce Overreliance on AI in AI-assisted Decision-making** — Buçinca, Malaya & Gajos, [CSCW 2021](https://dl.acm.org/doi/10.1145/3449287). The study behind [the trust chapter's](/docs/interface/trust-patterns) most uncomfortable claim, and worth reading for the shape of the result rather than the headline: across 199 participants the designs that cut over-reliance the most were the ones people rated worst, and the benefit concentrated in participants already inclined to deliberate. Read it before designing anything whose success metric is that users found it smooth.
+
+**Evaluating Verifiability in Generative Search Engines** — Liu, Zhang & Liang, [arXiv:2304.09848](https://arxiv.org/abs/2304.09848). The measurement that makes citation verification an engineering requirement rather than a nicety: roughly half of generated sentences fully supported by their citations, and about three-quarters of citations supporting the sentence they hang off. Every claim [the grounded-citations pattern](/docs/patterns/retrieval/grounded-citations) checks mechanically is one this paper found unchecked in the wild.
+
+**[Web Content Accessibility Guidelines 2.2](https://www.w3.org/TR/WCAG22/)** and **[WAI-ARIA 1.2](https://www.w3.org/TR/wai-aria/)**. The normative requirements and dynamic-interface semantics behind [accessible agent interfaces](/docs/interface/accessible-and-global-interfaces). Read the live-region and status sections before announcing a token stream to a screen reader.
+
+**[WebRTC](https://www.w3.org/TR/webrtc/)** and **[RFC 8827](https://www.rfc-editor.org/rfc/rfc8827)**. The browser API and security architecture behind [realtime voice agents](/docs/interface/realtime-voice-agents). The media connection is an interface transport; it should never become the identity of the durable business run.
+
+## Protocols and identity
+
+**[Model Context Protocol](https://modelcontextprotocol.io/specification/2026-07-28)** — the specification behind [Part IX](/docs/mcp/what-mcp-is). Read the spec rather than a tutorial: the interesting content is in the transport, lifecycle, and authorization sections, which is also where the [supply-chain concerns](/docs/security/agentic-supply-chain) live. Note that it is versioned by date and has moved more than once.
+
+**[A2A 1.0 specification](https://a2a-protocol.org/latest/specification/)** — the remote-agent protocol behind [MCP Is Not A2A](/docs/mcp/remote-agents-and-a2a). Agent Cards, task lifecycle, artifacts, streaming, push delivery, cancellation, authentication, and protocol bindings are defined in one place.
+
+**[RFC 8693 — OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693)** — published in 2020 and still the right foundation for agent delegation. The `act` claim is the mechanism [Part XVII](/docs/security/identity) uses to make a token say both *whose rights apply* and *who is exercising them*. Agent-specific extensions are in draft; this is the settled part.
+
+## Coding agents and provenance
+
+**[Git worktree](https://git-scm.com/docs/git-worktree)**, **[Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/)**, **[SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)**, and **[SLSA provenance 1.2](https://slsa.dev/spec/v1.2/provenance)**. Together they provide the underlying mechanics used in [Coding Agents and Workspaces](/docs/tools/coding-agents-and-workspaces): isolated working state, structured source navigation, typed analysis findings, and a verifiable account of how an artifact was produced.
+
+## Observability
+
+**[OpenTelemetry GenAI Semantic Conventions](https://github.com/open-telemetry/semantic-conventions-genai)** — the attribute names for model calls, tokens, tools, and retrieval that [Part XV](/docs/observability/otel-genai) instruments against. Reading the conventions directly is worth an hour: it tells you which questions the ecosystem has agreed to answer, and — by omission — which ones you still have to instrument yourself.
+
+## Governance and regulation
+
+**[NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)** and **[Generative AI Profile](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf)**. The primary references for [process discovery](/docs/foundations/process-discovery-and-value), [governance](/docs/production/ai-governance), supplier assessment, human oversight, monitoring, and retirement.
+
+**[European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act)** and **[AI literacy FAQ](https://digital-strategy.ec.europa.eu/en/faqs/ai-literacy-questions-answers)**. These are maintained official sources for the current phased timeline, governance, transparency, and literacy obligations. The durable lesson in [the governance chapter](/docs/production/ai-governance) is to maintain inventory, purpose, ownership, evidence, and retirement while qualified legal teams classify the system against the current rules.
+
+## The parts that predate LLMs
+
+The unglamorous half of this book is standard distributed-systems practice, and the standard references are still the right ones.
+
+**[Google SRE](https://sre.google/books/)** — specifically the chapters on handling overload and addressing cascading failures. Retry budgets, load shedding, and the arithmetic of amplification in [Part XVI](/docs/reliability/timeouts-and-retries) are that material applied to a dependency that also bills you per token.
+
+**The confused deputy** — Norm Hardy's 1988 note is three pages and describes your agent exactly: a program holding more authority than its caller, tricked into exercising it on the caller's behalf. Everything in [Part XVII](/docs/security/threat-model) is a response to a problem that was named thirty-five years before anyone built an LLM agent.
+
+**Idempotency in payment APIs** — the public documentation of any mature payments provider. Their rules — store the first response including failures, replay it for repeat requests, reject a reused key carrying different parameters — are the contract [Part XVI](/docs/reliability/idempotency-in-practice) tells you to rebuild when your downstream service does not offer one. Worth reading as a specification rather than as a vendor doc.
+
+---
+
+## Where this leaves you
+
+Twenty-one parts, one running example, and a claim that has been made in a different register each time: **the model is the part you do not control, so everything around it has to be the part you do.**
+
+If the book worked, the thing you take from it is not a stack. It is a set of questions you now ask early: who owns this state, where does this value come from, what is the worst well-formed call on this path, would this hold against someone who gets unlimited attempts, and how would I find out if it stopped working.
+
+The tools in these pages will be replaced. Those questions will not.
