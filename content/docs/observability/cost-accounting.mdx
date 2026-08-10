@@ -1,0 +1,230 @@
+---
+title: "Token and Cost Accounting"
+description: "Per-request, per-user, per-tenant, per-feature. The dashboard that stops a bad deploy becoming a bad invoice."
+---
+
+On the 3rd, someone changes a prompt. The new version adds a paragraph of guidance and two examples, about eight hundred tokens.
+
+It goes out on the 4th. Evals pass; quality is slightly better. Nobody thinks about it again.
+
+The invoice arrives on the 1st of the following month and is 40% higher. Eight hundred tokens, re-sent on every turn of every run: [the quadratic from the cost chapter](/docs/production/cost-engineering). By the time anyone can see it in the only artifact that shows total spend, it has been running for twenty-eight days.
+
+> **The provider's invoice is one number, arriving a month late, with no way to ask which change caused it.**
+
+That is the gap this chapter closes. Cost *engineering* is about spending less; cost *accounting* is about knowing where it went, in time to do something.
+
+## Provider billing has no dimensions, so you build them
+
+The load-bearing fact, and the reason this cannot be solved by buying a tool: AI provider billing data has no tagging model. Cloud infrastructure has tags for team, environment, cost center, and service, attached to resources and flowing into the bill. Model APIs have an account, sometimes an API key, and a token count.
+
+There is no field for tenant. None for feature. None for run. None for whether the call was a retry, a fallback, or an eval.
+
+Which means attribution is not something you extract from the invoice. **It is constructed at call time, by you, and the invoice is only useful for reconciling the total.** That construction has exactly one good home: the [model gateway](/docs/production/reference-architecture), where every call already passes.
+
+## Seven dimensions, and the last one is the point
+
+| Dimension | Answers |
+| --- | --- |
+| **Run** | What did this unit of work cost? The atom everything else aggregates from |
+| **Tenant** | Is this customer profitable? |
+| **User** | Who is the power user, and is that fine? |
+| **Feature / workflow** | Which product surface spends the money? |
+| **Node / step** | Which step in the graph is expensive? |
+| **Model** | What did the [fallback](/docs/reliability/fallbacks-and-breakers) or the [cascade](/docs/production/cost-engineering) actually cost? |
+| **Outcome** | **Cost per *resolved* ticket, not per call** |
+
+The first six are bookkeeping. The seventh is the one that turns a cost dashboard into a business instrument, and almost nobody has it.
+
+Cost per model call is a number you can drive to zero by being useless. Cost per *successful outcome* is the number that trades correctly against quality. A change that makes runs 20% cheaper and 30% more likely to escalate has made your cost per resolved ticket **worse**, and only the outcome-joined metric shows it. This is the same [unit-economics frame](/docs/production/cost-engineering) as the per-run budget, and it requires joining spend to the run's terminal state, which is why the [six invariants](/docs/reliability/failure-injection) insisted every run reach one.
+
+Two more attributes are worth carrying, because they change how you read everything else:
+
+**Was this call productive?** Retries, fallbacks, and abandoned branches all cost full price. A system spending 18% of its tokens on retried attempts has a reliability problem showing up as a cost problem, and the two dashboards should be able to see each other.
+
+**Was this a real user?** Evals, backfills, load tests, and internal usage belong in their own bucket. Teams that skip this spend a week investigating a cost spike that was a colleague running the eval suite twice.
+
+## Record at the call, aggregate later
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/gateway/accounting.ts"
+export interface CallCost {
+  // identity — every one of these comes from context, not from the model
+  runId: string;
+  tenantId: string;
+  userId: string | null;
+  feature: string;          // 'ticket_triage', 'reply_draft', …
+  node: string;             // which graph node issued the call
+
+  // what was actually served
+  model: string;            // the SERVED model, not the requested one
+  degraded: boolean;        // came from a fallback rung
+  productive: boolean;      // false for retries and abandoned branches
+  synthetic: boolean;       // eval, backfill, load test
+
+  // the meter
+  inputTokens: number;
+  cachedInputTokens: number;   // priced differently — track separately
+  outputTokens: number;
+  costMicros: number;          // computed HERE, from a versioned price table
+}
+
+// Prices change. Compute cost at call time from a pinned price table and
+// store the number, so history does not silently reprice when a vendor
+// changes a rate and last quarter's dashboard moves.
+export function priceCall(usage: Usage, prices: PriceTable): number {
+  return Math.round(
+    usage.inputTokens        * prices.input +
+    usage.cachedInputTokens  * prices.cachedInput +
+    usage.outputTokens       * prices.output,
+  );
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/gateway/accounting.py"
+from dataclasses import dataclass
+
+
+@dataclass
+class CallCost:
+    # identity — all from context, never from the model
+    run_id: str
+    tenant_id: str
+    user_id: str | None
+    feature: str          # 'ticket_triage', 'reply_draft', …
+    node: str             # which graph node issued the call
+
+    # what was actually served
+    model: str            # the SERVED model, not the requested one
+    degraded: bool        # came from a fallback rung
+    productive: bool      # False for retries and abandoned branches
+    synthetic: bool       # eval, backfill, load test
+
+    # the meter
+    input_tokens: int
+    cached_input_tokens: int   # priced differently — track separately
+    output_tokens: int
+    cost_micros: int
+
+
+def price_call(usage, prices) -> int:
+    # Compute at call time from a pinned price table and store the number,
+    # so history does not silently reprice when a vendor changes a rate.
+    return round(
+        usage.input_tokens * prices.input
+        + usage.cached_input_tokens * prices.cached_input
+        + usage.output_tokens * prices.output
+    )
+```
+
+</Tab>
+</Tabs>
+
+Three details are easy to get wrong and expensive to fix afterwards.
+
+**Price at call time, from a versioned table.** Storing raw token counts and multiplying by today's price means every historical dashboard silently changes when a vendor adjusts a rate, and your "we cut costs 20% in Q3" chart becomes unfalsifiable. Store the computed number and the price-table version.
+
+**Cached input is a separate meter.** It is priced far below normal input, so folding it into one `inputTokens` field destroys the only signal that tells you whether your [cache prefix discipline](/docs/foundations/prompt-caching) is actually working. Cache hit rate is a cost metric.
+
+**Record the served model, not the requested one.** This is the same field [the fallback chapter](/docs/reliability/fallbacks-and-breakers) required for detecting silent degradation, and it does double duty here: a week where costs dropped and quality dipped is instantly explainable if you can see that 30% of traffic was served by the cheap rung.
+
+These attributes belong on the [OTel spans you are already emitting](/docs/observability/otel-genai). One span attribute set, read by both the trace UI and the cost pipeline, rather than a parallel metrics path that drifts out of agreement with the traces.
+
+## Report distributions, because the mean is a lie
+
+Run cost is heavy-tailed in a way that request cost is not. Most runs finish in four turns; a few loop to twenty. Because [input cost is roughly quadratic in turns](/docs/production/cost-engineering), those few runs can be a large fraction of total spend.
+
+<Figure caption="The same mean, two different systems. Only one of them has a problem, and only the percentile view shows which." frame={false}>
+
+```
+   cost per run, two weeks with identical means
+
+   week A                         week B
+   p50   $0.06                    p50   $0.04
+   p90   $0.11                    p90   $0.09
+   p99   $0.19                    p99   $2.40   ◀── runs that loop
+   max   $0.31                    max   $18.60  ◀── runs that never
+                                                     hit a cap
+   mean  $0.07                    mean  $0.07
+```
+
+</Figure>
+
+So the dashboard shows **p50, p90, p99, and max** per workflow, not an average, and `max` earns its place because it is where you discover a run that spent eighteen dollars and produced nothing. Track the **share of total spend consumed by the top 1% of runs**; when that number climbs, you have a looping-behavior problem being reported as a cost problem, and the fix is a [turn cap](/docs/production/cost-engineering) rather than a cheaper model.
+
+## Alert on the leading indicator, not the invoice
+
+The invoice is a lagging indicator by thirty days. The leading indicator is available in real time and belongs on an alert:
+
+| Alert | Fires on |
+| --- | --- |
+| **Tokens per minute, by feature** | A deploy that changed prompt size. Minutes, not weeks |
+| **Mean input tokens per turn, by workflow** | The eight-hundred-token paragraph. This is the specific alert that catches the opening scene |
+| **Cost per resolved outcome** | Quality/cost trades going the wrong way |
+| **Cache hit rate drop** | A [prefix invalidated](/docs/foundations/prompt-caching) by an innocuous edit |
+| **Unproductive token share** | A reliability incident, seen from the money side |
+| **Top-1% spend share** | Runs that loop |
+| **Per-tenant spend vs. plan** | One customer consuming their annual contract in March |
+
+The second row is the highest-value single alert in this chapter. Average input tokens per turn is nearly constant for a given workflow, moves only when someone changes the prompt or the tool catalogue, and jumps immediately on deploy. An alert on a 10% shift catches the opening scene the afternoon it ships.
+
+<Aside type="note" title="Put the number in CI, not just on a dashboard">
+Better still: make it a gate. Your [eval suite](/docs/evals/ci-for-agents) already runs the candidate configuration over a fixed dataset, so it can report tokens and cost per fixture alongside quality. A prompt change then arrives in review as *"+3% on the rubric, +38% input tokens"*, which is a trade a human can weigh before it ships.
+
+Quality regressions are gated in CI as a matter of course. Cost regressions almost never are, and they are the ones that surface a month later with nobody able to say which change caused them.
+</Aside>
+
+## Showback makes it someone's problem
+
+The last step is organizational and it is the one that changes behavior.
+
+**Per-tenant cost against per-tenant revenue** is the report that answers whether a customer is profitable, and in usage-based products it is the report that catches the enterprise account whose agent runs cost more than their subscription. It requires the tenant dimension on every call, which is [one more reason](/docs/security/tenant-isolation) tenancy has to ride the whole async chain.
+
+**Per-team or per-feature showback** puts the number in front of the people who can move it. A team that sees its feature's monthly spend next to its usage will optimize without being asked; a team that sees a company-wide total will not, because nothing about that number is theirs.
+
+The honest caveat: showback becomes counterproductive the moment it turns into a target that competes with quality without the outcome dimension attached. *"Reduce cost per resolved ticket"* is a good goal. *"Reduce token spend"* is a goal that a team can hit by escalating more tickets to humans, which moves the cost somewhere the dashboard cannot see.
+
+## Atlas, concretely
+
+| Practice | Implementation |
+| --- | --- |
+| Where | Model gateway, on the OTel span; one source for traces and costs |
+| Dimensions | run, tenant, user, feature, node, served model, outcome |
+| Flags | `degraded`, `productive`, `synthetic` on every call |
+| Pricing | Computed at call time from a versioned price table; the number is stored |
+| Cached input | Metered separately; cache hit rate on the cost dashboard |
+| Headline metric | **Cost per resolved ticket**, weekly, against margin |
+| Distribution | p50 / p90 / p99 / max per workflow; top-1% spend share |
+| Alerts | Input tokens per turn ±10%; TPM by feature; cache hit rate drop; tenant vs. plan |
+| CI gate | Eval run reports Δ tokens and Δ cost per fixture next to Δ quality |
+| Reconciliation | Monthly: sum of recorded `cost_micros` vs. the invoice, within 2% |
+
+The last row is the one people skip and then regret. If your recorded total does not reconcile with the invoice, some traffic is not going through the gateway: a script, a notebook, an integration someone wired directly. That unmetered path is both a cost blind spot and, given everything [Part XVII](/docs/security/least-privilege) argued, a control blind spot as well.
+
+The 40% invoice would have been a Slack message on the afternoon of the 4th.
+
+---
+
+Next: [Detecting Drift](/docs/observability/drift). The model changed, the data changed, or the users changed. Noticing which.
+
+## Takeaways
+
+- The provider invoice is one number, thirty days late, with no way to ask which change caused it.
+- AI billing data has no tagging model: no tenant, no feature, no run. Attribution is constructed by you at call time; the invoice is only good for reconciling the total.
+- The gateway is the one place that sees every call, which makes it the only sane home for accounting.
+- Seven dimensions: run, tenant, user, feature, node, served model, and outcome.
+- Cost per *resolved outcome* is the metric that trades correctly against quality. A change that is 20% cheaper and escalates 30% more has made things worse, and only the outcome join shows it.
+- Flag every call as productive or not, and synthetic or not. Retry spend is a reliability problem visible on the cost dashboard; eval spend investigated as a leak wastes a week.
+- Price at call time from a versioned table and store the number, or every historical chart silently reprices when a vendor changes a rate.
+- Meter cached input separately. Cache hit rate is a cost metric, and folding it in destroys the only signal that prefix discipline works.
+- Record the served model, not the requested one. It is the same field that makes silent fallback degradation visible.
+- Put the attributes on the spans you already emit, rather than building a parallel metrics path that drifts.
+- Run cost is heavy-tailed. Report p50/p90/p99/max per workflow and track the share of spend taken by the top 1% of runs. A rising number means looping, not expensive models.
+- Alert on the leading indicator. Mean input tokens per turn by workflow is nearly constant, moves only on deploys, and catches an inflated prompt the day it ships.
+- Gate cost in CI next to quality: "+3% on the rubric, +38% input tokens" is a trade a reviewer can weigh.
+- Showback per tenant against revenue answers profitability; per team against usage changes behavior. Attach the outcome dimension, or the target gets hit by escalating to humans.
+- Reconcile recorded spend against the invoice monthly. A gap means traffic bypassing the gateway, which is both a cost and a control blind spot.
