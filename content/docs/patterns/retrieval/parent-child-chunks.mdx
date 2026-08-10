@@ -1,0 +1,181 @@
+---
+title: "Parent–Child Chunks"
+description: "Match on the small chunk, return the surrounding one."
+---
+
+## Problem
+
+The returns policy section reads:
+
+> **7.3 Returns.** Components may be returned within 30 days of delivery.
+> **7.3.1** For sealed electrical components, the packaging must be unopened.
+> **7.3.2** Sub-clause 7.3.1 does not apply to product families RB and RC, which may be returned with packaging opened provided no unit has been installed.
+
+Chunked at 400 tokens, those land as three separate chunks. A query about opened RB-400 relays matches **7.3.2**, the exception, with high similarity, because it is the passage that mentions exactly what was asked.
+
+The model receives 7.3.2 alone: *"Sub-clause 7.3.1 does not apply to product families RB and RC…"* It does not know what 7.3.1 said, what 7.3 established, or that a 30-day window exists at all. The retrieval was correct. The answer will be wrong.
+
+This is the [chunking tension](/docs/retrieval/chunking) in its sharpest form. **Small chunks match better; large chunks answer better**, and one chunk size cannot do both.
+
+## Forces
+
+- **Retrieval precision improves as chunks get smaller**: less unrelated text diluting the embedding.
+- **Answer quality improves as chunks get larger**: definitions, qualifiers, and exceptions live in the surrounding text.
+- **The relationship is structural**, not statistical: a sub-clause is meaningless without its parent, and the document says so.
+- **Returning the whole document wastes the window** and re-introduces the [near-miss problem](/docs/context/context-as-budget).
+- **Adjacent children of the same parent are often both retrieved**, so naive expansion duplicates text.
+
+## Solution
+
+Index the **small** chunk; return the **large** one.
+
+<Figure caption="Two granularities, one relationship. Matching happens at the granularity that matches best; delivery happens at the granularity that answers best." frame={false}>
+
+```
+   INDEXED (children, ~200 tokens)      RETURNED (parent, ~1200 tokens)
+   ┌──────────────────────────┐
+   │ c-8810  §7.3 opening     │──┐
+   ├──────────────────────────┤  │      ┌──────────────────────────────┐
+   │ c-8811  §7.3.1 sealed    │──┼─────▶│ §7.3 Returns — full section  │
+   ├──────────────────────────┤  │      │  30-day window               │
+   │ c-8812  §7.3.2 RB/RC ✦   │──┘      │  sealed-component rule       │
+   ├──────────────────────────┤         │  the RB/RC exception         │
+   │ c-8813  §7.4 warranties  │         └──────────────────────────────┘
+   └──────────────────────────┘
+     ✦ the match                          one parent, deduplicated,
+                                          even though 3 children hit
+```
+
+</Figure>
+
+Four rules:
+
+**Let the document define the parent.** A section, a clause with its sub-clauses, a table with its header, a function with its docstring. A parent that is "the 1,200 tokens around the match" is an arbitrary window and will cut through a boundary somewhere; a parent that is *the section* is a real unit of meaning. This is the same argument as [what must never be split](/docs/retrieval/chunking), applied one level up.
+
+**Deduplicate parents after retrieval.** Three children of §7.3 matching produces one parent, not three copies. Do this *after* [reranking](/docs/patterns/retrieval/two-stage-rerank), so the reranker still scores the precise children: the child is what the query actually matched, and scoring the parent throws that precision away.
+
+**Cap the parent.** A section that is 9,000 tokens is not a parent, it is a document. Fall back to the child plus its immediate neighbours when the parent exceeds a ceiling, and log it: a corpus with many oversized parents has a [chunking](/docs/retrieval/chunking) problem this pattern is masking.
+
+**Carry both IDs.** The child ID is what matched and the parent ID is what was sent. [Citations](/docs/patterns/retrieval/grounded-citations) should point at the child, because that is the span that actually supports the claim, while the prompt receives the parent.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/parent-child.ts"
+const MAX_PARENT_TOKENS = 2_000;
+
+export interface Child {
+  id: string;
+  parentId: string;
+  text: string;         // ~200 tokens — what gets embedded and matched
+  ordinal: number;      // position within the parent, for neighbour fallback
+}
+
+export async function expandToParents(
+  ranked: Child[], keep: number, ctx: RunContext,
+): Promise<Passage[]> {
+  const out: Passage[] = [];
+  const seen = new Set<string>();
+
+  // Ranked order is preserved: the best child decides its parent's position.
+  for (const child of ranked) {
+    if (out.length >= keep) break;
+    if (seen.has(child.parentId)) continue;          // dedupe, keep the best
+    seen.add(child.parentId);
+
+    const parent = await loadParent(child.parentId, ctx);
+
+    // An oversized parent is a chunking smell — fall back and record it.
+    const text = parent.tokens <= MAX_PARENT_TOKENS
+      ? parent.text
+      : await neighbourhood(child, ctx);
+    if (parent.tokens > MAX_PARENT_TOKENS) ctx.trace.inc('retrieval.parent_oversize');
+
+    out.push({
+      text,
+      matchedChildId: child.id,     // what the citation points at
+      parentId: parent.id,          // what the prompt received
+      version: parent.version,
+    });
+  }
+  return out;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/parent_child.py"
+MAX_PARENT_TOKENS = 2_000
+
+
+async def expand_to_parents(ranked: list[Child], keep: int, ctx) -> list[Passage]:
+    out: list[Passage] = []
+    seen: set[str] = set()
+
+    # Ranked order is preserved: the best child decides its parent's position.
+    for child in ranked:
+        if len(out) >= keep:
+            break
+        if child.parent_id in seen:      # dedupe, keep the best
+            continue
+        seen.add(child.parent_id)
+
+        parent = await load_parent(child.parent_id, ctx)
+
+        # An oversized parent is a chunking smell — fall back and record it.
+        if parent.tokens <= MAX_PARENT_TOKENS:
+            text = parent.text
+        else:
+            text = await neighbourhood(child, ctx)
+            ctx.trace_inc("retrieval.parent_oversize")
+
+        out.append(Passage(
+            text=text,
+            matched_child_id=child.id,   # what the citation points at
+            parent_id=parent.id,         # what the prompt received
+            version=parent.version,
+        ))
+    return out
+```
+
+</Tab>
+</Tabs>
+
+`parent_oversize` is a metric worth watching. It rises when documents change shape, a new template with fewer headings, a supplier's PDF that parses into one giant section, and it is an early signal of a [corpus regression](/docs/observability/drift) that will surface later as worse answers.
+
+## Trade-offs
+
+**Two stores, or one store with two granularities.** Children are indexed and embedded; parents are stored and fetched by ID. Parents do not need embedding, which keeps the extra cost modest, but the [ingestion pipeline](/docs/retrieval/ingestion-pipeline) now has to keep both consistent, and a re-index that rebuilds children without rebuilding parents produces dangling IDs.
+
+**More tokens per result.** A 1,200-token parent instead of a 200-token child means fewer results fit. Usually a good trade: five complete sections beat twenty fragments. Sometimes not, and the corrective is `keep`, not the parent size.
+
+**Deduplication changes the effective `k`.** Ten ranked children may collapse to four parents. Either over-fetch to compensate or accept that `keep` counts parents, and be explicit about which: silently returning four passages when the pipeline promised five is the kind of thing that shows up as an unexplained recall drop.
+
+**Filters must apply at both levels.** If a child is authorized and its parent contains restricted material, expansion has [leaked](/docs/retrieval/metadata-and-authorization). In practice this means permissions live on the parent and children inherit them, which is a constraint on how you model the corpus.
+
+## When not to use it
+
+**When documents have no hierarchy.** Chat transcripts, log lines, product records, independent FAQ entries. There is no parent to expand to, and inventing one by taking neighbouring text yields an arbitrary window.
+
+**When chunks are already self-contained.** A well-structured FAQ where each entry is a complete question and answer needs nothing. This pattern exists for documents where meaning is inherited.
+
+**When the whole document fits.** If sections are short and documents are a few thousand tokens, retrieve the document. Two granularities for a corpus that fits in one is complexity for its own sake.
+
+**When context can be attached at ingestion instead.** Prepending the section heading and a one-line ancestor summary to every child, [chunks carrying their context](/docs/retrieval/chunking), solves a large share of these cases for far less machinery. Try that first; reach for parent–child when the *exception itself* lives in a sibling chunk, which is the case the opening example shows and the one contextual prefixes cannot fix.
+
+<Aside type="caution" title="It cannot fix a chunk that splits a single fact">
+Parent–child recovers context that lives *around* the match. It does nothing for a fact split *through the middle*: a table whose header is in one chunk and whose rows are in the next, or a sentence severed mid-clause.
+
+Those need the fix one stage earlier: chunk on structural boundaries, never on a fixed token count alone, and [never split a table from its header](/docs/retrieval/chunking). If you find yourself reaching for larger and larger parents to compensate, the chunker is the thing to change.
+</Aside>
+
+## Related
+
+- [Chunking](/docs/retrieval/chunking): the strategies ladder, and what must never be split
+- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): rerank children, then expand; order matters
+- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): cite the child, send the parent
+- [Tool Result Truncation](/docs/patterns/context/tool-result-truncation): capping what expansion produces
+- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): why permissions belong on the parent
