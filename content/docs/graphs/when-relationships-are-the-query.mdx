@@ -1,0 +1,162 @@
+---
+title: "When Relationships Are the Query"
+description: "Multi-hop questions that similarity search structurally cannot answer, and how to recognize one."
+---
+
+
+Part IV ended with the one Atlas ticket it could not touch:
+
+> **#8841:** "Why is the Acme account at risk?"
+
+Every other question had an answer that lived somewhere. This one doesn't. There is no document titled *"Why Acme Is At Risk,"* no row containing it, no policy that covers it. The answer is assembled from facts that are individually unremarkable: a renewal date sixty days out, three escalated tickets in ninety days, order volume down 38% year over year, and an account owner who changed in June.
+
+Not one of those facts is *about* risk. Risk is what they mean together.
+
+## Similarity is a one-hop operation
+
+Here is the structural reason retrieval cannot do this, stated precisely.
+
+Vector search scores every candidate **against the query, independently**. Each item is retrieved on its own merits. There is no mechanism by which retrieving one fact makes a second fact more retrievable: none, at any `k`, with any embedding model.
+
+And the intermediate facts don't resemble the question. "Why is Acme at risk" is not semantically close to "renewal_date: 2026-09-30." A human wouldn't rank those as similar either; the connection isn't similarity, it's **inference across a chain**:
+
+```
+   "why is Acme at risk?"
+        │
+        │  ← similarity gets you here and stops
+        ▼
+   the Acme account record
+        │
+        │  ← this hop requires knowing Acme HAS tickets
+        ▼
+   its open tickets ──▶ their escalation status
+        │
+        │  ← and this one requires knowing what matters
+        ▼
+   renewal date ──▶ 60 days out ──▶ risk
+```
+
+Each arrow is a step that similarity cannot take, because the target of the arrow doesn't look like the original question. **You need traversal, and similarity search has no traversal.**
+
+## Two ways to buy traversal
+
+Which brings us to the decision this part is actually about, and it is not "should we use a graph database."
+
+There are two mechanisms that supply the missing hop, and they are competing implementations of the same capability:
+
+<Figure caption="Same missing capability, two very different bills. Most teams evaluate only the left one." frame={false}>
+
+```
+   PRECOMPUTED EDGES                  RUNTIME ITERATION
+   (a graph)                          (an agent loop)
+
+   build an index of                  retrieve, read, decide
+   relationships up front             what to retrieve next
+
+   ┌───────────────────────┐          ┌───────────────────────┐
+   │ Acme ──has──▶ Ticket  │          │ step 1: get_account   │
+   │  │                    │          │ step 2: get_tickets   │
+   │  └──renews──▶ Date    │          │ step 3: get_volume    │
+   └───────────────────────┘          └───────────────────────┘
+
+   one query, whole                    N model calls,
+   neighbourhood, exact                adapts to any question
+
+   cost: ontology, entity              cost: latency, tokens,
+   resolution, build,                  a chance to go wrong
+   maintenance                         at each hop
+```
+
+</Figure>
+
+The agent loop you built in [Part II](/docs/first-agent/the-loop-by-hand) already does multi-hop retrieval. That's what the Acme trace was: `get_account`, then `get_open_tickets` and `get_order_volume` chosen *because* of what the first call returned. Hops made of tool calls instead of edges.
+
+So the honest question is: **when is a precomputed graph better than an agent doing several retrievals?**
+
+| | Agentic iteration | Graph traversal |
+| --- | --- | --- |
+| Build cost | None | Ontology, entity resolution, indexing |
+| Maintenance | None | Continuous; the graph goes stale like any index |
+| Adapts to unforeseen questions | Yes | Only within the modelled relationships |
+| Latency | N sequential model calls | One query |
+| Determinism | [Varies per run](/docs/foundations/nondeterminism) | Exact |
+| Whole-neighbourhood questions | Poorly; sees one hop at a time | Naturally |
+| Structural aggregates ("how many paths") | No | Yes |
+
+Read the last two rows carefully, because that is where graphs genuinely win rather than merely differ.
+
+## Four signs it's really a graph question
+
+**1 · The relationship type carries meaning.** Not "these appear together" but "*A supplies B*" versus "*A competes with B*." If your question depends on which kind of edge, similarity cannot express it, because similarity only knows about proximity.
+
+**2 · The hop count is variable and unknown.** "Which of our customers are exposed to a delay at this supplier" might be two hops or five, depending on the supply chain. An agent can iterate, but it doesn't know when to stop, and each extra hop is another chance to wander.
+
+**3 · You need structural properties, not facts.** How many distinct paths connect these two accounts? Which entity is most central to this cluster? What would break if this supplier failed? These are questions *about the shape of the network*, and there is no set of documents that contains the answer. It has to be computed over the edges.
+
+**4 · The same traversal runs constantly.** A relationship walk executed on every ticket is worth precomputing, exactly like any other cached computation. A traversal run twice a month is not.
+
+## Three things that look like graph problems and aren't
+
+This is where the money gets wasted, and the book's position from the [preface](/docs/preface) is that most teams reaching for a graph are here.
+
+**"The answer spans two chunks."** That is a [chunking](/docs/retrieval/chunking) problem. Parent/child retrieval fixes it for a fraction of the cost, and a graph will not help because the relationship you need is *contiguity in a document*, which chunking already models.
+
+**"It needs facts from two systems."** That's two tool calls. The agent fetches the order and the account and reasons over both. You do not need an edge between them to read them both. You need the model to know both tools exist.
+
+**"It's complicated."** Complexity is not a shape argument. The question is whether the *relationships* are the answer, not whether the problem is hard. Plenty of hard questions are hard for other reasons, whether ambiguity, missing data, or judgment, and none of those improve with a graph.
+
+<Aside type="caution" title="The bill is entity resolution, not the database">
+Teams budget for a graph database. The database is the cheap part.
+
+The expensive part is deciding that "Acme Industrial," "ACME Industrial Ltd," `acct_4471`, and the "Acme" in a ticket body are the same entity, reliably, at scale, as new data arrives with new spellings. Get that wrong and your graph confidently reports that two accounts are unrelated when they're the same customer, or merges two customers who aren't.
+
+[Entity resolution](/docs/graphs/entity-resolution) is the unglamorous work that decides whether the graph is usable, and it is most of the project. Budget accordingly, and be suspicious of any plan where it isn't the largest line item.
+</Aside>
+
+## What the evidence actually says
+
+The current consensus is more useful than either camp's marketing, and it has a shape worth internalizing:
+
+**On single-hop factual lookup, plain retrieval edges ahead.** The graph adds nothing and costs latency. **On genuinely multi-hop reasoning, graph-guided retrieval pulls in front.** So a graph is not uniformly better. It is better on a *subset* of questions and worse on the common case.
+
+Which makes this a bet on your **traffic mix**, not on the technology. If 3% of tickets are Acme-shaped, you are proposing to build and maintain an index for 3% of traffic while making the other 97% slightly slower.
+
+The economics have also moved: newer indexing approaches have cut graph construction cost dramatically, by roughly three orders of magnitude in one widely-cited case, which lowers the threshold at which a graph pays off. It does not change the decision *procedure*, because maintenance and entity resolution didn't get cheaper. It just means the answer flips at a smaller percentage than it used to.
+
+## The procedure
+
+Given all of that, the recommendation is a sequence rather than a verdict:
+
+**1 · Start with agentic iteration.** You already have it. Give the agent well-described tools for the entities and let it walk. Nothing to build.
+
+**2 · Log the shape of what it does.** From [tracing](/docs/observability/what-a-trace-must-answer): how many hops per ticket, which sequences repeat, how often does a multi-hop investigation time out or halt. This is the measurement the decision needs.
+
+**3 · Decide from the data.** If a measurable fraction of traffic is doing four-hop walks over the same relationships, precompute those edges, because you have found a cached computation. If it's a handful of tickets a week, you have found a reason not to build anything.
+
+**4 · If you build, build narrow.** Model the entities and relationships that the traffic actually traverses, not the enterprise ontology someone drew on a whiteboard. A three-entity graph that answers the real question beats a forty-entity model that nobody can maintain.
+
+This is the same discipline as [not building an agent](/docs/foundations/when-not-to-build-an-agent), applied one layer down: take the cheapest mechanism that answers the question, and escalate only when a measurement, not an intuition, says it can't.
+
+## Atlas, concretely
+
+The Acme question is a genuine relationship question by three of the four signs: the edge types matter (an *escalated* ticket is different from a resolved one), the hop count varies by account, and account-health traversals run on a meaningful slice of tickets.
+
+And the recommendation for now is still **don't build the graph.** Atlas answers #8841 with three tool calls and a model that reads the results, at four steps and eleven cents. The version that justifies an index is the one where account health is checked on every ticket, proactively, across ten thousand accounts a night, which is a batch job over relationships, and a genuinely different system.
+
+Part V is what to do when you get there: how to model the entities, how to resolve them, how to traverse without returning a subgraph too large to fit in a prompt, and an honest account of when to stop.
+
+---
+
+Next: [Entities, Relations, and Ontology](/docs/graphs/modeling-entities), on deciding what a Customer is once, so five systems stop each having their own answer.
+
+## Takeaways
+
+- Some answers exist in no record. They're implied by several facts, none of which is *about* the question.
+- Similarity is a one-hop operation: every candidate is scored against the query independently, and retrieving one fact never makes another more retrievable.
+- Traversal is the missing mechanism, and there are two ways to buy it: precomputed edges, or an agent iterating with tool calls. They are competing implementations of the same capability.
+- Graphs genuinely win on whole-neighbourhood questions and structural aggregates. Those are the rows to check.
+- Four signs of a real graph question: edge type carries meaning, hop count is variable, you need properties of the network itself, and the same traversal runs constantly.
+- Three false positives: an answer spanning two chunks (chunking), facts from two systems (two tool calls), and "it's complicated" (not a shape argument).
+- The bill is entity resolution, not the database. If it isn't your largest line item, the plan is wrong.
+- Evidence: plain retrieval wins on single-hop, graphs win on multi-hop. So it's a bet on your traffic mix; measure it.
+- Start agentic, log the hop shapes, and build only what the traffic actually traverses.
