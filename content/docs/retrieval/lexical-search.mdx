@@ -1,0 +1,135 @@
+---
+title: "Lexical Search and Why You Still Need It"
+description: "BM25, exact match, and the ticket ID that semantic search will never find."
+---
+
+
+BM25 is usually introduced as the thing you used before embeddings: the baseline in the comparison table, present so that dense retrieval has something to beat.
+
+That framing is wrong, and it costs teams real accuracy. Lexical search is not an earlier, worse attempt at the same job. It is a **different capability**, and it answers a class of question that embeddings cannot answer in principle rather than in practice.
+
+## Rarity is the signal
+
+BM25 scores a document against a query by asking, for each query term: how often does this term appear here, and how unusual is it overall?
+
+Three components, and the middle one is the whole point.
+
+**Term frequency, with saturation.** A document mentioning "relay" eight times is more relevant than one mentioning it once, but not eight times more. The score saturates, so a page that repeats a word forty times doesn't dominate.
+
+**Inverse document frequency.** A term appearing in 3 of 40,000 documents carries enormous information when it matches. A term appearing in 30,000 of them carries almost none. This is where the ranking power lives.
+
+**Length normalization.** Long documents contain more of everything, so raw counts are discounted by length. Otherwise your longest policy document wins every query.
+
+Hold on to the second one, because it is exactly the information the [embeddings chapter](/docs/retrieval/embeddings) said gets destroyed:
+
+> BM25 knows that `RB-400` appeared in three documents out of forty thousand, and treats a match as near-conclusive. An embedding cannot represent "this exact rare token was present". The tokenizer split it into fragments before the vector existed.
+
+Dense retrieval **generalizes**: it finds "returns" when you asked about "sending items back." Lexical retrieval **discriminates**: it finds `RB-400` and does not find `RB-380`. Those are opposite behaviours with opposite failure modes, which is why one cannot substitute for the other.
+
+## The argument that settles it: no vocabulary
+
+Here is the strongest reason lexical search is permanent rather than legacy, and it is not the one usually given.
+
+Every learned retriever has a **fixed vocabulary**, determined when its model was trained. Dense embeddings do, because that's the tokenizer. And learned sparse retrievers, the modern middle ground, do too: they only emit weights for tokens in the model's vocabulary, so an unknown term is split into subwords or replaced by an unknown-token placeholder. That behaviour is reasonable for language modelling and **destructive for retrieval**, because the thing you needed to match on was the exact rare string.
+
+BM25 has no vocabulary at all. It indexes whatever strings are in your corpus. It does not need to have seen `RB-400` during training, because it was never trained.
+
+The operational consequence:
+
+> **Lexical search has no training cutoff.** Meridian launches a product line next month with part numbers and terminology no model has ever encountered. Those documents are fully searchable the moment they're indexed, while every learned retriever handles them a little worse, permanently, until it is retrained.
+
+That's the [drift](/docs/observability/drift) problem from the embeddings chapter, and lexical search is structurally immune to it. In a corpus that grows new vocabulary, whether products, incident codes, customer names, or acronyms, that immunity compounds.
+
+## What it wins, concretely
+
+| Query type | Example | Why dense fails |
+| --- | --- | --- |
+| Identifiers | `RB-400`, order `4921`, `INC-93842` | Tokenizer fragments them into meaninglessness |
+| Error and status codes | `ERR_TIMEOUT_504`, `ORA-01722` | Same, plus near-neighbours are other codes |
+| Proper nouns | "Northwind Logistics" | Company names cluster with all other company names |
+| Acronyms | "RMA", "MOQ", "DDP" | Short, ambiguous, and overloaded across domains |
+| Newly coined terms | A product launched last month | Not in the model's vocabulary at all |
+| Exact quotes | Anything the user pasted | The user is telling you the exact string; use it |
+
+The unifying test from [the routing chapter](/docs/retrieval/where-does-the-answer-live) still holds: **if a human would find it with Ctrl-F, use lexical.**
+
+## Your analyzer has its own tokenizer problem
+
+The trap that catches people who correctly reach for BM25 and then get the same bad results.
+
+Lexical search does not index raw text either. It runs an **analyzer**: split into tokens, lowercase, strip punctuation, remove stopwords, apply stemming. Default analyzers are tuned for English prose, and English prose is not what your identifiers are.
+
+Point a default analyzer at `RB-400` and it may well emit `rb` and `400`: two extremely common tokens, high document frequency, no discriminating power. You have reproduced the exact failure you switched away from dense retrieval to avoid.
+
+<Aside type="caution" title="Check what your analyzer does to your identifiers">
+Before trusting lexical search on structured strings, run your analyzer over a sample of them and look at the output tokens. It takes two minutes and it is the difference between BM25 working and BM25 appearing not to work.
+
+The usual fixes: keep an unanalyzed (exact) field alongside the analyzed one and search both; configure the tokenizer to preserve alphanumeric-with-hyphen patterns; or index identifiers into a dedicated field with a keyword analyzer that does nothing at all.
+</Aside>
+
+Two more analyzer decisions worth making deliberately:
+
+**Stemming helps prose and hurts codes.** Stemming maps "returning," "returned," and "returns" to one root, which is a genuine recall win on policy text. Applied to a part number or a surname it produces nonsense. Different fields, different analyzers.
+
+**Stopword removal can delete the query.** A search for "return to sender" against a stopword list containing "to" is now "return sender." Usually fine. Occasionally the stopword was load-bearing.
+
+## Where it genuinely fails
+
+Being fair to the other side, because this chapter argues for both rather than for a swap.
+
+**Vocabulary mismatch.** The customer writes *"how do I send this back?"* and the policy says *"Return Merchandise Authorization procedure."* Zero terms in common, zero score. BM25 requires that the query's vocabulary appear in the corpus. Otherwise it returns nothing at all, confidently and quickly.
+
+**Paraphrase and synonymy.** "Damaged in transit" versus "arrived crushed." A human sees one concept; BM25 sees disjoint term sets.
+
+**Morphology beyond stemming.** Compound words, inflected languages, and anything where the same meaning has structurally different surface forms.
+
+These are precisely dense retrieval's strengths, which is not a coincidence: the two methods fail in complementary directions. That complementarity is the entire argument for the [next chapter](/docs/retrieval/hybrid-and-reranking).
+
+## In practice: the second index
+
+You do not need another system. In the schema from [two chapters ago](/docs/retrieval/vector-search), lexical search is one more index on the same table:
+
+```sql
+ALTER TABLE policy_chunks
+  ADD COLUMN content_tsv tsvector
+  GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,
+  ADD COLUMN identifiers text[];        -- extracted at ingest, unanalyzed
+
+CREATE INDEX ON policy_chunks USING gin (content_tsv);
+CREATE INDEX ON policy_chunks USING gin (identifiers);
+```
+
+Two fields on purpose: `content_tsv` gets the English analyzer with stemming, for prose. `identifiers` is an exact-match array populated during ingestion by a pattern match for part numbers, order IDs, and codes: no analyzer, no stemming, no lowercasing surprises.
+
+The same `WHERE` clauses apply. Tenant, version, and tier are [authorization](/docs/retrieval/metadata-and-authorization), and they are not optional on this path either. A second retrieval path is a second place to forget the filter, which is exactly why the last chapter insisted on one function.
+
+## Learned sparse, positioned honestly
+
+There is a middle option worth knowing: learned sparse retrieval, which uses a model to produce term weights and to *expand* a query with related terms, so it can match "RMA" to "return" without a dense embedding.
+
+It genuinely closes some of the vocabulary-mismatch gap while keeping the interpretability of term-based scoring. But note what it does not fix: it has a vocabulary, so out-of-domain identifiers and newly coined terms degrade the same way; and models trained on general corpora transfer imperfectly to specialized ones without fine-tuning.
+
+Treat it as a possible upgrade to the dense side of a hybrid system, not as a replacement for the exact-match path. The part number still wants BM25.
+
+## Atlas, concretely
+
+Both paths, always. `search_policies` runs BM25 over `content_tsv` and dense over `embedding`, plus an exact-match pass over `identifiers` whenever the triage step extracted a part number, which, from [the very first chapter of Part II](/docs/first-agent/one-call), it does, because entity extraction was in the v0 schema for exactly this reason.
+
+Ticket #8812 mentions `RB-400`. The exact-match pass finds the four chunks that name that part. The dense pass finds the returns-policy language. Neither alone answers the ticket; the union, ranked properly, does.
+
+Which is the next chapter.
+
+---
+
+Next: [Hybrid Search and Reranking](/docs/retrieval/hybrid-and-reranking), fusing lexical and semantic candidates, then reranking for what actually answers the question.
+
+## Takeaways
+
+- Lexical search is a different capability, not an earlier attempt at the same one. Dense generalizes; lexical discriminates.
+- Rarity is the signal. A term in 3 of 40,000 documents is near-conclusive when it matches, and that is precisely what embeddings destroy.
+- Every learned retriever, dense and learned-sparse alike, has a fixed vocabulary. BM25 has none, so it has no training cutoff and is immune to vocabulary drift.
+- Use it for identifiers, codes, proper nouns, acronyms, new terminology, and anything the user pasted.
+- Your analyzer can destroy identifiers exactly like a tokenizer does. Inspect its output before concluding BM25 doesn't work.
+- Keep separate fields: an analyzed one for prose, an unanalyzed one for exact strings.
+- It genuinely fails on vocabulary mismatch and paraphrase, where dense is strong. The complementarity is the argument for hybrid.
+- It's a second index on the same table, not a second system, and a second place to forget the authorization filter.
