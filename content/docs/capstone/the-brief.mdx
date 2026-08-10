@@ -1,0 +1,180 @@
+---
+title: "The Brief"
+description: "A realistic enterprise request, decomposed into the layers of the map."
+---
+
+The pilot worked. Atlas handled a slice of Meridian's tickets for six weeks, the support lead is enthusiastic, and the meeting where it gets funded produces a sentence that sounds like a requirement and is not:
+
+*"Great, let's roll it out to the whole support org by the end of the quarter."*
+
+[Part II wrote a brief for a first agent](/docs/first-agent/the-problem): four ticket shapes, four acceptance criteria, twenty labeled examples. That brief was correct and it is now insufficient, because it answered *what should this agent do* and production asks four different questions that nobody in the room has said out loud.
+
+This chapter is those questions, and the scope negotiation they force.
+
+## The gap between a pilot and a system
+
+| The pilot assumed | Production requires |
+| --- | --- |
+| One support queue, supervised | 900 tickets/week, unsupervised at night |
+| Runs finish in a minute | Runs pause for approval and resume days later |
+| Reads, plus a credit someone watched | Money moves without a person watching each one |
+| One customer's data at a time, informally | Eleven customer accounts, enforced isolation |
+| Prompt in a repo, deployed by hand | Versioned, rolled out, rollback-able |
+| "It seems better" | A number, with a threshold, before shipping |
+| Nobody attacked it | Ticket bodies are attacker-controlled input |
+| The team watched the demo | Someone is paged at 3am |
+
+Every row on the right is a decision that belongs at a specific layer of [the map](/docs/the-map), and the mistake this chapter exists to prevent is answering them at the wrong one: putting an authorization rule in a prompt, a durability requirement in a retry loop, or a tenancy boundary in application code.
+
+## Decomposing the request
+
+<Figure caption="One sentence from a funding meeting, routed to the layers that actually own each part of it." frame={false}>
+
+```
+   "roll it out to the whole support org by end of quarter"
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+   MORE VOLUME         MORE AUTONOMY      MORE EXPOSURE
+   900/wk, nights      no one watching    real customers,
+   11 accounts         each action        real money
+        │                   │                   │
+        ▼                   ▼                   ▼
+   admission control   risk tiers +        tenancy, taint,
+   quota shares        approval gates      argument scoping
+   tenant fairness     escalation SLA      audit records
+   ── Part XVI         ── Part XII         ── Part XVII
+```
+
+</Figure>
+
+Layer by layer, what the sentence implies and where the answer already exists:
+
+| Layer | What production adds | Answered in |
+| --- | --- | --- |
+| **Interface** | Approval cards a support lead can act on in seconds; streaming; a visible "who is handling this" | [Part XIII](/docs/interface/generative-ui-and-approvals) |
+| **Agent runtime** | Turn caps, stopping conditions, routing between the four ticket shapes | [Parts II, VII](/docs/langgraph/state-nodes-edges) |
+| **Context & knowledge** | Corpus split by trust; SQL for aggregation; graph for account relationships; per-account retrieval filters | [Parts III–V](/docs/retrieval/where-does-the-answer-live) |
+| **Durable execution** | Runs that survive deploys and pause days for approval; compensation for a credit that must be unwound | [Parts X–XII](/docs/durability/agent-as-workflow) |
+| **Tools & data** | Five tool classes, argument-scoped, idempotent, with paired reads | [Parts VI, VIII, IX](/docs/tools/read-and-write-tools) |
+| **Evals** | The twenty-ticket set grown into a real dataset; CI gate; online scoring | [Part XIV](/docs/evals/eval-discipline) |
+| **Observability** | Eight-question traces, `config_hash`, cost attribution, drift canary | [Part XV](/docs/observability/what-a-trace-must-answer) |
+| **Reliability** | Retry at one layer, breakers, admission control, dedup window sized to the approval pause | [Part XVI](/docs/reliability/error-taxonomy) |
+| **Security** | Taint from ticket bodies, delegation, tenancy below the app, argument scoping | [Part XVII](/docs/security/threat-model) |
+
+That table is the capstone in outline. The next two chapters build it and harden it.
+
+## Four questions that set the architecture
+
+Before any of that, four answers determine everything else, and three of them changed between the pilot and now.
+
+**1 · Does a run outlive one request?** Yes. Tier-1 credits wait for a human, and the human might be asleep. → **Tier 3**, [durable execution](/docs/production/reference-architecture).
+
+**2 · Does a run have effects the world can see?** Yes: `issue_credit` and `send_reply`. → idempotency, compensation, approval gates, and a [dispatcher choke point](/docs/production/reference-architecture) from the first write.
+
+**3 · Is it multi-tenant?** Yes, Meridian's eleven customer accounts, and one of them is a competitor of another. → tenancy [enforced below the application](/docs/security/tenant-isolation), not in the query builder.
+
+**4 · Is the input attacker-controlled?** Yes, entirely. A ticket body is written by anyone who can email support. → [taint at the fetcher](/docs/security/prompt-injection), argument scoping, and a capability ceiling for tainted runs.
+
+Question 4 is the one that was never asked during the pilot and is the one that reorganizes the tool design. It is worth noticing that it has nothing to do with scale: Atlas was equally exposed at ten tickets a week, and the pilot's safety came entirely from a person reading every action before it happened.
+
+<Aside type="caution" title="The pilot's real safety mechanism was the audience">
+Every pilot has an invisible control: someone is watching. It catches wrong answers, weird tool calls, and anything that looks off, and it disappears the moment you go to production, usually without anyone listing it as a mitigation that is being removed.
+
+The honest way to state the project is not *"make Atlas better."* It is **"replace a human watching every action with machinery that does the same job."** That framing puts the [approval gates](/docs/human-in-the-loop/approval-gates), the invariants, and the escalation contract on the critical path instead of the backlog, where the pilot's success would otherwise have put them.
+</Aside>
+
+## The scope negotiation
+
+Meridian asked for the whole support org. Here is the counter-proposal, and the reasoning is [the answering-versus-acting tension](/docs/first-agent/the-problem) from the original brief, now with numbers attached.
+
+**In scope for v1:**
+
+- Policy questions with citation: the highest-volume, lowest-risk category.
+- Order and account status via SQL and the CRM graph.
+- Damage and shipping credits **up to the tier-0 limit**, unassisted.
+- Anything above tier 0: a complete escalation package, not a handoff.
+- All eleven accounts, with isolation enforced.
+
+**Explicitly out of v1**, each defensible later, each doubling the surface now:
+
+- Pricing, contract terms, and anything touching a live negotiation.
+- Any account in active dispute.
+- Outbound proactive contact.
+- Writing to the CRM.
+- Multi-language and voice.
+- Generated code execution beyond the proration calculator, behind a flag.
+
+And the exclusion that is a *design* commitment rather than a feature cut, carried forward from the original brief because it is the one most likely to be quietly dropped under delivery pressure:
+
+> **Atlas never closes a ticket it did not resolve.** There is no "handled" state meaning "responded to."
+
+## The acceptance spec, updated
+
+The four-part shape from Part II holds. Production adds rows to each part, and the additions are all in the bottom band of the map.
+
+**Invariants**, enforced in code, never measured. These nine are Atlas's *acceptance* invariants, a different list from [the six reliability invariants every fault injection asserts](/docs/reliability/failure-injection):
+
+| Invariant | Enforced by |
+| --- | --- |
+| No cross-account data, ever | [Row-level security + per-tenant namespaces](/docs/security/tenant-isolation) |
+| No credit above the tier-0 cap unassisted | [Argument scoping in the dispatcher](/docs/security/least-privilege) |
+| No credit to an account not named by the ticket | Run scope, derived from the ticket record |
+| No policy claim without a current, cited document | Citation validated against the corpus |
+| **A tainted run cannot reach a class ④–⑤ tool** | [Taint ceiling](/docs/security/prompt-injection) |
+| **No recipient argument on `send_reply`** | Resolved from the ticket contact server-side |
+| Every effect idempotent, with a window ≥ the approval SLA | [Dedup table, 30 days](/docs/reliability/idempotency-in-practice) |
+| Every action names user, agent, and run | [Delegation tokens](/docs/security/identity) |
+| Always terminates | Turn cap, spend cap, deadline |
+
+**Rates**, the pilot's four, plus two that only matter at volume:
+
+| Metric | Target |
+| --- | --- |
+| In-scope tickets resolved without a human | ≥ 60% |
+| Factual accuracy when it answers | ≥ 95% |
+| Escalation recall | ≥ 98% |
+| Correct document version cited | ≥ 90% |
+| **Approval queue p95 age** | **< 4 business hours** |
+| **Cost per resolved ticket** | **< 15% of the loaded human cost** |
+
+**Budgets:** median first response under 30 s, p95 under 90 s, a hard per-run spend ceiling, and a per-account quota share so no single customer's burst starves the others.
+
+**The escalation contract**, unchanged and load-bearing: the original message, everything retrieved, every tool call and result, and a stated reason. An escalation that arrives as *"I couldn't handle this"* is a failure that passed its test.
+
+## Build in the reverse of demo order
+
+The last decision in the brief, and it is the one that determines whether the quarter succeeds.
+
+The order that feels natural is capability-first: get it answering well, then add gates, then add measurement, then add security. The order that works is the [ninety-day sequence](/docs/production/operating-manual), **see it, bound it, measure it, break it**, because each stage makes the next one assessable.
+
+| Weeks | Focus | Done when |
+| --- | --- | --- |
+| 1–2 | Traces, `config_hash`, cost attribution, `runs` table | One run can be fully reconstructed |
+| 3–4 | Dispatcher choke point, tiers, scoping, taint, tenancy | The blast radius is bounded |
+| 5–7 | Dataset, CI gate, canary, online sampling | A change has a number |
+| 8–10 | Failure injection, fallback evaluated, first game day | The recovery paths have been observed working |
+| 11–13 | Canary rollout by account, holdout, promotion | Rates met on real traffic |
+
+Two consequences worth stating to whoever funded this. **The demo will not get noticeably better for six weeks**, because the first four are legibility and bounding. And **the rates in the acceptance spec cannot be honestly reported before week seven**, because before the dataset exists there is no number, only an impression.
+
+A project that agrees to report progress as "how good does it seem" in week three has already decided how it will fail.
+
+---
+
+Next: [The Atlas Lab Environment](/docs/capstone/lab-environment), the executable companion, shared fixtures, and the invariants both language tracks must preserve.
+
+## Takeaways
+
+- The funding-meeting sentence is not a requirement. Production asks four questions nobody said out loud: does a run outlive a request, does it have visible effects, is it multi-tenant, and is the input attacker-controlled.
+- Atlas answers yes to all four, which sets Tier 3, a dispatcher choke point, tenancy below the application, and taint from the ticket body.
+- The attacker question has nothing to do with scale. Atlas was equally exposed at ten tickets a week; the pilot's safety was a person watching.
+- Every pilot's invisible control is the audience, and it is removed at launch without being listed as a mitigation.
+- State the project honestly: not "make Atlas better" but "replace a human watching every action with machinery that does the same job."
+- Decompose the request onto the layers of the map. Most production failures are a decision made at the wrong altitude: authorization in a prompt, durability in a retry loop, tenancy in a query builder.
+- Negotiate scope by risk, not by feature count. Policy questions and status lookups are high-volume and low-risk; credits are gated at tier 0; everything contentious is out.
+- Keep the exclusion that is a design commitment: never close a ticket you did not resolve.
+- Production adds invariants, not just targets: taint ceilings, no recipient argument, dedup windows sized to the approval SLA, and every action naming user, agent, and run.
+- Add the two rates that only appear at volume: approval queue age and cost per resolved ticket.
+- Build in the reverse of demo order: see it, bound it, measure it, break it.
+- Tell the sponsor two things up front: the demo will not visibly improve for six weeks, and no honest rate exists before the dataset does.
