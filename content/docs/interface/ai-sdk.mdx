@@ -1,0 +1,127 @@
+---
+title: "The Vercel AI SDK"
+description: "Generation, streaming, tools, structured output, and where it overlaps LangChain rather than complements it."
+---
+
+Everything so far has been backend. Part XIII is about what a person sees while an eight-minute durable run happens somewhere behind them, and it starts with the library that owns that boundary in TypeScript.
+
+<Aside type="note" title="TypeScript only, and that is the reason it is here">
+There is no Python equivalent, which [How to Read This Book](/docs/how-to-read) named as the reason most production systems end up split along exactly this line: TypeScript for the user-facing side, Python for retrieval, ingestion, and evaluation.
+
+So this chapter has no dual-track sample. The gap is the point rather than an omission.
+</Aside>
+
+## Four things, and one of them changed
+
+| | What it does |
+| --- | --- |
+| **Generation** | `generateText` returns a structured result object, not a bare string |
+| **Streaming** | `streamText` exposes `textStream`, `fullStream`, and a response helper for the wire |
+| **Tools** | `tool()` with a Zod `inputSchema`, executed by the SDK |
+| **Structured output** | **No longer its own function**: `Output.object()` on the two above |
+
+That last row is the v6 consolidation worth knowing about, and worth stating precisely: `generateObject` and `streamObject` are **deprecated and slated for removal**, not gone. Existing calls still run. New code takes one code path for text, tools, and typed objects instead of three, which is the better shape, and the migration is a scheduled one rather than a broken build.
+
+Providers are scoped packages exporting factories, `@ai-sdk/anthropic` rather than a constructor on a monolith. That is what makes swapping a model a one-line change, and it is most of the SDK's practical appeal.
+
+## The bound is a required parameter
+
+The detail that should make this book's readers sit up:
+
+> **A tool-augmented chat needs an explicit stop condition or it will loop.**
+
+The SDK makes you supply one, `stopWhen: stepCountIs(n)`, and the guidance that ships with it maps almost exactly onto the versions of Atlas from Part II: **1** for a one-tool-then-answer interface, **5** for a chat, **10–20** for an autonomous agent.
+
+[Atlas v1 was `stepCountIs(1)`](/docs/first-agent/first-tools). [Atlas v2 was `stepCountIs(12)`](/docs/first-agent/the-loop-by-hand). The argument that a loop whose only stopping condition is the model's judgement has delegated its termination to a probability distribution is now a parameter you cannot omit. That is a good outcome for an ecosystem to have converged on.
+
+Be precise about what it does *not* cover, though. There are two first-party stop conditions, `stepCountIs` and `hasToolCall`, and Atlas v0 had three bounds. **Cost and deadline are still yours.** A step cap does not stop a run whose steps are individually expensive, and it does not notice that ninety seconds have passed.
+
+<Figure caption="The SDK ships one of the three bounds from Part II. The other two remain your code." frame={false}>
+
+```
+   v0's bounds                     AI SDK 6
+
+   MAX_STEPS      ───────────────▶ stopWhen: stepCountIs(n)   ✓
+   MAX_COST_USD   ───────────────▶ (yours)                    ✗
+   DEADLINE_MS    ───────────────▶ (yours)                    ✗
+   terminal tool  ───────────────▶ stopWhen: hasToolCall(…)   ✓
+```
+
+</Figure>
+
+## Where it overlaps LangChain rather than complements it
+
+The SDK now ships `ToolLoopAgent`. It is a production tool-execution loop that calls the model, runs the requested tools, feeds results back, and repeats, defaulting to twenty steps.
+
+That is an agent loop. LangGraph is an agent loop. [A Temporal workflow](/docs/durability/agent-as-workflow) is an agent loop. If you adopted the AI SDK for streaming and LangGraph for topology, you now have two, and possibly three, and only one of them can be in charge.
+
+The centres of gravity are genuinely different, and that is what makes the decision tractable:
+
+| | Centre of gravity | Uniquely good at |
+| --- | --- | --- |
+| **AI SDK** | The browser | The transport and UI boundary, `useChat`, provider swapping |
+| **LangGraph** | The graph | Topology, state schemas, checkpoints |
+| **Temporal** | The execution | Durability, retries, timers, history |
+
+The overlap is the loop, and the resolution follows from everything in Parts X and XI:
+
+> **One loop, and it lives wherever your durability lives.**
+
+For a system with a durable backend, that means **neither** framework's loop. The workflow owns iteration; the AI SDK owns the wire and the interface; LangGraph, if present, owns topology inside an activity. Running `ToolLoopAgent` in a route handler in front of a Temporal workflow gives you two loops with different bounds, different retry semantics, and two answers to "how many steps did this take."
+
+[LangChain, Honestly](/docs/langgraph/langchain-honestly) made the general version of this argument. The specific version here is that **the AI SDK grew a loop for the same reason LangGraph did, because everyone needs one. And the fact that you can use a library's loop is not a reason to.**
+
+## What it is uniquely good at
+
+Being fair, because the above reads as a list of things not to use:
+
+**The transport boundary is genuinely hard and nothing else does it.** `useChat` over `UIMessage[]`, a default transport, streamed parts arriving as typed chunks, message persistence that survives a reload: that is a real, fiddly problem solved well, and it is where the SDK earns its place in a stack that also has a durable backend.
+
+**Provider swapping actually works**, because the abstraction is thin enough to be honest about differences rather than pretending they do not exist.
+
+**Structured output is one code path now**, which removes a category of "why is this function different" confusion.
+
+What it is not: a durability layer, an evaluation harness, a retrieval system, or a place to put your business logic.
+
+<Aside type="caution" title="The codemod does not migrate what your app actually has">
+Vercel ships `npx @ai-sdk/codemod upgrade` for the v5 → v6 move, and it handles import renames, deprecated option flags, and the common `useChat` shape changes.
+
+There are also targeted codemods for the genuinely breaking signature changes. `convertToModelMessages()` became async in v6, and `toModelOutput()` now takes a parameter object. Those are worth running deliberately rather than discovering at a call site.
+
+It explicitly does **not** rewrite custom message renderers, hand-written tool-call switch statements, or provider-adapter contracts. Which is to say, it migrates the parts you could have migrated with `sed`, and leaves the parts that are actually your application.
+
+Budget for that rather than being surprised by it. This is also a reason to keep your tool-call rendering thin: the more of it there is, the more of every future migration you own.
+</Aside>
+
+## Atlas, concretely
+
+Meridian's support console uses the AI SDK for exactly three things:
+
+- **`useChat` and the transport**, so an agent watching a ticket sees streamed output that survives a page refresh.
+- **Rendering streamed parts**: text, tool calls, and the [approval card](/docs/human-in-the-loop/approval-gates). That is [the next chapter and the one after](/docs/interface/generative-ui-and-approvals).
+- **A provider factory**, so the model behind the console is configuration.
+
+And not for:
+
+- **The loop.** That is the Temporal workflow, which owns steps, cost, deadline, retries, and the [outcome union](/docs/first-agent/the-loop-by-hand).
+- **Tool execution.** The SDK can execute tools; Atlas's tools are activities, because [they have compensations and idempotency keys](/docs/durability/compensation) that a route handler cannot provide.
+
+The boundary is a sentence: **the AI SDK carries bytes to the browser; the workflow decides what happens.** Where that line blurs, the symptom is consistent: two step counters that disagree, and nobody able to say which run actually happened.
+
+---
+
+Next: [Streaming UX](/docs/interface/streaming-ux), token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
+
+## Takeaways
+
+- The AI SDK is TypeScript-only, which is why most production systems split TypeScript for the interface and Python for retrieval and evaluation.
+- Four capabilities: generation returning a structured result, streaming with typed chunks, tools via `tool()` and a Zod `inputSchema`, and structured output that in v6 moved onto the generation functions, with `generateObject`/`streamObject` deprecated and slated for removal rather than already gone.
+- Providers are scoped factory packages, which is what makes model swapping a one-line change.
+- A tool-augmented chat needs an explicit stop condition or it loops, and the SDK requires one. Part II's argument is now an API parameter.
+- Suggested bounds map onto this book's versions: 1 for one-tool-then-answer, 5 for chat, 10–20 for autonomous.
+- Only two first-party stop conditions ship: step count and a terminal tool call. **Cost and deadline remain yours**, and a step cap does not notice an expensive step or a passing deadline.
+- `ToolLoopAgent` is an agent loop, and so are LangGraph and a Temporal workflow. Adopting all three gives you two step counters that disagree.
+- One loop, and it lives wherever durability lives. With a durable backend that means neither framework's loop.
+- The SDK is uniquely good at the transport and UI boundary, which is a real and fiddly problem, and at honest provider swapping. It is not a durability, evaluation, or retrieval layer.
+- The v5→v6 codemod migrates imports and flags, not custom renderers, hand-written tool-call switches, or provider adapters. Keep rendering thin so future migrations stay small.
+- The boundary in one sentence: the AI SDK carries bytes to the browser; the workflow decides what happens.
