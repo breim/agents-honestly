@@ -418,6 +418,19 @@ html > body[data-scroll-locked] {
       transform: translateY(0.75rem);
     }
   }
+
+  /* A dithered skeleton shimmers by sliding the screen under the block rather than sweeping a
+     highlight over it. Travel is exactly one 16px tile, so the loop has no seam, and the steps
+     match the tile so the dots land on the grid at every frame. */
+  .dither-shimmer {
+    animation: dither-shimmer 1.1s steps(4, jump-none) infinite;
+  }
+
+  @keyframes dither-shimmer {
+    to {
+      transform: translateX(-16px);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
