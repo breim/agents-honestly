@@ -14,6 +14,17 @@
      markup is not ours to edit. */
   --font-mono: var(--font-geist-sans);
 
+  /* The landing page reads as an operator's console, printed in true black and white: zero
+     chroma everywhere, no accent hue. Emphasis comes from inversion, weight, and tone (ink
+     vs quiet), the way a monochrome terminal or a printed report actually works — never
+     from color. The dark scope further down (the console's native mood) redefines these
+     same properties. */
+  --color-ground: oklch(0.99 0 0);
+  --color-surface: oklch(0.96 0 0);
+  --color-ink: oklch(0.12 0 0);
+  --color-quiet: oklch(0.4 0 0);
+  --color-rule: oklch(0.12 0 0 / 0.14);
+
   /* Springs sampled from Apple's damping-ratio + response pairs into linear().
      Generated: x(t) = 1 - e^(-ζωt)(cos ω_d t + ζω/ω_d · sin ω_d t), ω = 2π/response. */
   --ease-spring-smooth: linear(
@@ -74,15 +85,7 @@
   --animate-fd-sidebar-in: fd-sidebar-in var(--duration-spring-drawer) var(--ease-spring-drawer);
   --animate-fd-sidebar-out: fd-sidebar-out 240ms var(--ease-spring-smooth-reverse);
 
-  --animate-reveal: reveal var(--duration-spring-smooth) var(--ease-spring-smooth) both;
   --animate-scroll-edge: scroll-edge linear both;
-
-  @keyframes reveal {
-    from {
-      opacity: 0;
-      transform: translateY(0.875rem);
-    }
-  }
 
   @keyframes scroll-edge {
     from {
@@ -244,12 +247,6 @@ html > body[data-scroll-locked] {
   text-wrap: pretty;
 }
 
-@utility reveal-on-view {
-  animation: var(--animate-reveal);
-  animation-timeline: view();
-  animation-range: entry 0% cover 22%;
-}
-
 /* Feedback lands on pointer-down and springs back on release. */
 @utility pressable {
   transition:
@@ -264,27 +261,165 @@ html > body[data-scroll-locked] {
   }
 }
 
+.landing {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+}
+
+/* shadcn's palette re-pointed at the console's ink and ground, so no component carries a hue:
+   `primary` is a solid ink block with knocked-out text rather than a colored button, and
+   `destructive` is just ink. A var() is substituted where it is declared, not where it is
+   read, so these have to be re-declared on the sections as well as the root — otherwise a
+   section that flips the ink/ground pair below would inherit component tokens already
+   resolved against the palette it just replaced. The docs keep shadcn's stock neutrals. */
+.landing,
+.landing > section {
+  --background: var(--color-ground);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-ink);
+  --primary-foreground: var(--color-ground);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-quiet);
+  --accent: var(--color-surface);
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-ink);
+  --border: var(--color-rule);
+  --input: var(--color-rule);
+  --ring: var(--color-ink);
+}
+
+/* The landing is printed dark whichever theme the reader picked, so its shell carries the
+   `dark` class rather than inheriting one. The nav is a translucent layer over the page, so
+   it is tinted by the ground it floats on rather than by fumadocs' lighter dark surface. */
+.landing-shell {
+  --color-fd-background: oklch(0.09 0 0);
+
+  /* `body` resolves `color` against the reader's theme, and inheritance carries that computed
+     value down regardless of the tokens redefined here. Re-declaring both re-resolves them
+     for the nav, which sits outside `.landing` and so has no palette of its own. */
+  background-color: var(--color-fd-background);
+  color: var(--color-fd-foreground);
+}
+
+.dark .landing {
+  --color-ground: oklch(0.09 0 0);
+  --color-surface: oklch(0.16 0 0);
+  --color-ink: oklch(0.97 0 0);
+  --color-quiet: oklch(0.74 0 0);
+  --color-rule: oklch(0.97 0 0 / 0.16);
+}
+
+/* The band is the separator: sections alternate rather than being divided by a rule. Every
+   other section wears the opposite palette outright — ink becomes ground and back — so the
+   page reads as a strip of prints alternating positive and negative. Because the flip is
+   expressed as values rather than as fixed colors, the toggle keeps working: .dark below
+   swaps which palette an even section inherits. Counting by type keeps the full-bleed
+   figures between sections out of the alternation. */
+.landing > section {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+}
+
+.landing > section:nth-of-type(even) {
+  --color-ground: oklch(0.12 0 0);
+  --color-surface: oklch(0.19 0 0);
+  --color-ink: oklch(0.99 0 0);
+  --color-quiet: oklch(0.74 0 0);
+  --color-rule: oklch(0.99 0 0 / 0.18);
+}
+
+.dark .landing > section:nth-of-type(even) {
+  --color-ground: oklch(0.97 0 0);
+  --color-surface: oklch(0.92 0 0);
+  --color-ink: oklch(0.12 0 0);
+  --color-quiet: oklch(0.4 0 0);
+  --color-rule: oklch(0.12 0 0 / 0.16);
+}
+
+/* A scrim over the hero photograph, mixed against the section's own ground so a single
+   declaration is correct in both themes: it thins toward white in light, toward black in dark.
+   It also thins left to right — densest behind the column of text, lightest over the empty
+   right edge, where the photograph is free to come through. */
+.landing-scrim {
+  background-image: linear-gradient(
+    to right,
+    color-mix(in oklab, var(--color-ground) 100%, transparent),
+    color-mix(in oklab, var(--color-ground) 80%, transparent)
+  );
+}
+
+.landing :is(a, button):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* A terminal panel's own surface: a hairline border, a flat fill, a small radius — a
+   screen, not a card. Never paired with a soft drop shadow; the border does the framing. */
+.landing-panel {
+  border: 1px solid var(--color-rule);
+  border-radius: 10px;
+  background-color: var(--color-surface);
+}
+
+.landing-quiet-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  color: var(--color-ink);
+  font-size: var(--text-note);
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  text-decoration: underline solid transparent;
+  text-underline-offset: 0.28em;
+  text-decoration-thickness: 2px;
+  transition:
+    text-decoration-color 160ms ease-out,
+    transform var(--duration-spring-snappy) var(--ease-spring-smooth);
+}
+
+.landing-quiet-link:active {
+  transform: scale(0.978);
+  transition-duration: 90ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .landing-quiet-link:hover {
+    text-decoration-color: var(--color-ink);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-rise {
+    animation: landing-rise 560ms var(--ease-spring-smooth) both;
+    animation-delay: calc(var(--i, 0) * 110ms);
+  }
+
+  @keyframes landing-rise {
+    from {
+      opacity: 0;
+      transform: translateY(0.75rem);
+    }
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --animate-reveal: reveal 200ms ease both;
     --animate-fd-dialog-in: fd-fade-in 160ms ease;
     --animate-fd-dialog-out: fd-fade-out 160ms ease;
     --animate-fd-sidebar-in: fd-fade-in 160ms ease;
     --animate-fd-sidebar-out: fd-fade-out 160ms ease;
   }
 
-  @keyframes reveal {
-    from {
-      opacity: 0;
-    }
-  }
-
   #nd-nav::after {
     animation: none;
-  }
-
-  .reveal-on-view {
-    animation-timeline: auto;
   }
 
   .pressable {
@@ -292,6 +427,14 @@ html > body[data-scroll-locked] {
   }
 
   .pressable:active {
+    transform: none;
+  }
+
+  .landing-quiet-link {
+    transition-duration: 0ms;
+  }
+
+  .landing-quiet-link:active {
     transform: none;
   }
 }
@@ -325,6 +468,15 @@ html > body[data-scroll-locked] {
 
   #nd-nav::after {
     display: none;
+  }
+
+  .landing {
+    --color-rule: var(--color-ink);
+    --color-quiet: var(--color-ink);
+  }
+
+  .landing-panel {
+    border-color: var(--color-ink);
   }
 }
 
