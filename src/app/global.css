@@ -51,10 +51,18 @@
   --duration-spring-drawer: 458ms;
 
   /* Tracking tightens as size grows; leading loosens as size shrinks. */
-  --text-display: clamp(2.75rem, 6.5vw, 4.5rem);
+  --text-display: clamp(3.75rem, 6.5vw, 4.5rem);
   --text-display--line-height: 1.02;
   --text-display--letter-spacing: -0.035em;
   --text-display--font-weight: 700;
+
+  /* The hero's second line. It converges on display size once the column is wide enough to
+     hold it, and stays a step below only on phones, where two lines at the same size read
+     as one flat block and push the call to action off the screen. */
+  --text-lede: clamp(2.5rem, 6.5vw, 4.5rem);
+  --text-lede--line-height: 1.06;
+  --text-lede--letter-spacing: -0.03em;
+  --text-lede--font-weight: 700;
 
   --text-title: clamp(1.75rem, 3.2vw, 2.25rem);
   --text-title--line-height: 1.15;

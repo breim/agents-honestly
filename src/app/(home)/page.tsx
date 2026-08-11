@@ -75,7 +75,7 @@ function Hero() {
           Building an agent is easy.
         </h1>
         <p
-          className="landing-rise mt-3 max-w-[22ch] text-display text-muted-foreground text-balance"
+          className="landing-rise mt-3 max-w-[22ch] text-lede text-muted-foreground text-balance"
           style={rise(2)}
         >
           Building one that survives production is software engineering.
