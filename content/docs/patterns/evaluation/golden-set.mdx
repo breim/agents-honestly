@@ -28,7 +28,7 @@ A **small, curated, versioned set of labeled cases with a stated expected outcom
 
 ```
    GOLDEN SET  ~250 cases
-   ┌────────────────────────────────────────────────────────────┐
+   ┌─────────────────────────────────────────────────────────────┐
    │ 150  hand-labeled from real tickets                         │
    │      ── distribution matches production, deliberately       │
    │                                                             │
@@ -38,9 +38,9 @@ A **small, curated, versioned set of labeled cases with a stated expected outcom
    │  30  NEGATIVE — must return nothing                         │
    │      ── the rare DETERMINISTIC assertion in this field      │
    │                                                             │
-   │  30+ PROMOTED FROM PRODUCTION FAILURES  ◀── grows on its own │
+   │  30+ PROMOTED FROM PRODUCTION FAILURES  ◀── grows on its own│
    │      ── each one a bug that actually happened, replayable   │
-   └────────────────────────────────────────────────────────────┘
+   └─────────────────────────────────────────────────────────────┘
 
    each case:  { input, expected_outcome, expected_source,
                  must_escalate?, must_not_retrieve?, notes }

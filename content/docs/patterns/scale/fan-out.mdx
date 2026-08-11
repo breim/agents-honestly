@@ -28,10 +28,10 @@ Between those is a large, unglamorous middle: run many at once, but not all at o
 
 ```
    PARENT
-   ┌──────────────────────────────────────────────────────────┐
+   ┌───────────────────────────────────────────────────────────┐
    │  4,000 items · semaphore of 20 in flight                  │
    │                                                           │
-   │   ┌────┐ ┌────┐ ┌────┐        ┌────┐                     │
+   │   ┌────┐ ┌────┐ ┌────┐        ┌────┐                      │
    │   │ c1 │ │ c2 │ │ c3 │  ...   │c20 │  ◀── window          │
    │   └─┬──┘ └─┬──┘ └─┬──┘        └─┬──┘                      │
    │     │      │      │             │                         │
@@ -41,7 +41,7 @@ Between those is a large, unglamorous middle: run many at once, but not all at o
    │                                                           │
    │  each child writes its OWN result to storage              │
    │  the parent collects REFERENCES, not payloads             │
-   └────────────────────────┬─────────────────────────────────┘
+   └────────────────────────┬──────────────────────────────────┘
                             ▼
                    { done: 3,987, failed: 13, manifest: s3://… }
 ```

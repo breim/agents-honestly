@@ -27,7 +27,7 @@ The same applies to the model call. A completion is nondeterministic by definiti
 
 ```
    WORKFLOW  (replayed, must converge)
-   ┌────────────────────────────────────────────────┐
+   ┌─────────────────────────────────────────────────┐
    │  the loop, the branches, the stopping rule      │
    │  the budget counters, the taint flag            │
    │  the approval wait                              │
@@ -39,14 +39,14 @@ The same applies to the model call. A completion is nondeterministic by definiti
    └─────────────────────────────────────────┼───┼───┘
                                              │   │
    ACTIVITY  (runs once, result recorded)    ▼   ▼
-   ┌────────────────────────────────────────────────┐
+   ┌─────────────────────────────────────────────────┐
    │  the model call        nondeterministic         │
    │  the tool call         touches the world        │
    │                                                 │
    │  each with its OWN timeout and retry policy;    │
    │  the result lands in the history, so replay     │
    │  reads it instead of re-running it              │
-   └────────────────────────────────────────────────┘
+   └─────────────────────────────────────────────────┘
 ```
 
 </Figure>

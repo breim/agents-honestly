@@ -29,16 +29,16 @@ The cycle itself is four lines. What makes it survivable in production is everyt
 <Figure caption="The loop is trivial. The five bounds around it are the pattern." frame={false}>
 
 ```
-   ┌──────────────────────────────────────────────────────┐
+   ┌───────────────────────────────────────────────────────┐
    │  ① turn cap        hard stop, produces a partial      │
    │  ② budget cap      tokens and money, degrade then stop│
    │  ③ deadline        wall clock, propagated per call    │
    │  ④ no-progress     N turns with no new information    │
    │  ⑤ repetition      same tool + same args twice        │
-   └──────────────────────────────────────────────────────┘
+   └───────────────────────────────────────────────────────┘
                             │ all five wrap:
                             ▼
-            ┌──────────────────────────────┐
+            ┌───────────────────────────────┐
             │   REASON   what am I trying   │
             │            to establish?      │
             │      ▼                        │
@@ -46,7 +46,7 @@ The cycle itself is four lines. What makes it survivable in production is everyt
             │      ▼                        │
             │   OBSERVE  result enters      │
             │            the transcript     │
-            └──────────┬───────────────────┘
+            └──────────┬────────────────────┘
                        │
                   done? ── no ──▶ loop
                        │

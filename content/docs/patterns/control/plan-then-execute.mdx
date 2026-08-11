@@ -32,14 +32,14 @@ In an interleaved loop, the agent decides its next step *after* reading the last
    request
       │
       ▼
-   ┌────────────────────────────────────────────────┐
+   ┌─────────────────────────────────────────────────┐
    │  PLAN  (one model call, structured output)      │
    │   1. get_order(4921)                            │
    │   2. search_policies("damaged pallet freight")  │
    │   3. compute_credit(from: 1, policy: 2)         │
    │   4. issue_credit(order: 1, amount: 3)          │
    │   5. send_reply(ticket, draft)                  │
-   └──────────────────┬─────────────────────────────┘
+   └──────────────────┬──────────────────────────────┘
                       │
         ┌─────────────┼─────────────┐
         ▼             ▼             ▼
@@ -49,11 +49,11 @@ In an interleaved loop, the agent decides its next step *after* reading the last
    scope ok)
                       │
                       ▼
-   ┌──────────────────────────────────────────────┐
+   ┌───────────────────────────────────────────────┐
    │  EXECUTE  (deterministic — code, not a model) │
    │   results feed later steps' ARGUMENTS         │
    │   nothing read here can add or reorder steps  │
-   └──────────────────────────────────────────────┘
+   └───────────────────────────────────────────────┘
 ```
 
 </Figure>

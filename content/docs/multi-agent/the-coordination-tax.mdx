@@ -26,21 +26,21 @@ That is not a debunking. It sharpens the question into the one worth asking: *gi
 <Figure caption="Each boundary charges in all three. Only the second is sometimes refunded." frame={false}>
 
 ```
-   ┌─────────────────────────────────────────────────────────┐
+   ┌──────────────────────────────────────────────────────────┐
    │  TOKENS      each agent carries its own system prompt,   │
    │              tool catalogue, and history. the handoff    │
    │              is written by one and re-read by another.   │
    │              ── always charged, roughly 15× reported     │
-   ├─────────────────────────────────────────────────────────┤
+   ├──────────────────────────────────────────────────────────┤
    │  LATENCY     serial handoffs add. parallel fan-out       │
    │              subtracts — the one refund available.       │
    │              ── charged unless the work is independent   │
-   ├─────────────────────────────────────────────────────────┤
+   ├──────────────────────────────────────────────────────────┤
    │  CORRECTNESS context does not cross; a summary does.     │
    │              what the sender dropped, the receiver       │
    │              cannot know was dropped.                    │
    │              ── always charged, hardest to measure       │
-   └─────────────────────────────────────────────────────────┘
+   └──────────────────────────────────────────────────────────┘
 ```
 
 </Figure>

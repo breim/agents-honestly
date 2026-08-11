@@ -28,20 +28,20 @@ Two variants, and choosing between them is the whole design decision.
 
 ```
    ① SHADOW REPLAY          recorded model + tool responses, new CODE
-   ┌──────────────────────────────────────────────────────────────┐
-   │ 1,000 recorded runs ──▶ new dispatcher / policy / retrieval   │
+   ┌────────────────────────────────────────────────────────────────┐
+   │ 1,000 recorded runs ──▶ new dispatcher / policy / retrieval    │
    │ deterministic · free · no model calls · no side effects        │
    │ VALID ONLY while prompt, model, sampling unchanged             │
    │ answers: does my CODE change behaviour on real traffic?        │
-   └──────────────────────────────────────────────────────────────┘
+   └────────────────────────────────────────────────────────────────┘
 
    ② SHADOW EXECUTION       live inputs, fresh model calls, output discarded
-   ┌──────────────────────────────────────────────────────────────┐
+   ┌────────────────────────────────────────────────────────────────┐
    │ live request ──┬──▶ stable version   ──▶ SERVED to the user    │
    │                └──▶ candidate version ──▶ scored, then dropped │
    │ costs double tokens · TOOLS MUST BE STUBBED                    │
    │ answers: does my PROMPT change behaviour on real traffic?      │
-   └──────────────────────────────────────────────────────────────┘
+   └────────────────────────────────────────────────────────────────┘
 
    both: zero customer exposure · diff DECISIONS, not text
 ```
