@@ -8,116 +8,116 @@ This book is large on purpose. It is meant to be the thing you keep coming back 
 
 But large is a problem if you are starting now and have something to build.
 
-So there is a **core path**: the subset of chapters that, read in order, take someone who knows backend engineering to the point of shipping an agentic system they can defend. Everything outside it is depth — better retrieval, harder security, the graph work, the patterns you look up when a specific thing breaks.
+So there is a **core path**: the subset of chapters that, read in order, take someone who knows backend engineering to the point of shipping an agentic system they can defend. Everything outside it is depth: better retrieval, harder security, the graph work, the patterns you look up when a specific thing breaks.
 
 <Aside type="tip" title="If you read nothing else">
-The core path is about a quarter of the book — still a substantial read on its own. Go through it end to end, build along with it, and come back for the rest when a problem sends you looking.
+The core path is about a quarter of the book, still a substantial read on its own. Go through it end to end, build along with it, and come back for the rest when a problem sends you looking.
 </Aside>
 
 **49** core chapters out of **214** across **23** parts, plus **66** catalog entries.
 
 ### Start Here
 
-1. [Preface](/book/preface) — Who this book is for, what you will build, and why most agent tutorials stop right before the hard part.
-2. [The Agentic Engineer's Map](/book/the-map) — The whole system on one page: which layer owns which decision, and the question that routes every piece of work to the right one.
-3. [How to Read This Book](/book/how-to-read) — Two books in one: a narrative build, and a catalog you consult forever. Plus the core path if you are in a hurry.
-4. [Setup](/book/setup) — Accounts, keys, a local Temporal server, Postgres with pgvector, and the repo layout for both language tracks.
+1. [Preface](/book/preface). Who this book is for, what you will build, and why most agent tutorials stop right before the hard part.
+2. [The Agentic Engineer's Map](/book/the-map). The whole system on one page: which layer owns which decision, and the question that routes every piece of work to the right one.
+3. [How to Read This Book](/book/how-to-read). Two books in one: a narrative build, and a catalog you consult forever. Plus the core path if you are in a hurry.
+4. [Setup](/book/setup). Accounts, keys, a local Temporal server, Postgres with pgvector, and the repo layout for both language tracks.
 
 ### Part I · The Model as an Interface
 
-1. [What an Agent Actually Is](/book/foundations/what-is-an-agent) — The loop, stripped of marketing: a model, some tools, a memory, and a stopping condition.
-2. [Tokens](/book/foundations/tokens) — What a token really is, why output costs several times more than input, and how to do the cost math from first principles.
-3. [The Context Window](/book/foundations/context-window) — The window is a budget, not a memory. Anatomy of a request, growth curves, and the three ways context kills agents.
-4. [Why Your Agent Is Flaky](/book/foundations/nondeterminism) — Sampling, reproducibility you can and cannot buy, and what it does to your idea of a test.
-5. [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent) — The cheapest agent is the one you replaced with three if-statements and a good prompt.
-6. [Before the Agent: Process Discovery and Value](/book/foundations/process-discovery-and-value) — Map the work, its handoffs, baseline, error cost, and exit criteria before turning a business request into an agent specification.
+1. [What an Agent Actually Is](/book/foundations/what-is-an-agent). The loop, stripped of marketing: a model, some tools, a memory, and a stopping condition.
+2. [Tokens](/book/foundations/tokens). What a token really is, why output costs several times more than input, and how to do the cost math from first principles.
+3. [The Context Window](/book/foundations/context-window). The window is a budget, not a memory. Anatomy of a request, growth curves, and the three ways context kills agents.
+4. [Why Your Agent Is Flaky](/book/foundations/nondeterminism). Sampling, reproducibility you can and cannot buy, and what it does to your idea of a test.
+5. [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent). The cheapest agent is the one you replaced with three if-statements and a good prompt.
+6. [Before the Agent: Process Discovery and Value](/book/foundations/process-discovery-and-value). Map the work, its handoffs, baseline, error cost, and exit criteria before turning a business request into an agent specification.
 
 ### Part II · From LLM to Agent
 
-1. [Meet the Problem](/book/first-agent/the-problem) — Meridian Supply needs Atlas. What it has to do, and what "done" means before any code exists.
-2. [The Loop, By Hand](/book/first-agent/the-loop-by-hand) — Atlas v0 in about eighty lines. No framework, no magic, every decision visible.
-3. [What a Framework Buys You](/book/first-agent/what-a-framework-buys) — Now that you have written it, an honest accounting of what you would delegate and what you would keep.
+1. [Meet the Problem](/book/first-agent/the-problem). Meridian Supply needs Atlas. What it has to do, and what "done" means before any code exists.
+2. [The Loop, By Hand](/book/first-agent/the-loop-by-hand). Atlas v0 in about eighty lines. No framework, no magic, every decision visible.
+3. [What a Framework Buys You](/book/first-agent/what-a-framework-buys). Now that you have written it, an honest accounting of what you would delegate and what you would keep.
 
 ### Part III · Context Engineering
 
-1. [Context as an Allocation Problem](/book/context/context-as-budget) — Every claimant competes for the same space. Deciding who gets it is an engineering decision, not a default.
-2. [Memory: Short-Term, Long-Term, and Neither](/book/context/memory) — Thread state, durable user facts, and the knowledge base — three different things people put in one vector store.
+1. [Context as an Allocation Problem](/book/context/context-as-budget). Every claimant competes for the same space. Deciding who gets it is an engineering decision, not a default.
+2. [Memory: Short-Term, Long-Term, and Neither](/book/context/memory). Thread state, durable user facts, and the knowledge base: three different things people put in one vector store.
 
 ### Part IV · Data & Retrieval Engineering
 
-1. [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live) — The routing decision that precedes every retrieval choice: semantic, lexical, SQL, graph, API, or just put it in the prompt.
-2. [Vector Search and the Database Question](/book/retrieval/vector-search) — Starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
-3. [Chunking](/book/retrieval/chunking) — Fixed, recursive, semantic, document-aware, parent/child. Why a policy split mid-sentence is a bug you will never see in a metric.
-4. [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer) — "How much did we sell in Spain in Q2" is not a retrieval problem. Give the agent a query tool, not a corpus.
+1. [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live) The routing decision that precedes every retrieval choice: semantic, lexical, SQL, graph, API, or just put it in the prompt.
+2. [Vector Search and the Database Question](/book/retrieval/vector-search). Starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
+3. [Chunking](/book/retrieval/chunking). Fixed, recursive, semantic, document-aware, parent/child. Why a policy split mid-sentence is a bug you will never see in a metric.
+4. [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer). "How much did we sell in Spain in Q2" is not a retrieval problem. Give the agent a query tool, not a corpus.
 
 ### Part VI · Workflows Before Agents
 
-1. [The Determinism Test](/book/workflows/the-determinism-test) — One question that decides between a function, a workflow, and an agent — before you write anything.
+1. [The Determinism Test](/book/workflows/the-determinism-test). One question that decides between a function, a workflow, and an agent, before you write anything.
 
 ### Part VII · Agent & Graph Engineering
 
-1. [State, Nodes, Edges](/book/langgraph/state-nodes-edges) — The graph model, and rebuilding Atlas as an explicit state machine.
-2. [Node or Function?](/book/langgraph/node-or-function) — When a node earns its overhead, and when you should have written a plain function.
+1. [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The graph model, and rebuilding Atlas as an explicit state machine.
+2. [Node or Function?](/book/langgraph/node-or-function) When a node earns its overhead, and when you should have written a plain function.
 
 ### Part VIII · Tool Engineering
 
-1. [Tools Are APIs Designed for Models](/book/tools/tools-are-apis-for-models) — Never expose your internal API to an agent. Build an interface for the consumer you actually have.
-2. [Schema and Granularity](/book/tools/schema-and-granularity) — Why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.
-3. [Idempotency](/book/tools/idempotency) — The refund call timed out. Did it happen? Design so the answer never matters.
-4. [Enterprise Integrations](/book/tools/enterprise-integrations) — Live APIs, replicated data, webhooks, polling, CDC, delegated identity, and reconciliation when the source system changes underneath you.
+1. [Tools Are APIs Designed for Models](/book/tools/tools-are-apis-for-models). Never expose your internal API to an agent. Build an interface for the consumer you actually have.
+2. [Schema and Granularity](/book/tools/schema-and-granularity). Why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.
+3. [Idempotency](/book/tools/idempotency). The refund call timed out. Did it happen? Design so the answer never matters.
+4. [Enterprise Integrations](/book/tools/enterprise-integrations). Live APIs, replicated data, webhooks, polling, CDC, delegated identity, and reconciliation when the source system changes underneath you.
 
 ### Part X · Durable Execution
 
-1. [Why Durable Execution](/book/durable-execution/why-durable-execution) — Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
-2. [Temporal in Forty Minutes](/book/durable-execution/temporal-in-forty-minutes) — Workflows, activities, workers, task queues, event history, replay — the whole mental model, quickly.
+1. [Why Durable Execution](/book/durable-execution/why-durable-execution). Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
+2. [Temporal in Forty Minutes](/book/durable-execution/temporal-in-forty-minutes). Workflows, activities, workers, task queues, event history, replay. The whole mental model, quickly.
 
 ### Part XI · Agentic Systems on Temporal
 
-1. [Your Agent Is Not a Background Job](/book/durability/not-a-background-job) — The `await agent.run()` in a route handler, and every production problem hiding behind it.
-2. [The Agent as a Workflow](/book/durability/agent-as-workflow) — Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity.
-3. [Long-Lived Agents](/book/durability/long-lived-agents) — One workflow per case, alive for weeks: entity workflows, signals for inbound events, continue-as-new as history grows.
-4. [When Tools Have Side Effects](/book/durability/compensation) — The saga pattern for refunds, emails, and inventory — plus the "we already sent it" problem.
+1. [Your Agent Is Not a Background Job](/book/durability/not-a-background-job). The `await agent.run()` in a route handler, and every production problem hiding behind it.
+2. [The Agent as a Workflow](/book/durability/agent-as-workflow). Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity.
+3. [Long-Lived Agents](/book/durability/long-lived-agents). One workflow per case, alive for weeks: entity workflows, signals for inbound events, continue-as-new as history grows.
+4. [When Tools Have Side Effects](/book/durability/compensation). The saga pattern for refunds, emails, and inventory, plus the "we already sent it" problem.
 
 ### Part XII · Human in the Loop
 
-1. [Approval Gates](/book/human-in-the-loop/approval-gates) — Blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
+1. [Approval Gates](/book/human-in-the-loop/approval-gates). Blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
 
 ### Part XIII · Interface & Experience
 
-1. [The Vercel AI SDK](/book/interface/ai-sdk) — Generation, streaming, tools, structured output — and where it overlaps LangChain rather than complements it.
-2. [Streaming UX](/book/interface/streaming-ux) — Token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
+1. [The Vercel AI SDK](/book/interface/ai-sdk). Generation, streaming, tools, structured output, and where it overlaps LangChain rather than complements it.
+2. [Streaming UX](/book/interface/streaming-ux). Token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
 
 ### Part XIV · Evals
 
-1. [The Discipline of Evals](/book/evals/eval-discipline) — Why "it looks good in the demo" fails, and what an eval strategy looks like when it is doing real work.
-2. [The Testing Pyramid for Agentic Systems](/book/evals/testing-pyramid) — Unit, contract, integration, replay, statistical eval, fault injection, and red team: which layer catches which failure.
-3. [Building a Dataset](/book/evals/datasets) — Harvesting cases from logs, failures, and synthesis. What makes a golden set golden.
-4. [Scoring](/book/evals/scoring) — Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge — including calibrating a judge you can trust.
+1. [The Discipline of Evals](/book/evals/eval-discipline). Why "it looks good in the demo" fails, and what an eval strategy looks like when it is doing real work.
+2. [The Testing Pyramid for Agentic Systems](/book/evals/testing-pyramid). Unit, contract, integration, replay, statistical eval, fault injection, and red team: which layer catches which failure.
+3. [Building a Dataset](/book/evals/datasets). Harvesting cases from logs, failures, and synthesis. What makes a golden set golden.
+4. [Scoring](/book/evals/scoring). Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge, including calibrating a judge you can trust.
 
 ### Part XV · Observability
 
-1. [What a Trace Must Answer](/book/observability/what-a-trace-must-answer) — The checklist a single agent run has to satisfy before you can debug it at 3am.
+1. [What a Trace Must Answer](/book/observability/what-a-trace-must-answer). The checklist a single agent run has to satisfy before you can debug it at 3am.
 
 ### Part XVI · Reliability Engineering
 
-1. [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries) — Getting these wrong turns a provider blip into an outage and a bill.
-2. [Idempotency in Practice](/book/reliability/idempotency-in-practice) — Keys, dedup windows, and the exactly-once illusion you are actually building.
+1. [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries). Getting these wrong turns a provider blip into an outage and a bill.
+2. [Idempotency in Practice](/book/reliability/idempotency-in-practice). Keys, dedup windows, and the exactly-once illusion you are actually building.
 
 ### Part XVII · Security & Authorization
 
-1. [Prompt Injection](/book/security/prompt-injection) — Direct and indirect. Why input filtering is not a defense, and what an actual defense looks like.
-2. [Retrieved Text Is Untrusted Input](/book/security/untrusted-retrieval) — The document your pipeline ingested is attacker-controlled. Treat every retrieval result accordingly.
-3. [Excessive Agency and Least Privilege](/book/security/least-privilege) — Scoping what an agent can do to the smallest set that still does the job.
+1. [Prompt Injection](/book/security/prompt-injection). Direct and indirect. Why input filtering is not a defense, and what an actual defense looks like.
+2. [Retrieved Text Is Untrusted Input](/book/security/untrusted-retrieval). The document your pipeline ingested is attacker-controlled. Treat every retrieval result accordingly.
+3. [Excessive Agency and Least Privilege](/book/security/least-privilege). Scoping what an agent can do to the smallest set that still does the job.
 
 ### Part XVIII · Production Architecture
 
-1. [AI Governance](/book/production/ai-governance) — Inventory, risk classification, ownership, impact assessment, evidence, exceptions, supplier review, and retiring an agent safely.
-2. [The Reference Architecture](/book/production/reference-architecture) — API, workers, Postgres, object storage, vector index, Temporal, tracing — and which pieces you can skip.
-3. [Cost Engineering](/book/production/cost-engineering) — Model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
+1. [AI Governance](/book/production/ai-governance). Inventory, risk classification, ownership, impact assessment, evidence, exceptions, supplier review, and retiring an agent safely.
+2. [The Reference Architecture](/book/production/reference-architecture). API, workers, Postgres, object storage, vector index, Temporal, tracing, and which pieces you can skip.
+3. [Cost Engineering](/book/production/cost-engineering). Model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
 
 ### Part XIX · Multi-Agent, Without the Hype
 
-1. [When Not To](/book/multi-agent/when-not-to) — Solve it as a workflow first. Promote to multiple agents only when isolation or ownership demands it.
+1. [When Not To](/book/multi-agent/when-not-to). Solve it as a workflow first. Promote to multiple agents only when isolation or ownership demands it.
 
 ## What you are skipping, and when to come back
 
@@ -125,13 +125,13 @@ The core path is about a quarter of the book — still a substantial read on its
 | --- | --- |
 | **Knowledge Graphs** (Part V) | A question needs relationships across entities, not similar text |
 | **MCP and A2A** (Part IX) | You need to expose tools to clients you did not write or delegate work across independently operated agents |
-| **Most of Multi-Agent** (Part XIX) — you keep the chapter arguing against it | One agent's context is genuinely too crowded, not just conceptually messy |
+| **Most of Multi-Agent** (Part XIX). You keep the chapter arguing against it | One agent's context is genuinely too crowded, not just conceptually messy |
 | **The capstone** (Part XX) | The pieces work separately and you want the dispatcher that puts all of them in one path |
 | **The full catalog** (Part XXI) | Something specific breaks. That is what it is for. |
 | Depth chapters inside core parts | The core chapter got you working and you now want it right |
 
 ## A note on how long this takes
 
-Reading the core path is a few evenings. Building along with it is not — the point of the running project is that you end up with something real, and real takes the time it takes.
+Reading the core path is a few evenings. Building along with it is not. The point of the running project is that you end up with something real, and real takes the time it takes.
 
 Nobody has ever shipped a production agent in a weekend. Several people have shipped a demo in a weekend and then spent four months on the difference. This book is about the four months.
