@@ -84,9 +84,10 @@ function Hero() {
           className="landing-rise mt-8 max-w-[62ch] text-body text-muted-foreground text-pretty"
           style={rise(3)}
         >
-          A handbook for everything that starts after the demo works: the crash halfway through a
-          refund, the retrieved document that turns out to contain instructions, the three-day wait
-          for a human, the provider quota you are already exceeding five times over.
+          A handbook that starts at one API call and ends with a system that survives crashes, waits
+          three days for a human without holding a thread open, and treats every document it reads
+          as written by an attacker. You do not need to have built an agent before. The prerequisite
+          is the backend engineering you already have.
         </p>
         <div className="landing-rise mt-9 flex flex-wrap items-center gap-3" style={rise(4)}>
           <Link
@@ -201,7 +202,7 @@ export default function HomePage() {
       <Hero />
 
       <Section
-        lede="You write software. You have called an LLM API at least once. You may have built an agent that works on your laptop, and you have a feeling, maybe justified and maybe not, that shipping it would be a bad idea."
+        lede="You write software. You may have called an LLM API, you may not have. Either way you have not built an agent yet, and the word itself still covers a chatbot with a good system prompt, a script that calls an API twice, and a fictional colleague that will allegedly run your company."
         title="Who this is for"
       >
         <p className="mt-6 max-w-[68ch] text-body text-muted-foreground text-pretty">
