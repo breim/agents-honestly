@@ -9,9 +9,10 @@
 @theme {
   --font-sans: var(--font-geist-sans);
 
-  /* The site is set in Geist Sans alone. The mono slot is remapped rather than left to
-     Tailwind's default stack because fumadocs applies `font-mono` to code itself, and that
-     markup is not ours to edit. */
+  /* The site is set in Geist Sans, code samples included. The mono slot is remapped rather
+     than left to Tailwind's default stack because fumadocs applies `font-mono` to code
+     itself, and that markup is not ours to edit. The one exception is further down: a
+     diagram drawn out of box characters is on a grid, and a grid needs equal advances. */
   --font-mono: var(--font-geist-sans);
 
   /* The landing page reads as an operator's console, printed in true black and white: zero
@@ -245,6 +246,15 @@ html > body[data-scroll-locked] {
 
 #nd-page p {
   text-wrap: pretty;
+}
+
+/* Blocks whose content is box-drawing characters, tagged in `mdx.tsx` by looking at the
+   glyphs rather than at a fence tag, so a new diagram needs no annotation. Tailwind's
+   preflight sets the family on `pre`/`code` directly, so inheriting from the figure is not
+   enough and the elements have to be named. Geist Mono is metrically matched to the sans,
+   so a diagram sits at the same size as the prose around it. */
+.is-diagram :is(pre, code) {
+  font-family: var(--font-geist-mono);
 }
 
 /* Feedback lands on pointer-down and springs back on release. */
