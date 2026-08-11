@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils';
 export const metadata: Metadata = {
   title: `${appName}. A free handbook for agentic systems in production`,
   description:
-    'Building an agent is easy. Building one a company can depend on is software engineering. Free to read in full, no signup, nothing for sale.',
+    'Building an agent is easy. Building one that survives production is software engineering. Free to read in full, no signup, nothing for sale.',
 };
 
 const prefaceHref = `${docsRoute}/preface`;
@@ -69,7 +69,7 @@ function Hero() {
       <div aria-hidden className="landing-scrim absolute inset-0" />
       <div className="relative mx-auto w-full max-w-5xl px-6 pt-16 pb-20 sm:pt-24 sm:pb-28">
         <Badge className="landing-rise" style={rise(0)} variant="outline">
-          Free · no signup · nothing for sale
+          A free book · no signup · nothing for sale
         </Badge>
         <h1 className="landing-rise mt-7 max-w-[18ch] text-display text-balance" style={rise(1)}>
           Building an agent is easy.
@@ -78,7 +78,7 @@ function Hero() {
           className="landing-rise mt-3 max-w-[22ch] text-display text-muted-foreground text-balance"
           style={rise(2)}
         >
-          Building one a company can depend on is software engineering.
+          Building one that survives production is software engineering.
         </p>
         <p
           className="landing-rise mt-8 max-w-[62ch] text-body text-muted-foreground text-pretty"

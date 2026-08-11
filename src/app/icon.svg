@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
+<style>
+.paper{fill:#fcfcfc}
+.ink{fill:#060606}
+@media (prefers-color-scheme:dark){.paper{fill:#020202}.ink{fill:#f5f5f5}}
+</style>
+<rect class="paper" width="16" height="16" rx="2.5" shape-rendering="auto"/>
+<path class="ink" d="M8 2h2v1h-2zM9 3h3v1h-3zM8 4h5v1h-5zM9 5h4v1h-4zM2 6h1v1h-1zM8 6h6v1h-6zM5 7h1v1h-1zM7 7h7v1h-7zM2 8h1v1h-1zM4 8h10v1h-10zM2 9h12v1h-12zM3 10h10v1h-10zM3 11h10v1h-10zM4 12h8v1h-8zM6 13h4v1h-4z"/>
+</svg>

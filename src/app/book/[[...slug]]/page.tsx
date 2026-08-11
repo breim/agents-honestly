@@ -12,6 +12,7 @@ import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { gitConfig } from '@/lib/shared';
+import { ReadMarker } from '@/components/book/read-marker';
 
 export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
   const params = await props.params;
@@ -39,6 +40,7 @@ export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
             a: createRelativeLink(source, page),
           })}
         />
+        <ReadMarker url={page.url} />
       </DocsBody>
     </DocsPage>
   );
