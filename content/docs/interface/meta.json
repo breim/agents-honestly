@@ -1,0 +1,13 @@
+{
+  "title": "Part XIII · Interface & Experience",
+  "pages": [
+    "ai-sdk",
+    "streaming-ux",
+    "generative-ui-and-approvals",
+    "accessible-and-global-interfaces",
+    "realtime-voice-agents",
+    "two-durable-runtimes",
+    "ui-to-durable-backend",
+    "trust-patterns"
+  ]
+}

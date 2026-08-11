@@ -1,0 +1,165 @@
+---
+title: "Context Compaction"
+description: "Rewrite the whole context at a checkpoint instead of trimming from the edges."
+---
+
+## Problem
+
+A run has finished a phase. It investigated the damage claim, called six tools, read four policy chunks, went down one dead end, and reached a conclusion: policy v7 applies, the credit is 25,000 cents, and it now needs an approval.
+
+The context holds all of that, including the dead end, the four chunks it read to find the one that mattered, and the tool result it extracted two fields from. About 80% of what is in the window is **evidence for a conclusion that has already been reached.**
+
+Trimming from the edges does not fix this. The oldest messages include the customer's actual request; the newest include the reasoning that produced the conclusion. The waste is in the middle, and it is not contiguous.
+
+## Forces
+
+- **Evidence outlives its usefulness.** Once a conclusion is established, the material that supported it is dead weight in every subsequent turn.
+- **Some of it must survive**: the request, the decisions, the values, the citations.
+- **A rewrite is the only operation that can drop non-contiguous waste**, because trimming and summarizing both work on ranges.
+- **Rewriting costs a full [cache](/book/foundations/prompt-caching) invalidation** from the rewrite point down.
+- **Natural boundaries exist**: a phase completing, an approval returning, a subtask finishing, and a rewrite at one loses far less than a rewrite mid-thought.
+- **The rewrite is model output about model output**, so it can introduce error.
+
+## Solution
+
+At a checkpoint, **discard the context and rebuild it** from verified state rather than editing what is there.
+
+<Figure caption="Not a trim and not a summary. The new context is constructed from the scratchpad, not derived from the old context." frame={false}>
+
+```
+   BEFORE  (38k tokens)                AFTER  (4k tokens)
+   ┌────────────────────────┐          ┌────────────────────────┐
+   │ system + tools         │  keep ──▶│ system + tools         │
+   ├────────────────────────┤          ├────────────────────────┤
+   │ customer's request     │  keep ──▶│ customer's request     │
+   │ tool call · result     │          ├────────────────────────┤
+   │ 4 policy chunks        │          │ STATE (from scratchpad)│
+   │ a dead end             │  drop    │  order 4921            │
+   │ tool call · result     │          │  policy v7 (c-8812)    │
+   │ reasoning              │          │  credit 25000 cents    │
+   │ conclusion             │  ───────▶│ PHASE 1 CONCLUSION     │
+   │ tool call · result     │          │  ...one paragraph      │
+   └────────────────────────┘          ├────────────────────────┤
+                                       │ next instruction       │
+                                       └────────────────────────┘
+```
+
+</Figure>
+
+Three rules:
+
+**Rebuild from the [scratchpad](/book/patterns/context/structured-scratchpad), not from the transcript.** This is what distinguishes compaction from a [rolling summary](/book/patterns/context/rolling-summary). A summary is derived from the conversation and inherits whatever was wrong in it; a compaction reads the typed state, where every value names the tool that produced it. If the run was poisoned, compaction is the recovery, but only if it draws from something the model did not write.
+
+**Keep the decision, drop the evidence.** *"Policy v7 applies, cited as chunk c-8812"* replaces four retrieved chunks. The citation is a pointer: if the next phase needs the text, it retrieves it again, which is [one cheap call against thousands of tokens carried every turn](/book/context/dynamic-selection).
+
+**Compact at a boundary, never mid-reasoning.** A run interrupted halfway through a chain of thought and handed a rebuilt context will re-derive, contradict itself, or lose the thread. Boundaries are: a phase completing, an approval returning, a sub-task finishing, a [long pause resuming](/book/human-in-the-loop/interrupts-vs-signals).
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/compact.ts"
+export interface Phase {
+  name: string;
+  conclusion: string;      // one paragraph, written at the boundary
+}
+
+export function compact(state: AgentState, nextInstruction: string): AgentState {
+  // Constructed, not edited. Nothing from the old message list survives
+  // except the original request — which came from the trigger, not the model.
+  const messages: Message[] = [
+    { role: 'user', content: state.scratchpad.originalRequest },
+    { role: 'assistant', content: renderState(state.scratchpad) },
+    ...state.phases.map(p => ({
+      role: 'assistant' as const,
+      content: `[${p.name}] ${p.conclusion}`,
+    })),
+    { role: 'user', content: nextInstruction },
+  ];
+
+  return { ...state, messages, compactions: state.compactions + 1 };
+}
+
+// Values with provenance, rendered compactly. Citations are pointers:
+// the text is re-retrievable, so it does not travel.
+function renderState(pad: Scratchpad): string {
+  return [
+    `order: ${pad.orderId?.value} (via ${pad.orderId?.source})`,
+    `order total: ${pad.orderTotalCents?.value} cents`,
+    `policy: ${pad.policy?.value.id} v${pad.policy?.value.version}`,
+    `credit computed: ${pad.creditCents?.value} cents`,
+  ].join('\n');
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/compact.py"
+def compact(state: AgentState, next_instruction: str) -> AgentState:
+    # Constructed, not edited. Nothing from the old message list survives
+    # except the original request — which came from the trigger, not the model.
+    messages = [
+        {"role": "user", "content": state.scratchpad.original_request},
+        {"role": "assistant", "content": render_state(state.scratchpad)},
+        *[
+            {"role": "assistant", "content": f"[{p.name}] {p.conclusion}"}
+            for p in state.phases
+        ],
+        {"role": "user", "content": next_instruction},
+    ]
+    return replace(state, messages=messages, compactions=state.compactions + 1)
+
+
+def render_state(pad: Scratchpad) -> str:
+    # Values with provenance. Citations are pointers: the text is
+    # re-retrievable, so it does not travel.
+    return "\n".join([
+        f"order: {pad.order_id.value} (via {pad.order_id.source})",
+        f"order total: {pad.order_total_cents.value} cents",
+        f"policy: {pad.policy.value['id']} v{pad.policy.value['version']}",
+        f"credit computed: {pad.credit_cents.value} cents",
+    ])
+```
+
+</Tab>
+</Tabs>
+
+Note the counter. `compactions` on the state is worth having: it is the metric that tells you a workflow is running long enough to need [splitting](/book/patterns/context/subagent-isolation), and it correlates with quality loss.
+
+## Trade-offs
+
+**Cache.** A rewrite invalidates the prefix cache below the system prompt and tool catalogue. On a run that would otherwise have carried 38,000 tokens for another fifteen turns, this pays for itself in one turn, but the arithmetic changes if you compact often, which is an argument for boundaries over thresholds.
+
+**Fidelity.** The phase conclusions are model-written and each one is a lossy compression. Writing the conclusion **at the boundary, while the evidence is still present**, is materially better than reconstructing it later, which is why the conclusion is produced by the phase that ends, not by the compaction step.
+
+**Irrecoverability.** After compaction the detail is gone from the context. It is not gone from the [trace or the workflow history](/book/observability/replay-debugging), which is where it should have been living anyway, and that distinction is the reason compaction is safe.
+
+**Latency.** One extra call at a boundary the user is already waiting through. Usually invisible.
+
+## When not to use it
+
+**When the run is short.** Under half a window with no boundaries, this is machinery for a problem you do not have.
+
+**When there is no natural boundary.** A continuous conversational agent with no phase structure has nowhere clean to compact. Use a [rolling summary](/book/patterns/context/rolling-summary), which is designed for exactly that shape.
+
+**When there is no scratchpad.** Compaction rebuilds from typed state. Without one you are summarizing the transcript, which is a rolling summary wearing this pattern's name and inherits the drift this pattern avoids.
+
+**When the detail is the deliverable.** Forensics, legal review, anything where "what exactly happened at turn nine" is the output. Isolate subtasks instead and keep their transcripts.
+
+**When you are compacting to fix a poisoned run.** Compaction *can* be the recovery, but only from the scratchpad. Rebuilding from a corrupted transcript launders the corruption into a clean-looking summary with no provenance, which is [strictly worse than leaving it visible](/book/context/context-poisoning).
+
+<Aside type="caution" title="Compaction is where the deadline dies">
+A specific, repeatedly-observed bug: a run rebuilds its context and loses the fact that it is already twenty-two minutes into a thirty-minute [deadline](/book/reliability/timeouts-and-retries), or that it has spent 70% of its [budget](/book/production/cost-engineering), or that it is [tainted](/book/security/prompt-injection).
+
+Counters and flags are not conversation. They live in state and must be carried across the rebuild explicitly, and this belongs in a [failure-injection test](/book/reliability/failure-injection), because a taint flag lost at compaction is a security control that silently stopped applying mid-run.
+</Aside>
+
+## Related
+
+- [Structured Scratchpad](/book/patterns/context/structured-scratchpad): the source compaction rebuilds from; a prerequisite, not an option
+- [Rolling Summary](/book/patterns/context/rolling-summary): the continuous alternative when there is no boundary
+- [Selective History](/book/patterns/context/selective-history): retrieve old turns on demand instead of carrying or compressing them
+- [Sub-Agent Isolation](/book/patterns/context/subagent-isolation): avoid needing compaction by never accumulating the material
+- [Compaction](/book/context/compaction): the chapter, including the four operations ordered by cost

@@ -1,0 +1,165 @@
+---
+title: "Heartbeat for Long Tools"
+description: "Detect a hung tool in seconds instead of at the timeout."
+---
+
+## Problem
+
+A model call is configured with a two-minute timeout, which is generous and correct: a long completion can legitimately take ninety seconds.
+
+At second four, the worker running it is killed by an OOM. The Temporal service does not know that. It knows an activity was dispatched and has not reported a result, and it will keep believing that until the two-minute `startToCloseTimeout` expires.
+
+So a failure that happened at second four is discovered at second one hundred and twenty. The customer waits two minutes for a retry that could have started immediately, and the [run deadline](/book/reliability/timeouts-and-retries) burns a third of its budget on a worker that no longer exists.
+
+Shortening the timeout does not fix it. It kills legitimate long completions instead. The problem is that a single timeout is being asked to answer two different questions: *how long may this take* and *is anyone still working on it*.
+
+## Forces
+
+- **Long timeouts are correct** for work that legitimately takes a long time.
+- **Worker death is not signalled.** There is no callback saying the process is gone.
+- **Detection latency is paid by the user** and by the run's deadline budget.
+- **Cancellation cannot reach a silent activity.** The service has no channel to something that never checks in.
+- **Heartbeating too often is overhead**, and the platform throttles it anyway.
+
+## Solution
+
+Add a **heartbeat timeout** alongside the execution timeout. The activity pings while it works; missing a ping means the worker is gone, and the retry fires immediately.
+
+<Figure caption="Two independent questions, two independent timeouts. One bounds the work; the other bounds the silence." frame={false}>
+
+```
+   startToCloseTimeout   2 minutes    "how long may this legitimately take?"
+   heartbeatTimeout      20 seconds   "is anyone still working on it?"
+
+   ── healthy long call ──────────────────────────────────────────
+   0s   dispatched
+   3s   ♥                         first token arrived
+   12s  ♥                         still streaming
+   25s  ♥ …                       still streaming
+   88s  result                    ✓ finished well inside 2 minutes
+
+   ── dead worker ───────────────────────────────────────────────
+   0s   dispatched
+   3s   ♥
+   4s   ✗ worker OOM-killed
+   24s  no heartbeat for 20s  ──▶ activity failed, RETRY DISPATCHED
+        ▲
+        └─ without a heartbeat timeout this happens at 120s
+```
+
+</Figure>
+
+Four rules:
+
+**Heartbeat on real progress, not on a wall clock.** A ping fired by a background timer proves the process is alive and says nothing about whether the work is advancing. For a streaming model call, heartbeat on token arrival. That is a signal that means something.
+
+**Set the timeout several times the expected interval.** Heartbeats are throttled by the worker at roughly 80% of the heartbeat timeout, so a timeout close to your interval produces spurious failures on a perfectly healthy activity. A 20-second timeout with pings every few seconds has comfortable margin.
+
+**Check for cancellation on every heartbeat.** This is the only channel. An activity that never heartbeats cannot be cancelled, so a long tool without heartbeats will keep burning tokens after the workflow has already given up on it.
+
+**Do not confuse it with the resumption checkpoint.** The same mechanism carries a payload used by [resumable activities](/book/patterns/durability/resumable-activity), but detection needs no payload at all. Heartbeat for liveness on every long activity; carry details only when resumption is actually implemented.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/activities/model-call.ts"
+// Two timeouts answering two different questions.
+const { callModel } = proxyActivities<typeof modelActivities>({
+  startToCloseTimeout: '2 minutes',   // a long completion is legitimate
+  heartbeatTimeout: '20 seconds',     // silence for 20s means the worker is gone
+  retry: { maximumAttempts: 3 },
+});
+
+export async function callModelActivity(req: ModelRequest): Promise<ModelResponse> {
+  const ctx = activityContext();
+  const chunks: string[] = [];
+
+  for await (const chunk of streamCompletion(req)) {
+    chunks.push(chunk.text);
+
+    // Heartbeat on real progress: a token arrived. A background ticker
+    // would prove the process is alive and nothing about the work.
+    ctx.heartbeat();
+
+    // Cancellation is delivered ON heartbeat. This is the only place a
+    // long activity can learn the workflow no longer wants the result —
+    // without this check it keeps burning tokens after everyone gave up.
+    if (ctx.cancellationSignal.aborted) {
+      await abortUpstream(req);
+      throw new CancelledFailure('workflow cancelled the call');
+    }
+  }
+
+  return assemble(chunks);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/activities/model_call.py"
+# Two timeouts answering two different questions:
+#   start_to_close_timeout = 2 min   — a long completion is legitimate
+#   heartbeat_timeout      = 20 s    — silence means the worker is gone
+
+
+@activity.defn
+async def call_model(req: ModelRequest) -> ModelResponse:
+    chunks: list[str] = []
+
+    async for chunk in stream_completion(req):
+        chunks.append(chunk.text)
+
+        # Heartbeat on real progress: a token arrived. A background ticker
+        # would prove the process is alive and nothing about the work.
+        activity.heartbeat()
+
+        # Cancellation is delivered ON heartbeat. Without this check the
+        # call keeps burning tokens after the workflow gave up.
+        if activity.is_cancelled():
+            await abort_upstream(req)
+            raise asyncio.CancelledError()
+
+    return assemble(chunks)
+```
+
+</Tab>
+</Tabs>
+
+Heartbeating on token arrival gives a second property for free: it is also [the inactivity signal](/book/reliability/timeouts-and-retries) the streaming chapter asked for. A stream that stalls mid-response stops heartbeating, so a stalled provider and a dead worker are detected by the same mechanism at the same latency, which is a rare case of one control covering two failure modes without compromise.
+
+## Trade-offs
+
+**Overhead per ping.** Heartbeats are cheap and throttled, so the cost is negligible at sane intervals and real if you ping in a tight loop over thousands of items. Batch them, as [the resumable-activity pattern](/book/patterns/durability/resumable-activity) does.
+
+**A wrong heartbeat timeout causes spurious failures.** Too tight and healthy activities die and retry, which for a model call means paying twice for the same completion. This is a case where the failure of the safety mechanism costs money directly, so leave margin.
+
+**It detects worker death, not slowness.** A worker that is alive and stuck in a blocking call still heartbeats if you ping from a ticker, which is exactly why the rule is to ping on progress. Get that wrong and you have built a liveness check that reports health during a hang.
+
+**Retry after a heartbeat timeout re-runs the activity.** For a model call that is a second completion at full price. Worth it against a two-minute stall, and a reason the retry count for expensive activities should be small.
+
+## When not to use it
+
+**Short activities.** A 30-second database read with a 30-second timeout gains nothing. Detection latency is already bounded by the timeout.
+
+**Activities with no progress signal.** A single blocking third-party call that returns once, with nothing in between, has nothing honest to heartbeat on. Pinging from a ticker would report health during a hang, which is worse than no signal. Shorten the timeout instead.
+
+**Outside durable execution.** Without a service tracking activity liveness there is nothing to heartbeat *to*. The equivalent is [the inactivity timeout](/book/reliability/timeouts-and-retries) on the stream itself, which every agent should have regardless.
+
+<Aside type="caution" title="The reason to add this even when detection latency is acceptable">
+Detection is the advertised benefit. The one that matters more is that **cancellation is delivered on heartbeat, and only on heartbeat.**
+
+An activity that never checks in cannot be told to stop. So when the workflow hits its deadline, when the run's [budget is exhausted](/book/production/cost-engineering), when the customer cancels, or when a [breaker opens](/book/reliability/fallbacks-and-breakers): a silent long-running model call keeps generating tokens against a result nobody will read, and keeps doing so until its own timeout.
+
+On a system where the expensive thing and the long thing are the same thing, that is a bill for work that was already abandoned. Heartbeating is how the abandonment reaches the code doing the work.
+</Aside>
+
+## Related
+
+- [Resumable Activity](/book/patterns/durability/resumable-activity): the same mechanism carrying a checkpoint payload
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): where the per-activity timeouts are configured
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the inactivity timeout this mirrors outside durable execution
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the workflow whose deadline the cancellation comes from
+- [Determinism and Retries](/book/durable-execution/determinism-and-retries): the four timeouts, and the two you set

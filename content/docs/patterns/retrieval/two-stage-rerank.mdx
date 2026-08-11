@@ -1,0 +1,175 @@
+---
+title: "Two-Stage Rerank"
+description: "Retrieve cheap and wide, then rescore narrow and expensive."
+---
+
+## Problem
+
+The right chunk is in the top 50 and it is ranked eleventh.
+
+Sending the top 5 misses it. Sending the top 20 includes it, along with fifteen chunks that scored highly *because they resemble the answer*, which is the most expensive material you can put in a prompt: near-misses compete for attention with the thing they resemble, and [degradation tracks confusability](/book/context/context-as-budget).
+
+Turning up `k` is not the fix. It trades a recall problem for a precision problem, and the precision problem is the one that produces confidently wrong answers rather than "I don't know."
+
+## Forces
+
+- **Retrieval is indexed and approximate.** A bi-encoder embeds query and document independently, which is what makes it fast and what stops it from judging whether *this* passage answers *this* question.
+- **Accurate scoring cannot be indexed.** A cross-encoder reads the pair together, so there is nothing to precompute until a query arrives.
+- **Recall and precision want opposite `k`.** You cannot satisfy both in one stage.
+- **Reranking cost scales with candidate count**, and non-linearly: four times the candidates is roughly four times the latency.
+- **A third party sees whatever you send it** if the reranker is hosted.
+- **Reranking cannot recover what retrieval never returned.**
+
+## Solution
+
+Two stages with different objectives: **retrieve for recall, rerank for precision.**
+
+<Figure caption="Wide and cheap, then narrow and expensive. The stages optimize different things on purpose." frame={false}>
+
+```
+   ①  RETRIEVE          hybrid, filtered, k = 50
+       cheap · indexed · approximate · optimized for RECALL
+       "is the answer anywhere in here?"
+            │
+            ▼
+   ②  RERANK            cross-encoder over 50 pairs
+       expensive · exact · optimized for PRECISION
+       "does THIS passage answer THIS question?"
+            │
+            ▼
+       KEEP 5            the cut — stage ② is not done until this happens
+
+   typically the largest single-stage gain in the pipeline —
+   but corpus-dependent, and near zero over a strong ranker
+   going wider than ~50 candidates costs latency without buying recall
+```
+
+</Figure>
+
+Four rules:
+
+**Filter before you rerank, never after.** A hosted reranker receives every candidate you send it, including ones that were about to be dropped. Sending restricted content to a vendor and then filtering the response is [not an authorization boundary](/book/retrieval/metadata-and-authorization), it is a display preference.
+
+**Size the first stage from recall@k, not intuition.** Measure how deep you have to go before the correct chunk is present in the candidate set essentially always. That number is your `k`. Reported practice puts the useful ceiling around 50: beyond that, latency rises and recall does not.
+
+**Cut hard at the second stage.** The point is not reordering; it is *removal*. Reranking that promotes the right chunk from eleventh to first and still sends twenty chunks has captured half the benefit.
+
+**Fix recall first.** A reranker only reorders what it was given. If the correct chunk was never retrieved, no amount of reranking recovers it, and a team tuning a reranker to solve a recall problem is optimizing stage two of a pipeline whose stage one is broken.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/rerank.ts"
+const CANDIDATES = 50;   // from recall@k measurement, not from a default
+const KEEP = 5;          // what the prompt receives
+
+export async function retrieveAndRerank(
+  q: RewrittenQuery, ctx: RunContext,
+): Promise<Chunk[]> {
+  // Stage 1 — recall. Filters run INSIDE each retriever leg, so nothing
+  // unauthorized can reach the reranker (which may be a third party).
+  const candidateIds = await retrieve(q, ctx);          // hybrid fusion, k=50
+
+  const candidates = await loadChunks(candidateIds.slice(0, CANDIDATES), ctx);
+
+  // Stage 2 — precision. One model pass per (query, chunk) pair.
+  const scored = await reranker.score({
+    query: q.queries[0],          // the resolved query, not the raw string
+    documents: candidates.map(c => c.text),
+  });
+
+  const ranked = candidates
+    .map((c, i) => ({ chunk: c, score: scored[i] }))
+    .sort((a, b) => b.score - a.score);
+
+  // Cut hard. Removal is most of the value — near-misses in the prompt
+  // compete with the answer they resemble.
+  const kept = ranked.slice(0, KEEP);
+
+  // Record both stages: recall failures and precision failures need
+  // different fixes, and only the trace distinguishes them.
+  ctx.trace.set('retrieval.candidates', candidateIds.length);
+  ctx.trace.set('retrieval.kept', kept.map(k => k.chunk.id));
+
+  return kept.map(k => k.chunk);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/rerank.py"
+CANDIDATES = 50   # from recall@k measurement, not from a default
+KEEP = 5          # what the prompt receives
+
+
+async def retrieve_and_rerank(q, ctx) -> list[Chunk]:
+    # Stage 1 — recall. Filters run INSIDE each retriever leg, so nothing
+    # unauthorized can reach the reranker (which may be a third party).
+    candidate_ids = await retrieve(q, ctx)             # hybrid fusion, k=50
+    candidates = await load_chunks(candidate_ids[:CANDIDATES], ctx)
+
+    # Stage 2 — precision. One model pass per (query, chunk) pair.
+    scores = await reranker.score(
+        query=q["queries"][0],     # the resolved query, not the raw string
+        documents=[c.text for c in candidates],
+    )
+
+    ranked = sorted(zip(candidates, scores), key=lambda p: -p[1])
+
+    # Cut hard. Removal is most of the value — near-misses in the prompt
+    # compete with the answer they resemble.
+    kept = [c for c, _ in ranked[:KEEP]]
+
+    # Record both stages: recall failures and precision failures need
+    # different fixes, and only the trace distinguishes them.
+    ctx.trace["retrieval.candidates"] = len(candidate_ids)
+    ctx.trace["retrieval.kept"] = [c.id for c in kept]
+
+    return kept
+```
+
+</Tab>
+</Tabs>
+
+Recording both `candidates` and `kept` is what makes the pipeline debuggable later. When an answer is wrong, the first question is whether the right chunk was in the candidate set at all: a recall bug and a precision bug look identical in the output and have completely different fixes.
+
+## Trade-offs
+
+**Latency, non-linearly in candidate count.** A small cross-encoder over 50 short passages is tens of milliseconds; over 200 it is several times that. This is why `CANDIDATES` is a measured number rather than "as many as possible."
+
+**Cost per query.** Hosted rerankers price per query-plus-documents unit, so the second stage has a per-search cost that a vector search does not. On a run doing [three searches](/book/patterns/context/retrieval-on-demand), that is three units.
+
+**Another dependency in the request path.** A reranker that is slow or down now gates every retrieval. It needs the same [breaker and fallback](/book/reliability/fallbacks-and-breakers) treatment as any dependency, and the fallback is simply: skip stage two and send the fused top-N.
+
+**A vendor sees your corpus, one query at a time.** Add it to the [subprocessor list](/book/security/pii-and-compliance). This is the component that most often arrives without a review, because it is added to improve a metric.
+
+**LLM-as-reranker is a different trade.** More accurate on nuanced relevance and able to follow instructions like *prefer the current version*, and slower, more expensive per candidate, and [nondeterministic](/book/foundations/nondeterminism), so the same candidate set can order differently across runs. Reasonable for a small candidate set on a high-value path; not a default.
+
+## When not to use it
+
+**When recall is the actual problem.** If the correct chunk is not in the top 50, reranking is the wrong stage entirely. Fix [chunking](/book/retrieval/chunking), [fusion](/book/patterns/retrieval/hybrid-fusion), or the corpus.
+
+**When the corpus is small.** With a few hundred chunks, retrieve more and let the model read them. Two stages over a tiny index is infrastructure for a problem you do not have.
+
+**When the first stage is already strong on your domain.** Reranking pays most when it injects signal the first stage lacks. Layered on top of a semantic ranker that already matches your corpus well, reported gains fall toward zero, and can go negative when the reranker was not trained on anything like your domain. This is the case that makes the measurement non-optional rather than a formality.
+
+**When latency is the binding constraint.** Sub-second interactive paths may not have two hundred milliseconds to spend. Consider reranking only when the first-stage scores are ambiguous: a cheap heuristic that skips the second stage on confident retrievals.
+
+**When you have no retrieval evals.** Without recall@k and nDCG you cannot tell whether the reranker helped, and you will not be able to justify keeping it or removing it. [Measure first](/book/retrieval/retrieval-evals).
+
+<Aside type="note" title="The shape recurs, which is why it is worth internalizing">
+Retrieve wide and cheap, then cut narrow and expensive. The same structure appears when [rescoring quantized vectors](/book/retrieval/ann-indexes), when [selecting context](/book/context/dynamic-selection), and, in a different register, in the [model cascade](/book/patterns/cost/model-cascade), where a cheap model handles the easy cases and an expensive one handles what survives.
+
+It keeps recurring because recall and precision want opposite settings of the same knob, and the only way to have both is to want them at different stages. Whenever you find yourself tuning one parameter to satisfy two conflicting objectives, that is the signal to split the stage.
+</Aside>
+
+## Related
+
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): produces the candidate list this stage rescores
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): the resolved query is what the reranker should score against
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): why the predicates must run before the reranker sees anything
+- [Model Cascade](/book/patterns/cost/model-cascade): the same cheap-then-expensive shape applied to generation
+- [Hybrid and Reranking](/book/retrieval/hybrid-and-reranking): the chapter, including why a cross-encoder cannot be an index

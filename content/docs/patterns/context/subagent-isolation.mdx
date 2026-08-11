@@ -1,0 +1,178 @@
+---
+title: "Sub-Agent Context Isolation"
+description: "Give a noisy subtask its own window and return only the conclusion."
+---
+
+## Problem
+
+To answer one question, the agent has to determine which policy applies. That means four searches, reading eleven chunks, discarding nine of them, following a cross-reference into a superseded document, backing out, and finally concluding: **policy v7, chunk c-8812.**
+
+Twenty-one tokens of conclusion. Roughly fourteen thousand tokens of getting there, and all of it is now in the main transcript, where it will be re-sent on every remaining turn.
+
+Worse than the cost: the superseded document it read and rejected is still sitting in the context. Nothing marks it as rejected. Six turns later the model may cite it, because [the transcript has no provenance](/book/context/context-poisoning) and "text the agent read and dismissed" and "text the agent read and accepted" look identical.
+
+## Forces
+
+- **Investigation is inherently noisy**: dead ends, rejected candidates, retried searches. The noise is only identifiable as noise afterwards.
+- **The conclusion is small** and is the only part the main run needs.
+- **Rejected material is actively harmful** in the transcript, not merely wasteful.
+- **A separate context costs a separate preamble**: system prompt, tools, and a [coordination tax](/book/multi-agent/the-coordination-tax).
+- **The boundary is lossy in one direction**: whatever the sub-agent drops, the parent cannot know was dropped.
+- **The sub-agent must not inherit the parent's authority** by default.
+
+## Solution
+
+Run the subtask in its **own context**, with its own narrow tool set, and return a **typed conclusion**, not a transcript.
+
+<Figure caption="A one-way boundary. The parent sends a question and a scope; it receives a value. The investigation never enters its context." frame={false}>
+
+```
+   MAIN RUN                              SUB-AGENT (fresh window)
+   ────────────────────────              ────────────────────────────
+   ...turn 8                             system: narrow, task-specific
+   "which policy applies?"  ──────────▶  tools: search_policies only
+                                         ├─ search "damaged pallet"
+                                         ├─ read c-4410 … reject
+                                         ├─ search "freight damage"
+                                         ├─ read c-8812 … accept
+                                         └─ read c-9001 … superseded
+   ◀────────────────────────────────────  { policy: "v7",
+   { policy: v7, chunk: c-8812 }           chunk: "c-8812",
+   ...turn 9                               confidence: "high" }
+                                         ── window discarded ──
+   +21 tokens, not +14,000
+   rejected documents never seen
+```
+
+</Figure>
+
+Four rules:
+
+**Return a schema, never prose.** The conclusion is a [validated object](/book/foundations/structured-output) that lands in a [scratchpad field](/book/patterns/context/structured-scratchpad). Prose returns are how a sub-agent smuggles its transcript back one paragraph at a time, and they are where inter-agent misalignment lives.
+
+**Include provenance in the return.** `chunk: c-8812` is what makes the conclusion checkable. Without it the parent has an assertion from a component it cannot audit, which is the [second-vote problem](/book/multi-agent/when-not-to) in miniature.
+
+**Narrow the tools, and inherit the constraints.** The sub-agent gets `search_policies` and nothing else. It inherits the parent's [tenant, delegation, and taint](/book/capstone/building-it), and it must not be able to *lower* the taint level, because a sub-agent that reads untrusted text and returns a clean-looking conclusion is a laundering step.
+
+**Budget it, and handle the failure.** A sub-agent that cannot conclude returns `{ found: false, reason }`, not an exception and not a guess. The parent decides what to do, usually [escalate](/book/human-in-the-loop/escalation-and-audit).
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/subagent.ts"
+export interface SubAgentSpec<T> {
+  name: string;
+  systemPrompt: string;      // narrow and task-specific, not the parent's
+  tools: string[];           // a strict subset
+  schema: ZodSchema<T>;      // the ONLY thing that crosses back
+  maxTurns: number;
+  maxMicros: number;
+}
+
+export async function runIsolated<T>(
+  spec: SubAgentSpec<T>, question: string, parent: RunContext,
+): Promise<T | { found: false; reason: string }> {
+  // Fresh context. Inherits identity and constraints; inherits no history.
+  const ctx: RunContext = {
+    ...parent,
+    messages: [],
+    budget: childBudget(parent.budget, spec.maxMicros),
+    autonomousTier: 0,                       // sub-agents never act
+    taint: parent.taint,                     // inherited, never cleared
+    catalogue: pick(parent.catalogue, spec.tools),
+  };
+
+  const out = await loop(ctx, spec.systemPrompt, question, spec.maxTurns);
+  if (!out.ok) return { found: false, reason: out.reason };
+
+  // Validated at the boundary. An unparseable return is a failure,
+  // not something to hand upward and hope about.
+  const parsed = spec.schema.safeParse(out.value);
+  return parsed.success
+    ? parsed.data
+    : { found: false, reason: 'sub-agent returned an invalid conclusion' };
+
+  // ctx and its messages go out of scope here. That is the pattern.
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/subagent.py"
+@dataclass(frozen=True)
+class SubAgentSpec:
+    name: str
+    system_prompt: str        # narrow and task-specific, not the parent's
+    tools: tuple[str, ...]    # a strict subset
+    schema: type[BaseModel]   # the ONLY thing that crosses back
+    max_turns: int
+    max_micros: int
+
+
+async def run_isolated(spec: SubAgentSpec, question: str, parent: RunContext):
+    # Fresh context. Inherits identity and constraints; inherits no history.
+    ctx = replace(
+        parent,
+        messages=[],
+        budget=child_budget(parent.budget, spec.max_micros),
+        autonomous_tier=0,                    # sub-agents never act
+        taint=parent.taint,                   # inherited, never cleared
+        catalogue=pick(parent.catalogue, spec.tools),
+    )
+
+    out = await loop(ctx, spec.system_prompt, question, spec.max_turns)
+    if not out.ok:
+        return {"found": False, "reason": out.reason}
+
+    try:
+        # Validated at the boundary. An unparseable return is a failure.
+        return spec.schema.model_validate(out.value)
+    except ValidationError:
+        return {"found": False, "reason": "invalid conclusion from sub-agent"}
+
+    # ctx and its messages are discarded here. That is the pattern.
+```
+
+</Tab>
+</Tabs>
+
+`autonomousTier: 0` is the line that keeps this a context pattern rather than a capability expansion. The sub-agent reads and concludes; the parent acts. A sub-agent that can call a write tool has widened your [blast radius](/book/security/least-privilege) in exchange for a token saving, which is a bad trade made by accident.
+
+## Trade-offs
+
+**A second preamble.** System prompt and tool schemas are paid again for the sub-agent's window. On a fourteen-thousand-token investigation this is clearly worth it; on a two-thousand-token one it is not. The break-even is roughly *the investigation must be several times the preamble.*
+
+**Latency.** The sub-agent runs to completion before the parent continues. Serial, and on the critical path. Where several independent sub-questions exist, run them in parallel: that is [fan-out](/book/patterns/scale/fan-out), and it is the case where isolation also buys wall-clock.
+
+**The boundary is lossy and the parent cannot see it.** The sub-agent decided c-4410 was irrelevant. If it was wrong, the parent has no way to discover that, because the material never arrived. The mitigation is the provenance field: the parent can re-fetch `c-8812` and check, which is why the conclusion carries a pointer rather than a paraphrase.
+
+**Debugging crosses a boundary.** The sub-agent's transcript must reach the [trace](/book/observability/what-a-trace-must-answer) under the parent's run ID even though it never reaches the parent's context. Discarded from the prompt, retained in the record: those are different things, and conflating them makes a whole class of bug uninvestigable.
+
+## When not to use it
+
+**When the investigation is short.** Under a few thousand tokens, the preamble costs more than it saves.
+
+**When the working material is needed later.** If turn 14 will want the chunks that turn 9 read, isolating them means fetching twice. [Retrieval on demand](/book/patterns/context/retrieval-on-demand) with a [truncating dispatcher](/book/patterns/context/tool-result-truncation) fits better.
+
+**When you are reaching for it to add capability.** This pattern reduces context. If the sub-agent has different tools *so it can do more things*, you are building [multi-agent architecture](/book/multi-agent/when-not-to) and should read that chapter first: the coordination tax applies whether or not you called it a sub-agent.
+
+**When the conclusion cannot be typed.** If the return is genuinely a paragraph of nuanced judgment, isolation is buying less than it looks: prose crosses the boundary carrying an unauditable summary, and you have re-created the failure mode you were avoiding.
+
+<Aside type="note" title="This is a context technique, not a topology">
+[Part XIX](/book/multi-agent/when-not-to) is skeptical of multi-agent systems and this pattern is one of the three things it endorses, which is worth reconciling explicitly, because the mechanism looks identical.
+
+The difference is that these "agents" do not negotiate. There is no conversation, no handoff protocol, no shared goal state, and no question about who owns termination: the parent asks, the child answers, the child's window is destroyed. The failure modes that make multi-agent systems fragile have nowhere to occur here: inter-agent misalignment, missing termination conditions, ambiguous ownership.
+
+A useful test: **if the sub-agent could send a message back and forth more than once, this is no longer the pattern.**
+</Aside>
+
+## Related
+
+- [Structured Scratchpad](/book/patterns/context/structured-scratchpad): where the returned conclusion lands
+- [Tool Result Truncation](/book/patterns/context/tool-result-truncation): the cheaper first move when the noise is one big result
+- [Context Compaction](/book/patterns/context/context-compaction): cleaning up after accumulation instead of preventing it
+- [Map-Reduce Tree](/book/patterns/scale/mapreduce-tree): the same isolation, fanned out over many disjoint inputs
+- [When Not To](/book/multi-agent/when-not-to): the line between this and a multi-agent topology

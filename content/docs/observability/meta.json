@@ -1,0 +1,10 @@
+{
+  "title": "Part XV · Observability",
+  "pages": [
+    "what-a-trace-must-answer",
+    "otel-genai",
+    "replay-debugging",
+    "cost-accounting",
+    "drift"
+  ]
+}

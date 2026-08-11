@@ -1,0 +1,219 @@
+---
+title: "Rollout and In-Flight Migration"
+description: "Shipping a change while thousands of agent runs are mid-execution."
+---
+
+You deploy at 14:00. At that instant Atlas has 3,000 runs in flight: some four seconds old, some four hours old, and eleven that have been paused since Tuesday waiting on an approval.
+
+A web deploy does not have this problem. A request either completed before the swap or started after it; nothing is half-served. An agent run is a long-lived thing that spans deploys by design, so the deploy has to answer a question that ordinary releases never ask:
+
+> **What version is a run that started before the change and will finish after it?**
+
+And then the second question, which is harder because the system is probabilistic: **how do you find out whether the new version is better, before it is serving everyone?**
+
+## Pin the configuration at run start
+
+The answer to the first question is short and it is the load-bearing rule of this chapter.
+
+A run resolves its [configuration bundle](/book/production/versioning) once, when it starts, and uses that bundle until it terminates. Not per turn, not per node, per run.
+
+The reason is the one [the fallback chapter](/book/reliability/fallbacks-and-breakers) gave for not swapping models mid-conversation, and it applies to every field in the bundle. A run whose first twelve steps were decided under one prompt and whose last eight are decided under another is not on version A or version B. It is a splice, its outcome is attributable to neither, and it pollutes whatever comparison you were trying to run.
+
+<Figure caption="A run is the unit. Mixing configurations inside one produces an outcome attributable to nothing." frame={false}>
+
+```
+   14:00 deploy
+        │
+   ─────┼──────────────────────────────────────────▶ time
+        │
+   run A ══════╡ started 13:58, finishes on OLD bundle    ✓
+        │
+   run B       ╞══════════▶ started 14:02, NEW bundle     ✓
+        │
+   run C ═════════╪═════════▶ switched mid-run            ✗
+        │         └── attributable to neither version
+        │
+   run D ══╡ · · · · · · · · · · · · ·╞═══▶ paused Tuesday,
+        │                                   resumes Thursday
+        │                                   ── needs a decision
+```
+
+</Figure>
+
+For the graph and worker code, the mechanism is [worker versioning versus patching](/book/durable-execution/determinism-and-retries). Old executions finish on old code by default, and patching exists for the cases where they must not. The bundle follows the same principle for the parts that are data rather than code: pinned at start, carried in the run's state, honored on resume.
+
+## The paused run is the interesting case
+
+Run D is where the rule needs a policy rather than a default. A run that paused Tuesday for [human approval](/book/human-in-the-loop/approval-gates) and resumes Thursday will resume into a world with a new prompt, possibly a new model, and possibly a new policy.
+
+Three cases, three answers:
+
+| The change is | Resume on | Why |
+| --- | --- | --- |
+| A quality improvement | **Old bundle** | Consistency beats marginal quality; the run is half-decided |
+| A **bug fix** | **New bundle**, migrated | The run is currently producing the bug |
+| A **policy or safety change** | **New bundle**, always | Old rules must not apply to actions taken today |
+
+The third row is not negotiable and it is the one that gets missed. If a [risk tier](/book/human-in-the-loop/risk-tiers) threshold was lowered on Wednesday because a credit limit was too generous, a run resuming Thursday must not issue Tuesday's credit under Tuesday's rules. This is the same argument [identity](/book/security/identity) made about re-deriving authorization at the moment of action rather than restoring it from a checkpoint: **authorization and policy are re-evaluated at the point of effect; everything else can be pinned.**
+
+So the bundle is not one atom for resumption purposes. Split it: prompt, model, and sampling pin at run start; policy, authorization, and limits resolve at the moment of the action. That split is the whole design.
+
+## You cannot A/B a single run against itself
+
+Now the second question, and the thing that makes agent rollout genuinely different from feature-flag practice.
+
+For a normal feature, you can often measure the same user under both variants, or at least measure a fast, low-variance metric. For an agent, the primary metric is *quality*, it is noisy, it is expensive to score, and a run happens once. There is no counterfactual for what version B would have done with ticket #9104.
+
+So the rollout ladder is ordered by how much signal each rung gives for how much risk:
+
+**1 · Offline eval.** The [CI suite](/book/evals/ci-for-agents) on fixtures. Cheap, fast, no user exposure, and limited by the fact that your fixtures are not your traffic.
+
+**2 · Shadow replay.** [Replay](/book/observability/replay-debugging) a thousand recent production runs against both bundles and diff the decisions. Free, no user impact, real traffic distribution. Valid only while the prompt, the model, and its sampling parameters are unchanged, which means it covers dispatcher, policy, and post-retrieval changes, and that a bundle differing in any of those three needs step 3, not this step.
+
+**3 · Shadow execution.** Run the new bundle alongside the old on live traffic, serve the old, score both. Real inputs, real model calls, no user exposure, and it costs double tokens, which is why it is used on a sample rather than everything.
+
+**4 · Canary.** A percentage of real traffic actually served by the new bundle. The only rung that measures real outcomes, and the only one with real risk.
+
+**5 · Full.**
+
+Rung 3 is under-used and is the right answer more often than people think. It is the only way to compare two *prompts* on real traffic without exposing anyone, and on a 2% sample the token cost is trivial.
+
+## Canary: what to watch, and how long
+
+The trap is measuring the thing you care about. Resolution rate is the goal, moves slowly, and is noisy enough that detecting a 3-point change at meaningful confidence needs more runs than a canary sees in a day.
+
+So canaries are gated on **fast proxies**, with the slow metric confirming afterwards:
+
+| Signal | Moves in | Catches |
+| --- | --- | --- |
+| Format compliance / parse rate | Minutes | The change broke output shape |
+| Tool-call distribution | Minutes | The agent is now choosing differently |
+| Turn count, p50 and p99 | Minutes | Looping, or a lost shortcut |
+| [Input tokens per turn](/book/observability/cost-accounting) | Minutes | The prompt got expensive |
+| Escalation rate | ~an hour | The agent lost confidence or authority |
+| Error and refusal rate | ~an hour | — |
+| [Sampled quality score](/book/evals/online-evals) | Hours to days | The thing you actually care about |
+| Resolution rate | Days | Confirmation |
+
+Two rules make this work.
+
+**Assign stickily, by tenant or user, not per run.** A customer whose first ticket is handled by version A and second by version B gets inconsistent behavior, and a tenant whose runs are split cannot be analyzed as a unit. Sticky assignment also makes the comparison cleaner, because tenant is one of the largest sources of variance in the outcome.
+
+**Run long enough to cross a full traffic cycle.** Weekday and weekend traffic differ, and a canary promoted after four good hours on a Tuesday morning has measured Tuesday morning.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/rollout/assign.ts"
+// Sticky by tenant: the same tenant always lands on the same bundle for
+// a given rollout, so behavior is consistent and the comparison is clean.
+export function bundleFor(rollout: Rollout, tenantId: string): string {
+  if (rollout.holdout.includes(tenantId)) return rollout.stable;   // never canaried
+  const bucket = hashToUnitInterval(`${rollout.id}:${tenantId}`);
+  return bucket < rollout.canaryFraction ? rollout.candidate : rollout.stable;
+}
+
+// Resolved once, at run start, and stored on the run.
+export async function startRun(input: RunInput, rollout: Rollout) {
+  const bundleId = bundleFor(rollout, input.tenantId);
+  return createRun({
+    ...input,
+    bundleId,                    // pinned for the life of the run
+    // Policy, authorization, and limits are NOT pinned — they resolve at
+    // the moment of the action. See /security/identity/.
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/rollout/assign.py"
+def bundle_for(rollout, tenant_id: str) -> str:
+    # Sticky by tenant: the same tenant always lands on the same bundle for
+    # a given rollout, so behavior is consistent and comparison is clean.
+    if tenant_id in rollout.holdout:
+        return rollout.stable                      # never canaried
+    bucket = hash_to_unit_interval(f"{rollout.id}:{tenant_id}")
+    return rollout.candidate if bucket < rollout.canary_fraction else rollout.stable
+
+
+async def start_run(input, rollout):
+    # Resolved once, at run start, and stored on the run.
+    return await create_run(
+        **input,
+        bundle_id=bundle_for(rollout, input.tenant_id),
+        # Policy, authorization, and limits are NOT pinned — they resolve
+        # at the moment of the action. See /security/identity/.
+    )
+```
+
+</Tab>
+</Tabs>
+
+The **holdout** is worth the extra line. A small set of tenants that never receives canaries gives you a stable baseline to compare against when a metric moves. Otherwise a slow global shift and a bad canary look identical, which is [the drift diagnosis problem](/book/observability/drift) arriving during a rollout.
+
+## Blast radius, not percentage
+
+The last idea, and it is the one that separates agent rollouts from feature flags.
+
+A 1% canary on a read-only feature exposes 1% of users to a worse experience. A 1% canary on an agent that issues credits and sends email exposes 1% of users to **irreversible actions taken by an unvalidated configuration**, and [rollback does not un-send](/book/production/versioning).
+
+So gate the rollout on the same axis [risk tiers](/book/human-in-the-loop/risk-tiers) already gave you:
+
+| Stage | Tier 0 (reversible, small) | Tier 1+ (money, external, wide) |
+| --- | --- | --- |
+| Shadow | Yes | Yes, no effects at all |
+| Canary 1–5% | Yes | **Approval-gated for the canary period** |
+| Canary 25% | Yes | Yes, once tier-0 metrics are clean |
+| Full | Yes | Yes |
+
+A new bundle can serve tier-0 traffic freely while any tier-1 action it proposes goes to a human for the duration of the canary. The reviewers see the new version's decisions before those decisions become effects, which is a genuinely cheap safety property, because the escalation machinery already exists and the canary is small.
+
+<Aside type="caution" title="Change one thing">
+Never move the prompt and the model in the same rollout. When the metric shifts you will not know which caused it, and, because you [cannot roll back a model](/book/production/versioning), you may not be able to unwind half of it.
+
+The same applies to shipping a prompt change together with a corpus re-index. Two variables, one measurement, no conclusion. Sequence them, even though it doubles the calendar time, because the alternative is a result you cannot act on.
+</Aside>
+
+## Atlas, concretely
+
+| Practice | Setting |
+| --- | --- |
+| Bundle resolution | Once, at run start, stored on the run row |
+| Policy and authorization | **Not pinned**, re-derived at the moment of each action |
+| In-flight runs at deploy | Finish on the old bundle |
+| Paused runs resuming | Old bundle, unless the change is a bug fix or a policy change |
+| Assignment | Sticky by tenant; 5% holdout that never canaries |
+| Ladder | Offline eval → shadow replay → 2% shadow execution → 5% canary → 25% → full |
+| Canary gates | Format compliance, tool-call mix, turn count, input tokens per turn |
+| Canary duration | Minimum one full weekly cycle before promotion |
+| Tier 1+ during canary | Every action approval-gated for the canary period |
+| Coupled changes | Forbidden: prompt, model, and corpus ship separately |
+| Rollback | Repoint the manifest; new runs pick it up immediately, in-flight runs finish |
+
+The row that surprises people is the last one: rolling back does not abort the runs already executing on the bad bundle. That is usually correct, killing 3,000 mid-flight runs is its own incident, but it means "we rolled back at 14:40" and "the bad version stopped affecting customers at 14:40" are different statements, and the gap is the length of your longest in-flight run.
+
+Which is worth knowing before you need to say it out loud during an incident.
+
+---
+
+Next: [Cost Engineering](/book/production/cost-engineering), model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
+
+## Takeaways
+
+- An agent run spans deploys by design, so a deploy must answer what version a run that started before it and finishes after it is on.
+- Resolve the configuration bundle once, at run start, and carry it to termination. A run spliced across two configurations is attributable to neither.
+- Split the bundle for resumption: prompt, model, and sampling pin at start; policy, authorization, and limits resolve at the moment of the action.
+- A paused run resumes on the old bundle for quality changes, and on the new one for bug fixes and policy changes. Tuesday's credit must not be issued under Tuesday's rules.
+- You cannot A/B a single run against itself. Quality is noisy, expensive to score, and there is no counterfactual.
+- Five rungs: offline eval, shadow replay, shadow execution, canary, full.
+- Shadow execution is under-used. It is the only way to compare two prompts on real traffic with no user exposure, and on a small sample the double token cost is trivial.
+- Gate canaries on fast proxies: format compliance, tool-call mix, turn count, input tokens per turn. Let the slow quality metric confirm afterwards.
+- Assign stickily by tenant, not per run. Split tenants produce inconsistent behavior and unanalyzable comparisons.
+- Keep a permanent holdout, or a slow global drift and a bad canary look identical.
+- Run a canary across a full traffic cycle. Four good hours on Tuesday morning has measured Tuesday morning.
+- Gate on blast radius, not percentage. A 1% canary on an agent that moves money exposes 1% of users to irreversible actions from an unvalidated configuration.
+- During the canary, approval-gate every tier-1+ action. The machinery already exists and the volume is small.
+- Never move the prompt and the model, or the prompt and the corpus, in the same rollout. Two variables, one measurement, no conclusion.
+- Rolling back does not abort runs already executing on the bad bundle. "We rolled back at 14:40" and "it stopped affecting customers at 14:40" differ by your longest in-flight run.

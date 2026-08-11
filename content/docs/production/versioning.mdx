@@ -1,0 +1,212 @@
+---
+title: "Versioning Prompts, Models, and Graphs"
+description: "Treating all three as deployable artifacts with rollback, not as strings in a file."
+---
+
+A customer disputes a reply Atlas sent on the 14th. You need to know what the agent was working from.
+
+The prompt lives in the repo, so you check out the commit that was deployed that day. That gets you the *template*. It does not get you: which of nineteen tool descriptions were in the catalogue that afternoon, whether the retrieval `k` was still 8 or had already been lowered to 5, which corpus build was live, what the sampling temperature was, or which model version the provider was actually serving behind the string `claude-sonnet-5`.
+
+Every one of those changed what the model saw. None of them is in the commit.
+
+> **The git SHA identifies your code. It does not identify what the model was given, which is the only thing that determines what it did.**
+
+## Version the resolved bundle, not the pieces
+
+The mistake is treating the prompt as the artifact. The prompt is one input to an assembly step that runs at request time and produces the actual artifact: the token sequence the model received.
+
+<Figure caption="Seven inputs, assembled at request time. Versioning any one of them tells you almost nothing about the result." frame={false}>
+
+```
+   system prompt template   ┐
+   tool catalogue + schemas ┤
+   sampling parameters      ┤        ┌──────────┐
+   model id + provider      ┼──────▶ │ ASSEMBLE │ ──▶ what the model
+   retrieval config (k, …)  ┤        └──────────┘     actually saw
+   corpus build             ┤              │
+   graph topology           ┘              │
+                                           ▼
+                                  config_hash: 7f2a91…
+                                  ── recorded on every run
+```
+
+</Figure>
+
+So the deployable artifact is the **resolved configuration bundle**, and it gets a content-addressed identity: hash the whole resolved set, record the hash on every run and every span, and store the bundle keyed by hash.
+
+That single field answers the opening question in one query, and it is the join key that makes everything else in this part work: [cost accounting](/book/observability/cost-accounting) by version, [drift detection](/book/observability/drift) with a stable baseline, [replay](/book/observability/replay-debugging) that knows whether a recording is still valid, and rollout comparisons that are comparing two known things.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/config/bundle.ts"
+export interface ConfigBundle {
+  systemPromptId: string;      // immutable content id, not "v2"
+  toolCatalogueHash: string;   // descriptions ARE prompt text
+  model: { id: string; provider: string; region: string };
+  // Whatever shapes generation on the model you actually call. On current
+  // frontier models temperature/topP are rejected and `effort` is the lever
+  // — record the one that exists, or the bundle stops naming the behaviour.
+  sampling: { effort?: string; temperature?: number; topP?: number; maxTokens: number };
+  retrieval: { k: number; indexBuild: string; rerank: boolean };
+  graphVersion: string;
+  corpusBuild: string;
+}
+
+// Content-addressed. Two deploys that produce the same bundle are the
+// same configuration, whatever the git history says.
+export function bundleHash(b: ConfigBundle): string {
+  return sha256(canonicalJson(b)).slice(0, 16);
+}
+
+// Resolved ONCE, at run start, and carried for the whole run — because a
+// run that changes configuration mid-execution is not one experiment; it
+// is two, spliced, and neither is interpretable.
+// The exception is policy: tier thresholds and authorization are NOT
+// carried. They resolve at the moment of each action, or a run that
+// paused on Friday acts on Friday's permissions. See /production/rollout/.
+export function resolveForRun(runId: string, env: Env): ConfigBundle {
+  const b = env.activeBundle();
+  recordOnRun(runId, { configHash: bundleHash(b) });
+  return b;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/config/bundle.py"
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class ConfigBundle:
+    system_prompt_id: str      # immutable content id, not "v2"
+    tool_catalogue_hash: str   # descriptions ARE prompt text
+    model_id: str
+    provider: str
+    region: str
+    # Whatever shapes generation on the model you actually call: current
+    # frontier models reject temperature/top_p and take `effort` instead.
+    effort: str | None
+    temperature: float | None
+    top_p: float | None
+    max_tokens: int
+    retrieval_k: int
+    index_build: str
+    rerank: bool
+    graph_version: str
+    corpus_build: str
+
+
+def bundle_hash(b: ConfigBundle) -> str:
+    # Content-addressed. Two deploys producing the same bundle are the
+    # same configuration, whatever the git history says.
+    return sha256(canonical_json(b))[:16]
+
+
+def resolve_for_run(run_id: str, env) -> ConfigBundle:
+    # Resolved ONCE, at run start, and carried for the whole run — except
+    # policy: tier thresholds and authorization resolve at the moment of
+    # each action, or a run that paused on Friday acts on Friday's
+    # permissions. See /production/rollout/.
+    b = env.active_bundle()
+    record_on_run(run_id, config_hash=bundle_hash(b))
+    return b
+```
+
+</Tab>
+</Tabs>
+
+Three fields in that struct are the ones teams leave out, and each has cost someone a week:
+
+**`toolCatalogueHash`.** A tool description is prompt text that happens to live in a schema. [Part VIII said so](/book/tools/tool-discovery) for quality reasons and [Part XVII said so](/book/security/least-privilege) for security reasons. Editing a description changes the agent's behavior exactly as editing the system prompt does, and it usually ships in a PR reviewed as a code change.
+
+**`corpusBuild`.** The [drift chapter's](/book/observability/drift) most common culprit. A re-index changes what the agent reads without changing a byte of your code.
+
+**`region`.** Same model string, different endpoint, different serving stack, and a [compliance-relevant](/book/security/pii-and-compliance) difference besides.
+
+## Immutable identities, not semantic versions
+
+The instinct is `prompt-v2.1.3`. It does not survive contact with reality, because there is no meaningful notion of a backward-compatible prompt change: a "patch" wording tweak can move behavior more than a "major" restructuring, and nobody can tell which in advance.
+
+Use **immutable content-addressed IDs plus a manifest**. The prompt is stored by its own hash and never edited in place; the manifest says which ID is active in which environment. That gives three properties semantic versioning does not:
+
+- **Rollback is repointing**, not reverting. The old artifact still exists, byte-identical.
+- **Two environments can be compared exactly**, because "staging is on `7f2a91`" is a fact rather than an inference.
+- **Nothing is ambiguous under concurrent edits.** Two people changing the prompt produce two IDs, not a merge conflict resolved by whoever pushed last.
+
+The human-readable label lives in the manifest as metadata: an author, a date, a change description, and, most importantly, its evaluation results.
+
+> **A version without a score is not a version. It is a guess with a hash.**
+
+Every bundle promoted to production should carry the [eval run](/book/evals/ci-for-agents) that justified it, stored with the bundle. This is what makes six-months-later questions answerable: *why did we ship this* has an artifact, not a memory.
+
+## What rollback actually means here
+
+Rollback is where the classical model breaks, because the system has four layers and you control three of them.
+
+| Layer | Rollback | Latency |
+| --- | --- | --- |
+| **Prompt / bundle** | Repoint the manifest | Seconds |
+| **Graph / code** | Ordinary deploy rollback | Minutes |
+| **Corpus** | Repoint to the previous index build | Minutes, **if you kept it** |
+| **The model** | **You cannot** | — |
+
+The corpus row is the one that needs a decision in advance: an index build that has been deleted is not a rollback target, so retain the previous build long enough to fall back to it, and treat "re-index in place" as a change with no undo.
+
+The last row is the honest limit. You cannot roll back the provider's model. If behavior on a pinned model string shifts, and [it does](/book/observability/drift), your available moves are to switch to a different pinned version if one is offered, to adapt the prompt around the new behavior, or to fall back to [another rung of the ladder](/book/reliability/fallbacks-and-breakers). Which reframes what the version pin is for: it is not a guarantee, it is a **record**, and its value is that when behavior changes you can prove the change was not yours.
+
+<Aside type="caution" title="Rollback does not un-send">
+A bad prompt shipped at 14:00 and rolled back at 14:40 still produced forty minutes of replies that reached customers, credits that were issued, and [memory writes](/book/context/memory) that persist.
+
+This is [the class ⑤ problem](/book/tools/read-and-write-tools) at deploy scale, and it is why the next chapter treats rollout as a blast-radius decision rather than a percentage. Fast rollback bounds the damage; it does not reverse it, and any durable state the bad version wrote needs its own cleanup, which is a thing to have thought about before you need it.
+</Aside>
+
+## Decoupling deploy from release
+
+Putting the bundle in a store rather than the binary is the right call. It makes rollback seconds instead of minutes and lets you change a prompt without a deploy pipeline. It also removes the safety rails that code review and CI were providing, so it comes with obligations:
+
+**A config change is a reviewed change.** Same PR flow, same approvals. Otherwise you have built a production-mutation channel that bypasses every control in [Part XVII](/book/security/least-privilege), and a prompt is exactly the kind of thing an attacker or a well-meaning hurried colleague would want to edit.
+
+**A config change runs the eval suite.** Promotion is gated on the score, not on someone's read of the diff.
+
+**A config change is a deploy event.** It appears in the same timeline as code deploys, because [drift diagnosis](/book/observability/drift) starts with "what changed" and a change invisible to that query is a change that will be blamed on the model.
+
+**One environment cannot silently diverge.** The manifest per environment is itself versioned, so "what is production running" is a stored fact rather than a live read of a mutable key.
+
+## Atlas, concretely
+
+| Artifact | Identity | Storage | Rollback |
+| --- | --- | --- | --- |
+| System prompt | Content hash | Object store, immutable | Repoint manifest |
+| Tool catalogue | Hash of all schemas + descriptions | With the code | Deploy |
+| Model | Pinned id + provider + region | In the bundle | Ladder, not rollback |
+| Sampling params | In the bundle | With the bundle | Repoint |
+| Graph | Git SHA + `graphVersion` | Code | [Worker versioning](/book/durable-execution/determinism-and-retries) |
+| Retrieval config | In the bundle | With the bundle | Repoint |
+| Corpus | Index build id | Two builds retained | Repoint to previous |
+| **The bundle** | `sha256` of all the above | Manifest per environment | **The unit of rollback** |
+| On every run | `config_hash` on the run row and every span | — | — |
+
+The bottom two rows are the chapter. One hash names the whole configuration, one manifest says which hash is live, and one field on every run joins a customer complaint on the 14th to the exact bytes the model was given, including the tool description someone tightened that morning and did not think of as a prompt change.
+
+---
+
+Next: [Rollout and In-Flight Migration](/book/production/rollout), shipping a change while thousands of agent runs are mid-execution.
+
+## Takeaways
+
+- The git SHA identifies your code, not what the model was given, and only the latter determines what it did.
+- The deployable artifact is the resolved configuration bundle: prompt, tool catalogue, model, sampling, retrieval config, graph, corpus build.
+- Content-address the bundle and record `config_hash` on every run and span. That field is the join key for cost, drift, replay, and rollout comparisons.
+- Tool descriptions are prompt text. Editing one changes behavior and usually ships in a PR reviewed as code.
+- The corpus build belongs in the bundle. A re-index changes what the agent reads without changing a byte of code.
+- Region belongs in the bundle: same model string, different serving stack, and a compliance difference.
+- Use immutable content-addressed IDs plus a manifest, not semantic versions. There is no backward-compatible prompt change, and nobody can predict which edit moves behavior most.
+- Immutable IDs give repoint-rollback, exact environment comparison, and no ambiguity under concurrent edits.
+- A version without a score is a guess with a hash. Store the eval run that justified each promoted bundle.
+- Four layers, three of them rollbackable. You cannot roll back the provider's model. The pin is a record, not a guarantee, and its value is proving the change was not yours.
+- Retain the previous corpus build, or "roll back the index" is not an available move.
+- Rollback does not un-send. Forty minutes of a bad prompt is forty minutes of real replies and real credits, plus durable state that needs its own cleanup.
+- Config in a store beats config in the binary, but a config change must still be reviewed, eval-gated, and recorded as a deploy event, or you have built a control-bypassing mutation channel that drift diagnosis cannot see.

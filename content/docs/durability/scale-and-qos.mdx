@@ -1,0 +1,230 @@
+---
+title: "Scale and Quality of Service"
+description: "Fan-out across thousands of cases, provider quotas, priority queues, and fairness across tenants."
+---
+
+Scaling a normal service is a familiar exercise: measure, add workers, measure again. Scaling an agent starts the same way and then stops working, for a reason worth stating before any configuration.
+
+## The bottleneck is not yours
+
+| You control | You do not control |
+| --- | --- |
+| Worker count and size | Tokens per minute on your provider key |
+| Task queue partitioning | Requests per minute |
+| Concurrency limits | The provider's own capacity |
+| Retry and backoff policy | How fast a warehouse query returns |
+
+Add workers to a normal service and throughput rises until some resource you own saturates. Add workers to an agent fleet and throughput rises until you hit a quota that lives in **someone else's account limits**. After that, every additional worker produces `429`s faster, which produces retries, which consume more of the same quota.
+
+Past that point, **more capacity makes the system worse.** That inversion is the whole subject of this chapter, and it is why agent scaling is a scheduling problem rather than a provisioning one.
+
+> **The unit of capacity is tokens per minute, and it is shared by every workflow in the fleet.**
+
+## Where the limit belongs
+
+Three places can enforce a rate, and only one of them is usually right.
+
+**Per worker.** `max_activities_per_second`, and `max_concurrent_activities` which defaults to 200. These bound one process. For a quota shared across the fleet they are misleading: ten workers each limited to 50 calls per second is a fleet limit of 500, and the number you configured appears nowhere in the outcome.
+
+**Per task queue.** `maxTaskQueueActivitiesPerSecond`, enforced **across all workers polling that queue**. This is the one that matches a shared quota, because the quota is also shared across all workers.
+
+**In a gateway.** Necessary when something outside Temporal uses the same provider key, since the task queue cannot see traffic it does not dispatch.
+
+The rule that picks between them:
+
+> **Put the limit wherever the quota is shared.**
+
+Which leads to a partitioning that looks odd until you see why: **one task queue per rate-limited dependency**, not one per service or per team.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/workers.ts"
+// The model quota is shared fleet-wide, so the limit lives on the queue.
+await Worker.create({
+  taskQueue: 'atlas-model',
+  activities: { callModel },
+  maxTaskQueueActivitiesPerSecond: 40,   // across every worker on this queue
+  maxConcurrentActivityTaskExecutions: 20,
+});
+
+// The warehouse has its own, unrelated ceiling.
+await Worker.create({
+  taskQueue: 'atlas-warehouse',
+  activities: { queryWarehouse },
+  maxTaskQueueActivitiesPerSecond: 10,
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/workers.py"
+# The model quota is shared fleet-wide, so the limit lives on the queue.
+model_worker = Worker(
+    client,
+    task_queue="atlas-model",
+    activities=[call_model],
+    max_task_queue_activities_per_second=40,   # across every worker on this queue
+    max_concurrent_activities=20,
+)
+
+# The warehouse has its own, unrelated ceiling.
+warehouse_worker = Worker(
+    client,
+    task_queue="atlas-warehouse",
+    activities=[query_warehouse],
+    max_task_queue_activities_per_second=10,
+)
+```
+
+</Tab>
+</Tabs>
+
+<Aside type="note" title="This is what moves schedule-to-start latency">
+[The previous part](/book/durable-execution/determinism-and-retries) said to monitor schedule-to-start latency as a scaling signal rather than setting a timeout on it. This chapter is the reason it moves.
+
+A rate-limited queue makes tasks wait. That is its job. Schedule-to-start latency rising is the system working correctly under a quota, not a fault. Which is exactly why a schedule-to-start *timeout* on those activities would be self-defeating: it would fail the work for having been throttled.
+
+Set the limit too low and the latency grows without bound. Watch the metric; do not enforce a deadline on it.
+</Aside>
+
+## Fan-out without a thundering herd
+
+A nightly reconciliation over ten thousand cases. The instinct is to throttle the fan-out: a semaphore in the parent, batches of fifty, a loop with a sleep.
+
+With a rate-limited task queue, none of that is necessary:
+
+<Figure caption="The queue is the backpressure. Starting ten thousand children does not start ten thousand model calls." frame={false}>
+
+```
+   parent workflow
+        │  starts 10,000 children (cheap: one event each)
+        ▼
+   ┌──────────────────────────────────────────┐
+   │  atlas-model queue · 40/sec              │
+   │  ████████████████░░░░░░░░░░░░░░░░░░░░░░  │ ← backlog, by design
+   └──────────────────┬───────────────────────┘
+                      │ 40/sec, regardless of backlog depth
+                      ▼
+              workers ── provider (quota respected)
+```
+
+</Figure>
+
+Start all of them. They queue. The rate limit dispatches at the pace the provider tolerates, and the backlog is durable. A crash does not lose it, and adding workers does not exceed the quota because the limit is on the queue rather than on the worker.
+
+That is simpler than a hand-rolled semaphore, and it is more correct. A semaphore in the parent only bounds *that parent's* fan-out, while the queue bounds everything.
+
+The one thing to keep is a bound on the parent's own history. Ten thousand children is ten thousand events, and [the ceiling](/book/durability/long-lived-agents) applies to parents too. Batch the fan-out into child workflows that each start a slice, or continue-as-new between slices.
+
+## Priority: not all work is equal
+
+Tasks carry an integer priority from **1 (highest) to 5 (lowest)**, on workflows, activities, and child workflows alike. Dispatch is strict: every priority-1 task goes before any priority-4 task.
+
+For Atlas the mapping is obvious once you look at it: a customer waiting on a live chat is priority 1, a ticket in the normal queue is 3, and the nightly reconciliation is 5.
+
+<Aside type="caution" title="Strict priority means low-priority work can starve, and that is the feature">
+If priority-1 traffic never drains, priority-5 work never runs. That is not a defect; it is what strict priority means, and treating it as a bug leads people to build elaborate aging schemes that quietly defeat the ordering they asked for.
+
+If you want low-priority work to make progress under sustained load, you do not want priority. You want fairness, below. The two answer different questions: priority asks *what matters more*, fairness asks *who gets a turn*.
+</Aside>
+
+## Fairness: one tenant cannot starve the rest
+
+Fairness assigns each task a **fairness key**, and each key gets its own virtual queue within the task queue. Dispatch cycles round-robin across keys, so a key with a huge backlog does not monopolise workers.
+
+Weights adjust the share. The default is 1.0, and a key at 2.0 is dispatched twice as often.
+
+The composition rule is worth memorising, because it is what makes the two features coherent rather than competing:
+
+> **Priority determines which sub-queue (1–5) a task enters. Fairness determines dispatch order within each priority level.**
+
+So a priority-1 task from a noisy tenant still beats a priority-3 task from a quiet one. But among the priority-1 tasks, the noisy tenant does not get more than its share.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/dispatch.ts"
+await client.workflow.start(atlasWorkflow, {
+  taskQueue: 'atlas',
+  workflowId: `ticket-${ticket.id}`,
+  args: [ticket],
+  priority: {
+    priorityKey: ticket.channel === 'live_chat' ? 1 : 3,
+    fairnessKey: ticket.tenantId,        // one virtual queue per tenant
+    fairnessWeight: tenantPlan.weight,   // enterprise 2.0, standard 1.0
+  },
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/dispatch.py"
+await client.start_workflow(
+    AtlasWorkflow.run,
+    ticket,
+    id=f"ticket-{ticket.id}",
+    task_queue="atlas",
+    priority=Priority(
+        priority_key=1 if ticket.channel == "live_chat" else 3,
+        fairness_key=ticket.tenant_id,        # one virtual queue per tenant
+        fairness_weight=tenant_plan.weight,   # enterprise 2.0, standard 1.0
+    ),
+)
+```
+
+</Tab>
+</Tabs>
+
+Without this, one customer bulk-importing five thousand tickets delays every other customer on the platform: the classic noisy-neighbour failure, arriving through a queue rather than through a database. Using the tenant ID as the fairness key removes it in one line, which is a much better deal than the per-tenant worker pools people build instead.
+
+## The production cluster, briefly
+
+[Setup](/book/setup) pointed here with a warning worth repeating: `temporal server start-dev` is one process over SQLite. A production deployment is a cluster: frontend, history, matching, and worker services, over a real database. Each has its own scaling characteristics and its own failure modes.
+
+Two consequences that matter at this altitude. **Matching service throughput is what task queue partitioning actually buys**, which is another reason to split queues by dependency rather than by team. And **history service load scales with event volume**, so the chatty workflows from [the previous chapter](/book/durability/long-lived-agents) cost the cluster as well as their own ceiling.
+
+Running that cluster yourself is a real operational commitment, and the managed option exists precisely because most teams should not.
+
+## Cost is a QoS dimension
+
+The thing the queue metaphor hides: a fair share of tokens is a fair share of **money.** Fairness keys distribute throughput, and throughput is spend.
+
+Which makes per-tenant token budgets the natural companion to fairness keys. A tenant that has exhausted its monthly allocation should drop in priority or stop rather than continue consuming a fair share of a quota someone else is paying for. That is [cost accounting](/book/observability/cost-accounting) as an admission-control input rather than as a monthly report, and it is the version of this that finance notices.
+
+## Atlas, concretely
+
+| Concern | Setting |
+| --- | --- |
+| Model calls | `atlas-model` queue, 40/sec across the fleet |
+| Warehouse queries | `atlas-warehouse` queue, 10/sec |
+| ERP writes | `atlas-erp` queue, 5/sec, `max_concurrent_activities: 5` |
+| Live chat tickets | Priority 1 |
+| Standard tickets | Priority 3 |
+| Nightly reconciliation | Priority 5 |
+| Fairness key | Tenant ID, everywhere |
+| Fairness weight | 2.0 enterprise, 1.0 standard |
+| Fan-out | Unthrottled. The queue is the backpressure |
+
+One line in that table is the whole chapter: **fan-out is unthrottled.** Everything that would have been a semaphore, a batch size, a sleep, or a per-tenant worker pool is instead a property of a queue: durable, fleet-wide, and visible in one place rather than distributed across the call sites that happened to remember it.
+
+---
+
+Next: [Paying for Durability in Milliseconds](/book/durability/latency). Local activities, early return, eager start: where durability costs latency and where it does not.
+
+## Takeaways
+
+- Adding workers raises throughput until you hit a quota in someone else's account. Past that point more capacity produces more 429s, more retries, and more contention.
+- The unit of capacity is tokens per minute, shared by every workflow in the fleet. Agent scaling is scheduling, not provisioning.
+- Per-worker limits multiply by worker count and so do not bound a shared quota. Put the limit where the quota is shared: usually the task queue, sometimes a gateway.
+- Partition task queues by rate-limited dependency, not by team or service.
+- A rate-limited queue makes schedule-to-start latency rise on purpose. Monitor it; never put a schedule-to-start timeout on throttled work.
+- With a rate-limited queue you do not need to throttle fan-out. Start everything; the queue is durable backpressure, and it bounds the whole fleet rather than one parent.
+- Still bound the parent's own history. Ten thousand children is ten thousand events.
+- Priority runs 1 to 5, strictly: every 1 before any 4. Low-priority starvation under sustained load is what strict priority means, not a bug.
+- Priority asks what matters more; fairness asks who gets a turn. Fairness keys create virtual queues dispatched round-robin, with weights adjusting share.
+- Priority selects the sub-queue; fairness orders within it. A priority-1 task from a noisy tenant still beats a priority-3 task from a quiet one.
+- Tenant ID as the fairness key removes the noisy-neighbour problem in one line, instead of per-tenant worker pools.
+- A fair share of tokens is a fair share of money, which makes per-tenant budgets an admission-control input rather than a monthly report.

@@ -1,0 +1,13 @@
+{
+  "title": "Retrieval Patterns",
+  "pages": [
+    "query-rewriting",
+    "hybrid-fusion",
+    "two-stage-rerank",
+    "parent-child-chunks",
+    "filtered-retrieval",
+    "grounded-citations",
+    "retrieval-as-tool",
+    "freshness-routing"
+  ]
+}

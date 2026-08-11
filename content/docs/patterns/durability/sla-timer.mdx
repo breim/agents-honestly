@@ -1,0 +1,204 @@
+---
+title: "Updatable SLA Timer"
+description: "A deadline that moves when new information arrives."
+---
+
+## Problem
+
+Meridian's contract says a support ticket gets a substantive response within 14 days. Atlas sets a timer when the ticket opens.
+
+Then reality happens. The customer replies on day 3, which under the contract resets the clock. On day 6 the ticket is escalated to priority, which shortens the window to 48 business hours. On day 7 the customer goes quiet pending a shipment, and the clock pauses. On day 9 they reply again.
+
+A timer set once on day 0 is wrong from day 3 onward, and it fires at the wrong moment with no indication that it was ever wrong. The naive fix, a cron job scanning for overdue tickets, reintroduces polling, gets the business-hours arithmetic wrong in a different place, and has no idea what the agent was in the middle of.
+
+## Forces
+
+- **The deadline is derived**, not fixed: it depends on the ticket's history, its tier, and the contract.
+- **Events that change it arrive asynchronously** and unpredictably.
+- **The timer must survive** deploys, crashes, and [continue-as-new](/book/patterns/durability/continue-as-new-memory).
+- **Firing early is as bad as firing late**: a premature escalation costs a person's attention.
+- **Business hours are not wall-clock hours**, and the conversion is where most implementations get it wrong.
+- **The timer and the agent's work race**, and both outcomes need handling.
+
+## Solution
+
+Hold an **absolute deadline in workflow state**, race a cancellable timer against the events that can change it, and re-arm on every change.
+
+<Figure caption="One absolute deadline in state; the timer is derived from it and re-armed whenever it moves." frame={false}>
+
+```
+   state.deadline  ──▶  2026-08-23T17:00Z         (absolute, always)
+        │
+        ▼
+   race( timer(deadline - now) , customerReply , tierChange , resolved )
+        │                              │              │           │
+        │  fires                       │ resets       │ shortens  │ cancels
+        ▼                              ▼              ▼           ▼
+   escalate                      recompute       recompute     done
+                                       │              │
+                                       └──────┬───────┘
+                                              ▼
+                                    state.deadline = f(history, tier, contract)
+                                    cancel old timer · arm new one
+
+   day 0   deadline = +14d
+   day 3   reply         → deadline = day 3 + 14d
+   day 6   priority      → deadline = day 6 + 48 business hours
+   day 7   awaiting ship → paused; remaining stored, deadline cleared
+   day 9   reply         → deadline = day 9 + remaining
+```
+
+</Figure>
+
+Four rules:
+
+**Store the deadline, derive the timer.** State holds an absolute timestamp; the sleep duration is computed from it at arming time. The reverse, storing "9 days remaining," is wrong after any pause and meaningless after a [continue-as-new](/book/patterns/durability/continue-as-new-memory), where the new run has no idea when the old one started.
+
+**Cancel and re-arm; never stack timers.** Every recomputation cancels the outstanding timer before arming a new one. Stacked timers fire at every superseded deadline, which produces escalations that look random and are perfectly deterministic.
+
+**Compute business hours in an activity.** Holiday calendars, regional hours, and contract terms change, and a workflow that hardcodes them will [replay differently](/book/durable-execution/determinism-and-retries) after the calendar is updated. Compute the absolute deadline in an activity, record the result, and let the workflow hold a plain timestamp.
+
+**Pausing stores remaining, not a state flag alone.** When the clock stops, store how much was left and clear the deadline. On resume, the new deadline is `now + remaining`, which is the only version that survives a pause of unknown length.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/sla.ts"
+interface SlaState {
+  deadlineIso: string | null;   // absolute; null while paused
+  remainingMs: number | null;   // set only while paused
+  tier: Tier;
+}
+
+export async function runWithSla(state: RunState, sla: SlaState) {
+  while (!state.done) {
+    // Derive the sleep from the absolute deadline, every time.
+    const wait = sla.deadlineIso
+      ? new Promise<'timer'>(r => setTimeout(() => r('timer'),
+          Date.parse(sla.deadlineIso!) - Date.now()))
+      : never<'timer'>();                       // paused: no timer at all
+
+    const scope = new CancellationScope();      // cancel-and-re-arm, never stack
+    const outcome = await scope.run(() => Promise.race([
+      wait,
+      onSignal(customerReply).then(() => 'reply' as const),
+      onSignal(tierChanged).then(() => 'tier' as const),
+      onSignal(awaitingThirdParty).then(() => 'pause' as const),
+    ]));
+    scope.cancel();
+
+    switch (outcome) {
+      case 'timer':
+        return escalate(state, 'sla_breached');
+      case 'pause':
+        sla.remainingMs = Date.parse(sla.deadlineIso!) - Date.now();
+        sla.deadlineIso = null;                 // store remaining, clear deadline
+        break;
+      default:
+        // Business-hours arithmetic lives in an activity: calendars change,
+        // and workflow code that hardcodes them diverges on replay.
+        sla.deadlineIso = await computeDeadline({
+          tier: sla.tier, from: nowIso(), carryMs: sla.remainingMs,
+        });
+        sla.remainingMs = null;
+    }
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/sla.py"
+@dataclass
+class SlaState:
+    deadline_iso: str | None    # absolute; None while paused
+    remaining_s: float | None   # set only while paused
+    tier: str
+
+
+async def _tagged(tag: str, awaitable):
+    await awaitable
+    return tag
+
+
+async def run_with_sla(state, sla: SlaState) -> None:
+    while not state.done:
+        # Derive the sleep from the absolute deadline, every time.
+        if sla.deadline_iso:
+            secs = (parse(sla.deadline_iso) - workflow.now()).total_seconds()
+            timer = asyncio.sleep(secs)
+        else:
+            timer = never()                           # paused: no timer
+
+        # Tag the branches; do NOT race on identity. asyncio.wait wraps bare
+        # coroutines in Tasks, so `if coro in done` silently never matches —
+        # and every candidate must be an explicit Task for that reason too.
+        candidates = [
+            asyncio.create_task(_tagged("timer", timer)),
+            asyncio.create_task(_tagged("reply", wait_signal("customer_reply"))),
+            asyncio.create_task(_tagged("tier", wait_signal("tier_changed"))),
+            asyncio.create_task(_tagged("pause", wait_signal("awaiting_third_party"))),
+        ]
+        done, pending = await asyncio.wait(
+            candidates, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()                                # cancel; never stack
+
+        outcome = next(iter(done)).result()
+
+        if outcome == "timer":
+            return await escalate(state, "sla_breached")
+
+        if outcome == "pause":
+            sla.remaining_s = (parse(sla.deadline_iso) - workflow.now()).total_seconds()
+            sla.deadline_iso = None       # store remaining, clear deadline
+        else:
+            # Business-hours arithmetic in an activity: calendars change.
+            sla.deadline_iso = await workflow.execute_activity(
+                compute_deadline, sla.tier, workflow.now(), sla.remaining_s)
+            sla.remaining_s = None
+```
+
+</Tab>
+</Tabs>
+
+`computeDeadline` being an activity is the subtle part. Business-hours arithmetic reads a calendar, the calendar changes, and workflow code that reads it directly produces a different answer on replay than it did originally. That is [divergence](/book/durable-execution/determinism-and-retries), and it will surface as a workflow task failure months after the code was written.
+
+## Trade-offs
+
+**Timers are cheap but not free.** Each pending timer is a scheduled event on the service. Thousands of tickets each holding one is normal and worth knowing about; each recomputation adds cancel-and-arm events to the [history](/book/patterns/durability/continue-as-new-memory), so a ticket with a chatty customer accumulates them.
+
+**The deadline must cross continue-as-new.** As an absolute timestamp, it crosses cleanly. As a remaining duration, it silently restarts at the full window, a bug that only appears on long-lived tickets, which are exactly the ones the SLA is about.
+
+**Recomputation is a business rule with real consequences.** Whether a customer reply resets, extends, or pauses the clock is a contractual question, and getting it wrong in the generous direction costs money while the strict direction costs escalations. Put the rule in one activity, test it, and version it with the [config bundle](/book/production/versioning).
+
+**Firing is an event, not an outcome.** A breach signal that escalates is right; one that silently marks a field is a metric nobody reads. Route it into the same [escalation package](/book/first-agent/the-problem) as anything else that needs a person.
+
+## When not to use it
+
+**When the deadline never moves.** A fixed 30-minute timeout is a plain timer. This pattern exists for deadlines derived from events.
+
+**When the run is short.** A deadline shorter than the run's typical duration belongs to the [run budget](/book/reliability/timeouts-and-retries), not to an SLA mechanism.
+
+**When it is a reminder rather than a contract.** A nudge to a human is better served by a scheduled notification outside the workflow, one less thing in the history, and no correctness requirement.
+
+**When you would use it to poll.** A timer that fires every five minutes to check something is a poll wearing a timer's clothes. Wait on the event itself, or use a [signal](/book/patterns/durability/signal-with-start).
+
+<Aside type="caution" title="The timer is not the SLA; the state is">
+The most common bug in implementations of this pattern is treating the timer as the source of truth. It is not: it is a derived, disposable artifact, and there may be zero of them at any moment while the ticket is paused.
+
+The SLA is `state.deadlineIso`. Everything else, the sleep, the cancellation scope, the race, is machinery for noticing when that timestamp passes. Which means the correct question to ask a running workflow is *what is the deadline*, answerable by a [query](/book/durable-execution/signals-and-children) against state, and never *is there a timer pending*.
+
+Systems that get this backwards discover it during a deploy, when the timers are re-armed from state and the ones whose state was never written simply cease to exist.
+</Aside>
+
+## Related
+
+- [Approval Gate](/book/patterns/durability/approval-gate): the other thing the workflow races a timer against
+- [Signal With Start](/book/patterns/durability/signal-with-start): how the customer reply that resets the clock arrives
+- [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory): why the deadline must be absolute
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the long-lived workflow that holds the deadline
+- [Signals and Children](/book/durable-execution/signals-and-children): the mechanics of waiting on one of several things

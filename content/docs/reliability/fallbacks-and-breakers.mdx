@@ -1,0 +1,196 @@
+---
+title: "Fallbacks and Circuit Breakers"
+description: "Degrading to a smaller model, another provider, or a human, instead of failing."
+---
+
+The fallback worked perfectly. That is the problem.
+
+At 09:40 the primary provider degrades. The gateway fails over to the secondary, availability holds at 100%, no alert fires, and nobody notices anything for six days. On the seventh, a support lead asks why the drafted replies have been "a bit off" all week: vaguer, occasionally omitting the order number, once citing a policy that does not exist.
+
+The secondary model formats tool arguments slightly differently, so one parser has been silently dropping a field. Every request returned `200 OK`. Every dashboard was green. Availability was never the thing that broke.
+
+> **A fallback is not a transparent substitute. It is a different system, running your production traffic, that you have never evaluated.**
+
+That is the tension this chapter is about. Fallbacks are genuinely necessary, since a provider outage should not be your outage. And the naive implementation trades a loud failure for a quiet one, which for a system whose [worst failure mode is plausible output](/book/reliability/error-taxonomy) is usually a bad trade.
+
+## The breaker, and why it matters more here
+
+Start with the mechanism that is not controversial.
+
+A circuit breaker tracks failures against a dependency and has three states: **closed** (traffic flows, failures counted), **open** (the threshold tripped, so requests fail immediately without being attempted), and **half-open** (after a cooldown, a small number of probe requests test whether it recovered).
+
+<Figure caption="The open state is the entire value. Failing fast is what stops your retries from becoming the dependency's second outage." frame={false}>
+
+```
+                failures exceed threshold
+        CLOSED ───────────────────────────▶ OPEN
+          ▲                                  │
+          │                                  │ cooldown elapses
+          │ probes succeed                   ▼
+          └────────────────────────── HALF-OPEN
+                                            │
+                                            │ a probe fails
+                                            └──▶ back to OPEN
+```
+
+</Figure>
+
+[The retry chapter](/book/reliability/timeouts-and-retries) showed how ninety seconds of provider degradation becomes forty minutes of self-inflicted load. The breaker is the control that ends that: once open, calls fail instantly, retries stop being generated, the queue stops growing, and the fallback path, or a clean failure, takes over immediately.
+
+Two configuration details are specific to agents:
+
+**One breaker per (provider, model, region), not one per provider.** A single model being overloaded is the common case, and a global breaker either trips on a partial failure or never trips at all.
+
+**Trip on latency, not only on errors.** A provider that is answering slowly is failing, from your perspective. Runs blow their [deadline](/book/reliability/timeouts-and-retries) and burn budget without producing anything. A p99 that crosses a threshold should open the breaker as surely as a 5xx rate does.
+
+And a half-open probe on an agent has a subtlety worth handling: **probe with a cheap, synthetic call**, not with a real user's run. Half-open sends real traffic into a dependency you believe is broken; on a system where one run costs dollars and carries a customer's ticket, that traffic should be a throwaway health check.
+
+## The ladder, in order of how much it changes
+
+The word "fallback" covers six different moves, and they are not interchangeable. Ordered by how much the output changes:
+
+| Rung | What changes | Detectable how |
+| --- | --- | --- |
+| **1 · Retry** | Nothing | Latency |
+| **2 · Same model, other region/endpoint** | Nothing meaningful | Latency |
+| **3 · Reduce scope**: shorter context, fewer tools, no speculative calls | Quality, slightly and predictably | Evals |
+| **4 · Smaller model, same provider** | Format, tool-calling reliability, judgment | **Evals only** |
+| **5 · Different provider** | All of the above, more so | **Evals only** |
+| **6 · [Escalate to a human](/book/human-in-the-loop/escalation-and-audit)** | The work moves | Queue depth |
+
+Rungs 1 and 2 are free and you should take them automatically. Rung 6 is the honest one and is chronically under-used. The interesting argument is about 3 versus 4 and 5.
+
+**Prefer rung 3 to rungs 4 and 5.** Degrading *scope* on the model you have already evaluated is a change whose effect you can predict and measure. Swapping the model changes the one component whose behavior you cannot fully specify, in production, without warning, on a path nobody tested. If a run can succeed with less retrieved context or a narrower tool set, that is a better degradation than the same run on a different model.
+
+**Rung 6 is a first-class fallback and the one that is uniquely available to agents.** You already built the queue, the [approval card](/book/human-in-the-loop/approval-gates), and the escalation path. A support ticket handled by a person when the model tier is unavailable is a completely correct outcome, and it is often better than a worse answer produced automatically. The systems that handle provider outages most gracefully are the ones that route to humans early rather than degrading three rungs first.
+
+## Four ways fallbacks fail
+
+**1 · Silent quality degradation.** The opening scene. The fallback returns `200 OK` and worse output, so error-rate monitoring, which is all most systems have, sees a perfect week. The fix is that **the fallback path must be observable as a fallback**: tag every span and every result with the model that actually served it, alert on the *rate of fallback*, not only on errors, and run your [online quality monitors](/book/evals/online-evals) segmented by served model. If you cannot answer "what fraction of last week's replies came from the secondary," you cannot detect this class at all.
+
+**2 · The fallback path is never tested.** It runs 0.1% of the time, so it is the least-exercised code in the system, and it is exercised for the first time during an incident. Two disciplines fix it. **Evaluate the fallback configuration as its own variant** in [CI](/book/evals/ci-for-agents): the same suite, the secondary model, a quality bar it must clear to remain in the ladder. And **route a small, continuous share of traffic** to it deliberately, so it is warm and monitored rather than theoretical. [Failure injection](/book/reliability/failure-injection) is the next chapter and this is its most valuable single target.
+
+**3 · Falling back mid-run.** Switching models at step twelve of a twenty-step run means the second half is decided by a model that did not make the first half's decisions, reading a transcript in another model's voice. It may re-decide settled questions, re-call tools, or contradict its own earlier reasoning. **Prefer to fail over at run boundaries**: let the current run fail cleanly and [resume from its checkpoint](/book/langgraph/persistence) on the fallback, rather than swapping underneath a live conversation. Where mid-run failover is unavoidable, it belongs at a node boundary with the switch recorded in the trace.
+
+**4 · The fallback has no capacity.** Everyone's secondary is the same secondary, and provider outages correlate. Failing over converts your outage into a thundering herd against a provider that is now receiving everyone else's traffic too. Which means the ladder's bottom rungs, reduced scope, queue-and-retry-later, escalate to a human, are not a last resort but the *only* rungs guaranteed to be available. And the ladder should be able to skip straight to them when the breaker on the secondary is also open.
+
+<Aside type="caution" title="Fallbacks change your compliance surface too">
+A secondary provider is a different data processor, possibly in a different jurisdiction, with different retention and training terms. A failover that silently ships customer data somewhere your [subprocessor list and residency commitments](/book/security/pii-and-compliance) do not cover is a compliance incident produced by a reliability mechanism.
+
+Pin the region and settle the terms for every provider in the ladder, or remove it from the ladder.
+</Aside>
+
+## Wiring it together
+
+The ladder belongs in the [model gateway](/book/production/reference-architecture), which is the one place that sees every call.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/gateway/ladder.ts"
+export interface Rung {
+  name: string;
+  call: (req: ModelRequest) => Promise<ModelResponse>;
+  breaker: Breaker;          // per (provider, model, region)
+  minTier: RiskTier;         // rungs this degraded aren't allowed above here
+}
+
+export async function callWithLadder(
+  req: ModelRequest,
+  ladder: Rung[],
+  tier: RiskTier,
+): Promise<ModelResponse & { servedBy: string; degraded: boolean }> {
+  for (const [i, rung] of ladder.entries()) {
+    if (rung.breaker.isOpen()) continue;      // fail fast; don't even try
+    if (tier > rung.minTier) continue;        // high-stakes work skips weak rungs
+
+    try {
+      const res = await rung.call(req);
+      rung.breaker.recordSuccess();
+      // The served model is recorded on every response and every span.
+      // Without this line, silent degradation is undetectable.
+      return { ...res, servedBy: rung.name, degraded: i > 0 };
+    } catch (err) {
+      if (classOf(err) !== 'transient') throw err;   // policy/permanent don't fall back
+      rung.breaker.recordFailure();
+    }
+  }
+  // Ladder exhausted. This is an escalation, not a 500.
+  throw new AgentError('policy', 'no_capacity', 'All rungs unavailable', {
+    escalate: true,
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/gateway/ladder.py"
+async def call_with_ladder(req, ladder, tier):
+    for i, rung in enumerate(ladder):
+        if rung.breaker.is_open():
+            continue                  # fail fast; don't even try
+        if tier > rung.min_tier:
+            continue                  # high-stakes work skips weak rungs
+
+        try:
+            res = await rung.call(req)
+            rung.breaker.record_success()
+            # The served model is recorded on every response and every span.
+            # Without this line, silent degradation is undetectable.
+            return res | {"served_by": rung.name, "degraded": i > 0}
+        except Exception as err:
+            if class_of(err) != "transient":
+                raise                 # policy/permanent don't fall back
+            rung.breaker.record_failure()
+
+    # Ladder exhausted. This is an escalation, not a 500.
+    raise AgentError("policy", "no_capacity", "All rungs unavailable", escalate=True)
+```
+
+</Tab>
+</Tabs>
+
+Three lines are the chapter. `classOf(err) !== 'transient'`: [only transient failures fall back](/book/reliability/error-taxonomy), because falling back on a content refusal is shopping for a provider that will comply, and falling back on a malformed request just fails again elsewhere. `tier > rung.minTier`: **high-stakes work is not allowed to degrade**; a [tier-2 credit decision](/book/human-in-the-loop/risk-tiers) should escalate to a person rather than be made by the cheapest model still answering. And `servedBy` on every response, because it is the only thing that makes the first failure mode visible.
+
+## Atlas, concretely
+
+| Rung | Configuration | Allowed for |
+| --- | --- | --- |
+| 1 | Primary model, retry per the SDK budget | All tiers |
+| 2 | Primary model, alternate region | All tiers |
+| 3 | Primary model, reduced scope: tighter retrieval, no speculative tool calls | All tiers |
+| 4 | Smaller model, same provider | Tier 0 only |
+| 5 | Secondary provider | Tier 0 only, region-pinned, terms settled |
+| 6 | Human queue | Any tier, and the *first* choice above tier 0 |
+| Breakers | Per (provider, model, region); trip on 5xx rate **or** p99 latency | — |
+| Half-open | Synthetic probe, never a customer's run | — |
+| Observability | `served_by` on every span; alert when fallback rate > 2% for 10 min | — |
+| CI | The tier-0 eval suite runs against rungs 4 and 5 every night | — |
+| Continuous exercise | 1% of tier-0 traffic served by rung 4 permanently | — |
+
+The last two rows are what would have caught the opening scene on day one instead of day seven. The nightly eval against the secondary would have failed on the dropped field; the 1% continuous share would have surfaced it in the quality metrics before an outage ever routed real volume there.
+
+And row 6 being available at *any* tier, while rungs 4 and 5 are capped at tier 0, is the design decision that matters most. When the choice is a worse answer or a slower one, an agent that can hand work to a person has an option that a pure inference pipeline does not.
+
+---
+
+Next: [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure), sharing a finite provider quota across everything that wants it.
+
+## Takeaways
+
+- A fallback is not a transparent substitute. It is a different system running production traffic that you have never evaluated.
+- The dangerous failure is `200 OK` with worse output. Error-rate monitoring sees a perfect week.
+- Circuit breakers exist to fail fast, which is what stops your retries from becoming the dependency's second outage.
+- Scope breakers per (provider, model, region), and trip them on latency as well as errors. A slow provider burns deadlines and budget without producing anything.
+- Probe half-open with a cheap synthetic call, never with a customer's run.
+- The ladder has six rungs. Retry and re-region are free; reducing scope is predictable; swapping models is not; escalating to a human is honest and under-used.
+- Prefer degrading scope over swapping models. You can predict and measure the first.
+- Only transient errors fall back. Falling back on a refusal is shopping for a compliant provider; falling back on a malformed request fails again elsewhere.
+- Do not let high-stakes work degrade. Above tier 0, escalate to a person rather than accept the cheapest model still answering.
+- Record which model served every response, on every span. Without it, silent degradation is undetectable in principle.
+- Alert on fallback *rate*, not just on errors.
+- The fallback path is the least-tested code in the system. Evaluate it as its own variant in CI and route a small continuous share of traffic through it.
+- Fail over at run boundaries, not mid-run. A model that did not make the first twelve decisions should not inherit them mid-conversation.
+- Everyone's secondary is the same secondary. The rungs guaranteed to be available are reduced scope, queueing, and humans.
+- A fallback provider is a different data processor. Pin the region and settle the terms, or remove it from the ladder.

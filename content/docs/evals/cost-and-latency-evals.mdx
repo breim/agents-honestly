@@ -1,0 +1,142 @@
+---
+title: "Cost and Latency as Scores"
+description: "A correct answer that takes ninety seconds and costs a dollar is a failing result. Score it that way."
+---
+
+An eval suite that scores only quality has a cheat available, and any team hill-climbing against it will find the cheat without meaning to.
+
+More steps. A bigger model. Higher `k` on retrieval. Sample three times and vote. Every one of those buys accuracy with tokens and seconds, every one of them raises the quality score, and none of them appear anywhere in a suite that measures only whether the answer was right.
+
+> **A quality-only eval selects for expensive systems. It cannot do anything else.**
+
+The harness measures whether the agent is right. It does not measure whether the agent pays for itself.
+
+## The denominator is the whole argument
+
+The number that matters is **cost per accepted outcome**, and both halves of that fraction are usually computed wrong.
+
+<Figure caption="Every path that did not end in an accepted outcome belongs in the numerator and nowhere else." frame={false}>
+
+```
+             every failed attempt
+           + every retry
+   NUM  =  + every abandoned session          ← fully loaded spend
+           + every escalation
+           + every shadow / eval run
+
+   DEN  =    accepted outcomes only
+```
+
+</Figure>
+
+A run that consumed forty thousand tokens and ended in an escalation contributes to the top and not the bottom. That is not pessimism, it is arithmetic. The business paid for it and did not get what it was buying.
+
+Get this wrong in the obvious direction, cost per *run*, and the comparison inverts:
+
+| | Cost per run | Success rate | **Cost per outcome** |
+| --- | --- | --- | --- |
+| Cheap configuration | $0.20 | 20% | **$1.00** |
+| Expensive configuration | $1.00 | ~100% | **$1.00** |
+
+And that table is generous, because it ignores the cost of cleaning up four failed runs. **A benchmark that ignores failed runs will always make agents look cheaper than they are.**
+
+The reported consequence is worth bracing for: **the first time a team computes cost-per-accepted-outcome honestly, the number is typically three to eight times what the API math suggested.**
+
+<Aside type="caution" title="Why the wrong meter is the one that gets approved">
+Cost per call is what the invoice shows, so it is what gets budgeted, and it is the only one anybody has to work to obtain.
+
+It also produces a specific accounting illusion: improving your resolution rate makes cost-per-outcome fall without any spending change, because the **denominator moved**. Teams then attribute a cost win to an efficiency project that did nothing, and miss that the actual lever was quality.
+
+Report both, and label which one moved.
+</Aside>
+
+## The most expensive model is usually not on the frontier
+
+The instinct when quality is short is to move up a model tier. Evidence across benchmarks says that instinct is wrong more often than it is right.
+
+The accuracy-cost Pareto frontier is **steep and sparse**: on average fewer than a third of tested models sit on the frontier for a given benchmark, and in one survey **only one of nine benchmarks had the most costly model on the frontier at all.** Paying more usually does not buy the accuracy, and the model you assume is best is frequently dominated by something cheaper.
+
+The mirror-image error is equally real, though, and this is why an intuition is not enough. **A cheaper model that fails more often can cost more**, once retries and the human time spent cleaning up bad output are counted. Shipping the small model everywhere costs more in quality regressions than it saves in dollars.
+
+Both failures come from reasoning about the axes separately. The per-outcome number is the one that resolves them, and it is measurable on your own routes in an afternoon.
+
+## Latency is a distribution, and it is three scores
+
+An average latency is a number that describes nobody. The complaints, the abandonment, and the timeouts all come from the tail, so the scores are percentiles, per route.
+
+Three of them, because [Part XIII established](/book/interface/streaming-ux) that they govern different things:
+
+| Score | Governs | Typical gate |
+| --- | --- | --- |
+| **Time to first token, p95** | Whether it feels alive | Under a second |
+| **Total time, p95** | Whether a person is still there | Per route |
+| **Share over a hard ceiling** | The tail that produces incidents | A small percentage |
+
+Time-to-first-token and total are not substitutes. [A run can be fast in total and feel broken](/book/interface/streaming-ux), and one can take eight minutes and feel responsive. Gating on total alone optimises the wrong half of the experience.
+
+## Making them gates
+
+The mechanics are unglamorous and the discipline is in applying all of them at once:
+
+```
+   PASS requires all three:
+     quality           ≥ last release, within the noise band
+     cost / outcome    ≤ last release × 1.10
+     total p95         ≤ route budget
+```
+
+A suite that gates on quality alone rewards the cheat at the top of this chapter. A suite that gates on cost alone rewards a system that answers quickly and badly. **The gates only work as a set**, and the set is what makes "a correct answer that takes ninety seconds and costs a dollar" record as the failure it is.
+
+The noise band matters and is [the next chapter's subject](/book/evals/ci-for-agents). A quality score that moves two points between identical runs cannot gate on a two-point regression.
+
+## What actually moves them
+
+Reported and consistent with everything this book has built:
+
+**Trim reasoning depth where the task does not need it.** One reported case took cost per attempt from **$3.40 to about $2.30 with no measurable change in resolution rate**. That is the shape of most cost wins: something was being spent that was not buying anything.
+
+**Cache retrieval and tool results.** Plus [prompt caching](/book/foundations/prompt-caching) on the stable prefix.
+
+**Cut the retry budget.** Retries are the quietest line item, and [a retry loop around a model call spends money at a rate worth alerting on](/book/durable-execution/everything-that-breaks).
+
+**Consolidate tools.** [Three chained calls collapsed into one](/book/tools/tools-are-apis-for-models) removes two full model turns. That is the largest single lever, and it is a Part VIII decision rather than a Part XIV one.
+
+**Shape results at the source.** [The multiplier on every unnecessary field is the number of turns after it](/book/tools/result-design).
+
+Notice that four of the five were decisions made in earlier parts. Cost evals mostly do not create optimisations; they **make earlier decisions visible and rank them.**
+
+## Atlas, concretely
+
+| Score | Gate |
+| --- | --- |
+| Resolution rate | ≥ previous release, within the noise band |
+| **Cost per resolved ticket** | ≤ previous × 1.10 |
+| Cost per ticket *attempted* | Reported, never gated: the illusion above |
+| TTFT p95 | < 1s |
+| Total p95, policy questions | < 30s |
+| Total p95, action-required | < 3 min excluding human wait |
+| Share over hard ceiling | < 1% |
+
+Two rows carry the design. **Cost per resolved ticket is gated; cost per attempt is only reported.** So a release that improves resolution cannot claim a cost win it did not earn, and a release that quietly doubles escalations cannot hide behind a stable per-call figure.
+
+And the human wait is excluded from the action-required budget, because [a three-day approval is not latency](/book/durable-execution/signals-and-children). It is the system working. Including it would make the correct behaviour score as the worst.
+
+---
+
+Next: [Continuous Integration for Agents](/book/evals/ci-for-agents), regression gates on a stochastic system: sample sizes, variance, flake budgets, statistical honesty.
+
+## Takeaways
+
+- A quality-only eval has a cheat: more steps, bigger model, higher `k`, sample-and-vote. A team hill-climbing will find it. It selects for expensive systems and can do nothing else.
+- The number that matters is cost per **accepted outcome**. Numerator: all spend including failed attempts, retries, abandoned sessions, escalations, and eval runs. Denominator: accepted outcomes only.
+- A $0.20 run at 20% success costs the same per outcome as a $1.00 run that works, before counting the cleanup on four failures.
+- A benchmark ignoring failed runs always makes agents look cheaper than they are. The first honest computation is typically three to eight times the API math.
+- Cost per call is what the invoice shows, so it is what gets approved. It also creates an illusion: improving resolution lowers cost-per-outcome with no spending change, because the denominator moved.
+- The accuracy-cost frontier is steep and sparse. Fewer than a third of models sit on it, and in one survey only one of nine benchmarks had the priciest model on the frontier.
+- The mirror error is also real: a cheaper model that fails more can cost more once retries and human cleanup count. Only the per-outcome number resolves the two.
+- Latency is a distribution. Gate on percentiles per route, and on three separate scores: time to first token, total, and the share over a hard ceiling.
+- TTFT and total are not substitutes. Gating on total alone optimises the wrong half of the experience.
+- The gates only work as a set. Quality alone rewards the cheat; cost alone rewards answering quickly and badly.
+- Cost wins usually come from something that was being spent without buying anything. One reported case went from $3.40 to $2.30 per attempt with no change in resolution rate.
+- Four of the five biggest levers were decisions in earlier parts. Cost evals rarely create optimisations; they make earlier decisions visible and rank them.
+- Exclude human wait time from latency budgets. A three-day approval is the system working, and counting it makes correct behaviour score worst.

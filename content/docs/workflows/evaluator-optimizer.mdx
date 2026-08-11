@@ -1,0 +1,151 @@
+---
+title: "Evaluator–Optimizer Loops"
+description: "Generate, critique, revise: the loop that improves output without becoming an open-ended agent."
+---
+
+The last shape in Part VI is a loop, which sounds like a contradiction in a part titled *Workflows Before Agents*, and isn't.
+
+```
+   generate ──▶ evaluate ──▶ good enough? ──▶ done
+                    │             │
+                    └── revise ◀──┘        (bounded)
+```
+
+This is a loop with **fixed control flow**. It always does the same three things in the same order. What varies is only the number of iterations, and you bound that. Compare with [the agent loop](/book/first-agent/the-loop-by-hand), where what varies is the *action*: which tool, in what order, discovered at run time. That difference is the entire distinction from [the determinism test](/book/workflows/the-determinism-test), and it's why this belongs here rather than in Part VII.
+
+## The condition that decides everything
+
+One sentence determines whether this pattern helps you or hurts you:
+
+> **Evaluation must be easier than generation.**
+
+When it is, the loop is close to free quality: code that must compile, JSON that must validate, a claim that must be traceable to a source, an amount that must match a tool result. Generate, check, and if the check fails you know *specifically* what failed and can hand that back.
+
+When it isn't, you have built a machine that samples repeatedly from a distribution and picks whichever sample its own opinion likes best. That is not improvement; it is expensive noise with a confidence gloss.
+
+## What models can and cannot do to their own work
+
+The research here is unusually clear, and it splits along a line that most implementations miss:
+
+> **Models reliably *fix* errors that are explicitly identified. They struggle to *detect and localize* errors on their own.**
+
+That asymmetry is the design principle. Point at the problem and the revision is genuinely good. Ask the model to find the problem in its own output, and it mostly doesn't. The literature reports that naive self-reflection sometimes makes results *worse*, not merely no better.
+
+There's a mechanism behind that, and Part III already named it: a model generates output coherent with its context, and its own prior output is in its context. Asked to critique it, the same reasoning that produced the flaw evaluates the flaw. This is the same phenomenon as [self-consistency in poisoning](/book/context/context-poisoning), and the same reason that "are you sure?" is a bad debugging tool, because challenging a model degrades performance in some settings rather than surfacing the error.
+
+**The evaluator's job is detection and localization. The generator's job is repair.** Split them that way and the pattern works. Merge them and it doesn't.
+
+## The ladder of evaluators
+
+Ranked by how much genuinely external signal they carry:
+
+| Evaluator | External signal | Use when |
+| --- | --- | --- |
+| **Deterministic check**: compiler, test suite, schema validator, policy limit | Total | Always, when available. Free, exact, localizes precisely. |
+| **Grounding check**: every claim traced to a retrieved source or tool result | High | Any factual output. Mechanical, and it's [what Part IV built](/book/retrieval/retrieval-evals). |
+| **Rubric judge with the source material**: a model scoring against explicit criteria, given the evidence | Moderate | Subjective quality: tone, completeness, clarity. |
+| **Fresh-context judge**: a different model, or the same model with none of the generation history | Low | Better than nothing; it at least doesn't inherit the reasoning. |
+| **"Critique your own output"**: same model, same context | **None** | Rarely worth the call. |
+
+The top two are the ones to build. They're cheap, they never flatter, and they produce the thing revision needs: a *specific* failure. `POL-114 v7 is cited but the retrieved set contains only v6` is actionable. "The response could be more accurate" is not.
+
+<Aside type="tip" title="Make the evaluator return structured findings, not prose">
+The output of the evaluate step should be a typed value: a pass/fail per criterion, plus a list of located problems.
+
+```json
+{ "pass": false,
+  "findings": [
+    {"criterion": "citation_valid", "detail": "cites POL-114 v7; retrieved v6"},
+    {"criterion": "amount_matches_tool", "detail": "reply says $540; get_order says $180"}
+  ]}
+```
+
+Two reasons. Your code can now decide what to do per finding. Some block, some warn, some auto-fix, and that beats passing a paragraph back and hoping. And you can count findings by criterion across runs, which tells you what your generator is actually bad at. That count is the highest-value thing this loop produces.
+</Aside>
+
+## Keep the best, not the last
+
+The practical rule that most implementations get wrong, and it costs quality directly.
+
+Revision is not monotonic. Iteration three can be worse than iteration two. The model over-corrects, follows a critique too literally, or fixes one criterion by breaking another. If your loop returns whatever came out of the final pass, you are returning a sample, not a maximum.
+
+```
+   ✗  for i in 1..3: draft = revise(draft, critique(draft))
+      return draft                       ← whatever the last pass produced
+
+   ✓  candidates = [draft]
+      for i in 1..3:
+          draft = revise(draft, findings)
+          candidates.append((draft, score(draft)))
+      return best_scoring(candidates)    ← and if nothing beat the
+                                            original, return the original
+```
+
+That last clause matters. **The first draft must be allowed to win.** A loop that cannot return its input has assumed revision always helps, which the evidence above says is not true.
+
+## Convergence and stopping
+
+Three bounds, and you want all of them.
+
+**Stop when it passes.** The obvious one, and the reason to use hard criteria. A real stopping condition is "all deterministic checks pass"; "quality is good" is not.
+
+**Cap iterations.** Two or three. Gains flatten quickly, and past that you're mostly paying for oscillation between two flawed variants.
+
+**Stop on no improvement.** If iteration N scored no better than N−1, stop. Continuing costs two calls per round to explore a plateau.
+
+And a signal worth logging: **the same finding recurring across iterations** means the generator can't fix it with the information it has. That's not a loop problem. It's a missing tool, a missing document, or a task the model can't do. Feed those into your backlog rather than adding a fourth iteration.
+
+## The arithmetic
+
+Each iteration is a generate plus an evaluate. Three iterations is roughly six model calls plus the original, so **this pattern costs 3–7× a single generation** and adds proportional latency.
+
+That is expensive, and it's fine where the output is high-stakes, low-volume, and its correctness matters more than its speed: a customer-facing reply that moves money, a generated query that will be executed, a document that goes to a regulator. It is not fine as a default wrapper on every model call, and applying it uniformly is how a workflow's latency budget disappears.
+
+The cheap variant worth knowing: **evaluate without the loop.** Run the deterministic checks, and if they fail, *don't revise*. Escalate. One extra call, no iteration, and for a lot of systems it captures most of the value, because the cases that fail hard checks are often the cases a human should see anyway.
+
+## When not to use it
+
+**When you can't evaluate.** Restated because it's the whole thing.
+
+**When the criteria conflict.** "More concise" and "more complete" pull opposite ways, and a loop with contradictory criteria oscillates forever within its bound, burning calls to alternate between two failures.
+
+**When variance is the goal.** For creative or exploratory output, generating three options and letting a human choose beats converging on one. That's [voting](/book/workflows/composition-patterns) or sectioning, not this.
+
+**When the first draft is already inside your quality threshold.** Measure before adding the loop. If your generator passes the checks 96% of the time, the loop's ceiling is a four-point improvement on a small base, and escalating the 4% may be cheaper and better.
+
+## Atlas, concretely
+
+One evaluator–optimizer loop, on exactly one step: the outbound customer reply.
+
+The evaluator is three deterministic checks and no judge. Every policy claim must cite a document ID and version present in this run's retrieved set. Every monetary amount must match a value a tool returned. Any credit must be within the policy limit. All three are mechanical, all three localize precisely, and all three are the [invariants from the acceptance spec](/book/first-agent/the-problem). That is not a coincidence. The invariants were always the right evaluation criteria.
+
+Two revision attempts maximum, best-scoring candidate wins, original allowed to win. If a check still fails after two attempts, the ticket escalates with the findings attached, because a reply that can't be made to cite its sources is exactly the reply a human should write.
+
+And the findings are counted by criterion, which is how Meridian discovered that citation mismatches spiked whenever the corpus was reindexed. The loop's most valuable output turned out to be its logs.
+
+## Where Part VI leaves you
+
+Four chapters, and none of them is an agent.
+
+A test applied per step. Chains with gates, sectioning, fan-out, and voting. Routing, cascades, and bounded orchestration. And a loop whose control flow is fixed. Between them they cover the large majority of what teams reach for an agent to do, which was [the part's claim](/book/foundations/when-not-to-build-an-agent), now with the shapes attached.
+
+Each shape has a catalog entry carrying the code: [Router](/book/patterns/control/router), [Plan-then-Execute](/book/patterns/control/plan-then-execute), [Deterministic Rails](/book/patterns/control/deterministic-rails), and [Critic–Reviser](/book/patterns/control/critic-reviser) for the loop above. [Reflection](/book/patterns/control/reflection) is worth reading next to that last one, because it is largely an argument against the version of itself that everyone builds first.
+
+What's left over is genuine: the step where the next action depends on the last result, the number of steps is unknown, and the tool set is open. That step is real, Atlas has one, and Part VII is about engineering it properly instead of leaving it as a `while` loop in the middle of an otherwise disciplined system.
+
+---
+
+Next: [LangChain, Honestly](/book/langgraph/langchain-honestly), what the abstraction earns, what to skip, and how to use it without handing over your architecture.
+
+## Takeaways
+
+- Generate–evaluate–revise is a loop with fixed control flow. Only the iteration count varies, which is what keeps it a workflow.
+- The pattern helps exactly when evaluation is easier than generation. Otherwise it samples repeatedly and picks what its own opinion likes.
+- Models reliably fix errors that are pointed at, and struggle to detect and localize errors in their own work. Naive self-critique can degrade output.
+- Therefore the evaluator supplies detection; the generator supplies repair. Merging the two is why most implementations underdeliver.
+- Prefer deterministic checks and grounding checks. "Critique your own output" carries no external signal and rarely earns its call.
+- Return structured findings, not prose. Per-criterion counts across runs are the loop's most valuable product.
+- Revision isn't monotonic. Keep the best-scoring candidate, and allow the original to win.
+- Bound by pass, by iteration count, and by no-improvement. A finding that recurs every iteration is a missing capability, not a reason for a fourth pass.
+- It costs 3–7× a single generation. Consider evaluate-and-escalate without the loop. For many systems that captures most of the value.
+- Don't use it when criteria conflict, when variance is the goal, or when the first draft already clears your bar.

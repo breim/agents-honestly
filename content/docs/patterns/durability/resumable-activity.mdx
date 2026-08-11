@@ -1,0 +1,176 @@
+---
+title: "Resumable Activity"
+description: "Restart a long tool call from its last checkpoint instead of from zero."
+---
+
+## Problem
+
+A backlog analysis walks 4,000 historical tickets, classifying each with a model call. It runs as one activity and takes about forty minutes.
+
+At minute thirty-seven the worker is redeployed. The activity fails, the retry policy fires, and the next attempt starts at ticket 1.
+
+Thirty-seven minutes and roughly 3,700 model calls are discarded, and the retry will very likely be interrupted too, because deploys are not rare and forty minutes is a long window. A retry policy of three attempts on a job that cannot survive a deploy is three chances to waste an hour.
+
+The same shape appears whenever an activity is long: a large export, a bulk re-index, a document generation walking hundreds of pages.
+
+## Forces
+
+- **Long activities will be interrupted.** Deploys, scale-downs, and node failures are routine, not exceptional.
+- **Retry restarts the activity from the beginning** unless something carries progress across attempts.
+- **Progress is expensive to recreate**: tokens spent, third-party calls made, time elapsed.
+- **The workflow cannot help.** It sees one activity that either succeeded or failed; the internal position is invisible to it.
+- **Checkpoints cost something** to write, and a checkpoint per item is usually too many.
+- **The work may not be idempotent per item**, so resuming has to know exactly what was already done.
+
+## Solution
+
+**Heartbeat with progress details.** The activity reports its position as it goes; on retry, the next attempt reads the last reported position and resumes from there.
+
+<Figure caption="The heartbeat payload is the checkpoint. Retry reads it and skips what is already done." frame={false}>
+
+```
+   ATTEMPT 1                                 ATTEMPT 2
+   ─────────────────────────────────         ────────────────────────────
+   heartbeat({ index: 0 })
+   …process 0–499
+   heartbeat({ index: 500 })     ◀── last successfully reported
+   …process 500–712
+   ✗ worker redeployed at 712                start
+                                             read heartbeat details
+                                             → { index: 500 }
+                                             resume at 500
+                                             ── 213 items redone,
+                                                not 712
+
+   the gap between the last heartbeat and the crash is the
+   work you repeat — so checkpoint frequency is a cost dial
+```
+
+</Figure>
+
+Four rules:
+
+**Checkpoint on a batch boundary, not per item.** Heartbeating after every one of 4,000 items is 4,000 round trips. Every 100–500 items bounds the repeated work to something small while keeping the overhead invisible.
+
+**Report a position that is meaningful after a restart.** An array index is fine when the input is a stable, ordered list. When it is a paginated query, report the *cursor*. An index into a result set that may have changed is a silent correctness bug.
+
+**Make the repeated slice safe.** Between the last heartbeat and the crash, some work happened and was not recorded, so it *will* be redone. If those items have side effects, they need [idempotency keys](/book/reliability/idempotency-in-practice) or the pattern converts a lost hour into duplicated writes.
+
+**Set the heartbeat timeout well above the heartbeat interval.** Heartbeats are throttled by the worker: the effective interval is roughly the smaller of 80% of the heartbeat timeout and a default. So a timeout too close to your interval produces spurious failures on a healthy activity.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/activities/backlog.ts"
+const BATCH = 200;   // checkpoint granularity: repeated work is bounded by this
+
+export async function analyzeBacklog(input: BacklogInput): Promise<Summary> {
+  const ctx = activityContext();
+
+  // On a retry this is the last successfully reported position.
+  // On the first attempt it is undefined.
+  const resumeFrom = (ctx.heartbeatDetails as Checkpoint | undefined)?.nextIndex ?? 0;
+  if (resumeFrom > 0) log.info(`resuming at ${resumeFrom} of ${input.total}`);
+
+  let acc = (ctx.heartbeatDetails as Checkpoint | undefined)?.acc ?? emptyAcc();
+
+  for (let i = resumeFrom; i < input.total; i += BATCH) {
+    const page = await fetchTickets(input.cursorFor(i), BATCH);
+
+    for (const ticket of page) {
+      // Items in the slice between the last heartbeat and a crash WILL be
+      // redone. Anything with an effect needs its own idempotency key.
+      acc = merge(acc, await classify(ticket));
+    }
+
+    // The heartbeat payload IS the checkpoint. Carry enough to resume.
+    ctx.heartbeat({ nextIndex: i + BATCH, acc } satisfies Checkpoint);
+
+    // Cancellation is delivered ON heartbeat — this is the only place
+    // a long activity can learn it should stop.
+    if (ctx.cancellationSignal.aborted) throw new CancelledFailure('cancelled');
+  }
+
+  return finalize(acc);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/activities/backlog.py"
+BATCH = 200   # checkpoint granularity: repeated work is bounded by this
+
+
+@activity.defn
+async def analyze_backlog(input: BacklogInput) -> Summary:
+    # On a retry this is the last successfully reported position.
+    details = activity.info().heartbeat_details
+    checkpoint = details[0] if details else Checkpoint(next_index=0, acc=empty_acc())
+    if checkpoint.next_index:
+        activity.logger.info("resuming at %s of %s",
+                             checkpoint.next_index, input.total)
+
+    acc = checkpoint.acc
+
+    for i in range(checkpoint.next_index, input.total, BATCH):
+        page = await fetch_tickets(input.cursor_for(i), BATCH)
+
+        for ticket in page:
+            # Items between the last heartbeat and a crash WILL be redone.
+            # Anything with an effect needs its own idempotency key.
+            acc = merge(acc, await classify(ticket))
+
+        # The heartbeat payload IS the checkpoint. Carry enough to resume.
+        activity.heartbeat(Checkpoint(next_index=i + BATCH, acc=acc))
+
+        # Cancellation is delivered ON heartbeat — the only place a long
+        # activity can learn it should stop.
+        if activity.is_cancelled():
+            raise asyncio.CancelledError()
+
+    return finalize(acc)
+```
+
+</Tab>
+</Tabs>
+
+Carrying `acc` in the checkpoint is a judgement call. It makes resumption exact and it means the accumulator crosses the wire on every heartbeat: fine for counters and small aggregates, wrong for anything large. When the accumulator is big, write partial results to storage and carry a *reference* instead, which is [the same rule as activity payloads](/book/patterns/durability/tool-as-activity).
+
+## Trade-offs
+
+**Some work is always repeated.** Everything between the last heartbeat and the crash. Smaller batches shrink the loss and raise the overhead; the right size is set by what one batch costs you, not by a default.
+
+**Checkpoint payloads travel on every heartbeat.** A large `acc` means a large payload at high frequency. Reference, don't embed.
+
+**Resumption logic is a second code path.** The resume branch runs rarely and is therefore [the least-tested code in the activity](/book/reliability/failure-injection). Injecting a worker kill at minute thirty is the test that proves it works, and it belongs in CI.
+
+**Position must be stable across attempts.** If the underlying query can return different rows between attempts, such as new tickets arriving or a re-index, an index is wrong and a cursor over a snapshot is right. This is the failure that produces silently incomplete results rather than an error.
+
+## When not to use it
+
+**When the activity is short.** Under a minute, redoing it is cheaper than the machinery. Reserve this for work measured in many minutes.
+
+**When the work should be a child workflow instead.** If the "activity" is really a sequence of steps with their own retries and timers, it is a workflow, and each step gets durability for free without hand-rolled checkpoints.
+
+**When the batch is genuinely parallel.** Four thousand independent classifications are a [fan-out](/book/patterns/scale/fan-out) or a [map-reduce tree](/book/patterns/scale/mapreduce-tree), not one long activity. Each item becomes its own activity, each retries independently, and a redeploy loses only what was in flight.
+
+**When the work is not restartable at all.** A streaming operation with an unresumable connection, or a third-party job with no cursor. Then the honest answer is a shorter unit of work, not a checkpoint that cannot be honoured.
+
+<Aside type="note" title="The parallel version is usually the better answer">
+Before building this, ask whether the loop is sequential by necessity or by accident.
+
+Four thousand ticket classifications have no dependency between them. Turning each into its own activity, or batches of fifty, gives you retries per unit, natural parallelism, progress visible in the workflow rather than hidden inside an activity, and no checkpoint code to write or test. A redeploy loses seconds, not minutes.
+
+Resumable activities earn their place when the work is *genuinely sequential*: a cursor that must be walked in order, a stateful export, an operation whose position depends on everything before it. When the sequence is incidental, the parallel shape is simpler and more durable at once. This is rare enough to be worth checking for.
+</Aside>
+
+## Related
+
+- [Heartbeat for Long Tools](/book/patterns/durability/heartbeat-long-tools): the same mechanism used for detection rather than resumption
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): why payloads should be references
+- [Batch Iterator](/book/patterns/scale/batch-iterator): walking a large set as a workflow rather than an activity
+- [Fan-Out](/book/patterns/scale/fan-out): the parallel alternative when the work is independent
+- [Failure Injection](/book/reliability/failure-injection): killing the worker mid-activity, which is how the resume path gets tested

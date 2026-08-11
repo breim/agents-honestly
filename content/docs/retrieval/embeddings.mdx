@@ -1,0 +1,144 @@
+---
+title: "Embeddings"
+description: "What a vector represents, how similarity is measured, and the operational costs nobody mentions: reindexing, versioning, drift."
+---
+
+
+The last chapter routed the questions that genuinely are semantic. This one is about the machinery that answers them, and about the half of that machinery nobody puts in the architecture diagram.
+
+## A vector is a position, not a summary
+
+An embedding model maps text to a point in a few hundred or few thousand dimensions. It is not a compressed version of the text. You cannot reconstruct the document from the vector, and the individual numbers mean nothing on their own.
+
+What the position encodes is **learned relatedness**: the model was trained so that texts a training objective considered related land near each other. Everything useful about embeddings and everything dangerous about them follows from that sentence, because of one word.
+
+> The vector encodes similarity **as defined by the training objective.** That is not your business's definition of similarity, and nobody told the model what yours is.
+
+Two Meridian policy documents about returns are near-identical in embedding space. One applies to standard accounts and one to contract-tier accounts. The model has no idea that distinction is the entire answer. It sees two passages about returns, written in the same register, using the same vocabulary, and places them almost on top of each other.
+
+This is the chain that matters, and each arrow is lossy:
+
+```
+   similar  ≠  relevant  ≠  correct
+      │           │            │
+   the model    for this    for this
+   decides      question    customer
+```
+
+Vector search gets you the first arrow. [Reranking](/book/retrieval/hybrid-and-reranking) is an attempt at the second. [Metadata filtering](/book/retrieval/metadata-and-authorization) is what gets you the third, and it is a filter rather than a ranking, which is why the next chapters treat tier, tenant, and version as structured fields rather than hoping similarity handles them.
+
+## How similarity is measured, and what the number isn't
+
+In practice you compare vectors with cosine similarity, the angle between them, or a dot product on normalized vectors, which is the same thing. Direction carries the meaning; magnitude mostly carries length and frequency artifacts you don't want.
+
+The part worth internalizing is what the resulting score is **not**.
+
+A cosine score of 0.82 is not "82% relevant." It is not a probability, it is not calibrated, and it has no absolute interpretation. Scores are meaningful only *relative to other scores in the same index, from the same model.* Which means:
+
+- **A fixed relevance threshold does not transfer.** The 0.75 cutoff you tuned against one model is meaningless against another, and often meaningless against the same model after the corpus changes shape.
+- **Score gaps matter more than score values.** "Top result 0.71, second 0.44" is a confident retrieval. "0.83, 0.82, 0.81, 0.81" is a coin flip with high numbers, and it is exactly the [distractor situation](/book/context/context-as-budget) that costs you accuracy.
+- Rank is more portable than score. Build on ordering.
+
+## Questions and documents are different shapes
+
+A subtle mismatch that costs recall in most first implementations.
+
+Your corpus is 400-word policy paragraphs written in formal prose. Your query is *"can we return opened relays?"*: eight words, interrogative, colloquial. You are asking the model to place a short question and a long declarative passage near each other, when the thing that makes them "related" is that one *answers* the other, not that they resemble each other.
+
+Good embedding models are trained for this asymmetry, and many expect you to tell them which side you're embedding: a query prefix versus a document prefix, or separate encoders entirely. **Embedding both sides identically because the API accepts it is a silent recall loss**, and it is invisible unless you measure retrieval separately from end-to-end quality.
+
+<Aside type="caution" title="Silent truncation">
+Every embedding model has a maximum input length. Hand it a chunk longer than that and most implementations do not error. They truncate, embed the prefix, and return a perfectly well-formed vector for the first half of your document.
+
+The back half is now unfindable, and nothing anywhere reports this. Check your chunk length distribution against the model's limit as part of ingestion, not as part of debugging.
+</Aside>
+
+## The operational costs nobody mentions
+
+Here is the part that belongs in the architecture review and never makes it.
+
+### Changing the embedding model is a migration, not a deploy
+
+Vectors from two different models are not comparable. Not "slightly worse" but meaningless. They are positions in different spaces with different geometry, so a similarity computed across them is arithmetic on unrelated numbers.
+
+Therefore upgrading your embedding model means re-embedding the **entire corpus** and rebuilding the index. That is a batch job over every document you have ever ingested, with a bill attached: embedding a hundred million tokens with a large model runs to roughly four figures at current rates, **and you pay it again every time you want to *evaluate* a new model**, not just adopt one.
+
+The compounding is the part that stings:
+
+> The longer you stay on an old model, the larger your corpus grows, and the more expensive the eventual migration becomes.
+
+This is technical debt with an interest rate, and it accrues in a system most teams file under "the search thing."
+
+### Versioning is not optional
+
+Because you will migrate eventually, every vector needs to carry the model and version that produced it as a first-class field. Without it, a partially-migrated index silently mixes two geometries and retrieval quality collapses in a way that looks like everything and nothing.
+
+Two migration strategies, and you should pick before you need one:
+
+**Dual index with an atomic flip.** Embed the whole corpus with the new model into a second index while the old one serves traffic. Validate recall against a fixed query set. Flip. Keep the old index for rollback, then delete. Clean, and it costs double storage for the duration.
+
+**Lazy re-embedding.** New documents go to the new index, old ones stay put, queries fan out to both, and traffic shifts as the new index grows. Cheaper, and it means running two systems and merging two result sets, which needs a fusion strategy anyway, so it composes better than it sounds if you already run hybrid search.
+
+### The corpus drifts and the model doesn't
+
+Meridian launches a product line in 2027 with terminology the embedding model has never seen. Those documents embed poorly, not catastrophically but persistently a bit worse than everything else, and no metric you're watching says so.
+
+This is [drift](/book/observability/drift), and it argues for the same defense as everything else in this book: a fixed evaluation set that includes new vocabulary, run on a schedule, so degradation shows up as a number rather than as a support complaint.
+
+### Your embedding provider is now in the query path
+
+If you embed queries at request time through a hosted API, **search availability is now bounded by that API's availability**, and search latency includes a network round trip on every single query. That is a dependency that belongs on your architecture diagram and in your incident runbook. Self-hosting a small model for query embedding, even when documents are embedded by a larger hosted one, is a common and sensible split, provided both sides use the same model.
+
+## Dimensions are a dial, not a constant
+
+A more cheerful piece of current practice, and one that saves real money.
+
+Modern embedding models are often trained so that the *front* of the vector carries most of the signal: the representation is nested, so truncating to fewer dimensions still yields a usable embedding. The measured trade-offs are better than most people expect:
+
+| Kept | Typical performance retained |
+| --- | --- |
+| 512 of 1536+ dims | 94–98% |
+| 256 dims | ~88–95% |
+| 64 of 768 dims | ~98% on some models |
+
+Read the reduction off the *kept* column rather than off a headline range: 512 of 1536 is 3×, 256 of 1536 is 6×, and 64 of 768 is 12×. Notice that retained performance does not fall as you go down that list, because those are different models, so the rows do not form a curve and cannot be interpolated between. Where the loss stays in low single digits, the trade is obviously correct for most corpora, and it requires no re-embedding and no second model, just keeping fewer numbers. Where it reaches the low teens, as the middle row does, it is a decision rather than a freebie, and the only row that describes your corpus is the one you measure.
+
+<Aside type="note" title="The compatibility trap">
+Truncated vectors are only comparable to vectors from **the same model** truncated to **the same length**. A large model cut to 256 dimensions and a small model natively producing 256 dimensions are different spaces that happen to have the same shape.
+
+They will load into the same index without complaint and produce nonsense. Dimension count is not a schema; the model identity plus the dimension count is.
+</Aside>
+
+## Two rules that save you later
+
+**Keep the source text, always.** Store the original chunk alongside its vector, addressable by ID. You will re-embed, whether for a model upgrade, a chunking change, or a dimension change, and a system that discarded the text in favour of the vector has to re-derive it from wherever it came from, if that source still exists in the same form. This is the cheapest insurance in Part IV.
+
+**Version the whole pipeline, not just the model.** Retrieval quality is a function of the model *and* the chunking strategy *and* the preprocessing *and* the truncation length. Change any one and results move. Tag vectors with a pipeline version, not just a model name, or you will spend a week explaining why last month's evals don't reproduce.
+
+## When not to embed at all
+
+Worth restating from [the routing chapter](/book/retrieval/where-does-the-answer-live), now that the costs are concrete. Do not embed:
+
+- **Identifiers, codes, SKUs.** The tokenizer destroys the signal; lexical search is built for it.
+- **Structured records you can query.** A row is not a document. Embedding order rows to answer questions about orders is building a lossy, expensive, stale copy of a database you already have.
+- **Small, stable, always-needed text.** If it fits in the prompt and is always relevant, put it in the prompt. A retrieval round trip to fetch something you need every time is latency with extra steps.
+- **Anything that changes faster than you reindex.** An index is a copy with an age.
+
+The corpus that genuinely deserves embedding is usually smaller than the one teams start with, which is fortunate, because everything in this chapter gets more expensive with size.
+
+---
+
+Next: [Vector Search and the Database Question](/book/retrieval/vector-search), starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
+
+## Takeaways
+
+- A vector is a learned position, not a summary. It encodes similarity as defined by a training objective that knows nothing about your business.
+- Similar ≠ relevant ≠ correct. Ranking gets you the first; filtering on structured metadata is what gets you the third.
+- Cosine scores have no absolute meaning. Thresholds don't transfer between models or corpora; the gap between top results tells you more than their values.
+- Questions and documents are different distributions. Use the model's query/document distinction or lose recall silently.
+- Chunks longer than the model's limit are silently truncated, and the tail becomes unfindable.
+- Changing embedding models means re-embedding everything. Vectors from different models are not comparable, and the migration gets more expensive the longer you defer it.
+- Tag every vector with its pipeline version. Choose dual-index-and-flip or lazy re-embedding before you need one.
+- Your embedding provider sits in the query path. That's an availability dependency.
+- Truncating dimensions buys 3× at 512 of 1536, 6× at 256, and 12× at 64 of 768, at losses from a couple of points to the low teens, and only within the same model. The published rows are different models and do not form a curve.
+- Keep the source text. You will re-embed.

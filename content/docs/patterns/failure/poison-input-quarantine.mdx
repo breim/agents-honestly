@@ -1,0 +1,188 @@
+---
+title: "Poison Input Quarantine"
+description: "Isolate the one input that kills every worker that touches it."
+---
+
+## Problem
+
+Ticket 9,417 contains a 4 MB pasted log file with an unusual encoding.
+
+Worker A picks it up, builds a prompt, and is killed by the OOM reaper. The work is not acknowledged, so it returns to the queue. Worker B picks it up and dies. Worker C dies. Within ninety seconds the entire pool is cycling: every worker takes the poisoned item, dies, restarts, and takes it again, because a queue redelivering unacknowledged work is doing exactly what it should.
+
+Nothing else gets processed. The fleet is at 100% CPU doing one item, forever, and the dashboard shows workers restarting rather than a bad input.
+
+The same shape appears without a crash. An item that reliably hits the [turn cap](/book/patterns/control/bounded-autonomy) and burns its full budget before failing is a poison item that costs money instead of workers, and it will do so on every retry.
+
+## Forces
+
+- **Redelivery is correct** for transient failures and catastrophic for deterministic ones.
+- **The failure is per-item, not per-worker**, and worker-level metrics show the opposite.
+- **You cannot tell them apart on the first failure.** A crash looks like a crash.
+- **The attempt count is the signal**, and it must live with the item, not in the worker.
+- **Dropping the item silently loses a customer's request.**
+- **A crash may leave no trace of what caused it**, which is what makes this hard to diagnose.
+
+## Solution
+
+**Count attempts per item, and after a threshold route it to a quarantine queue instead of back to the pool.**
+
+<Figure caption="The attempt counter travels with the item. After N failures it stops being work and becomes a diagnosis." frame={false}>
+
+```
+   ✗ WITHOUT QUARANTINE
+   item 9417 ──▶ worker A ──▶ ✗ dies ──┐
+                                        │ unacked → redelivered
+   item 9417 ──▶ worker B ──▶ ✗ dies ──┤
+   item 9417 ──▶ worker C ──▶ ✗ dies ──┘   the fleet cycles forever
+
+   ✓ WITH QUARANTINE
+   item 9417 (attempt 1) ──▶ ✗   record attempt, redeliver
+   item 9417 (attempt 2) ──▶ ✗   record attempt, redeliver
+   item 9417 (attempt 3) ──▶ ✗   threshold → QUARANTINE
+                                  │
+                                  ├── the item is preserved, not dropped
+                                  ├── the customer's request is escalated
+                                  ├── the pool is free within seconds
+                                  └── an alert names the ITEM, not the worker
+
+   PRE-FLIGHT (cheaper): reject at admission what will obviously fail
+     size · encoding · token estimate · attachment count
+```
+
+</Figure>
+
+Four rules:
+
+**Increment before you process, and persist it with the item.** The counter must survive the worker dying, which means it is written to the queue or a store *before* the work starts. A counter incremented on failure never runs when the failure is a `SIGKILL`.
+
+**Quarantine preserves, never drops.** The item goes to a durable store with its attempt history and whatever diagnostics survived, and the customer's request is [escalated to a human](/book/patterns/control/escalation-ladder). Dropping it silently is a lost request that nobody will connect to anything.
+
+**Alert on the item, not the symptom.** The observable is workers restarting; the cause is one input. The alert should name the item ID and its attempt count, because an on-call looking at a restart graph will investigate memory limits for an hour.
+
+**Reject at admission where you can.** A size cap, an encoding check, and a [token estimate](/book/patterns/context/tool-result-truncation) at the door catch most poison items before any worker touches one. A pre-flight rejection is cheaper than three crashes and a quarantine.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/failure/quarantine.ts"
+const MAX_ATTEMPTS = 3;
+const MAX_INPUT_BYTES = 512 * 1024;
+
+// Pre-flight: cheapest possible rejection, before a worker is involved.
+export function admissible(item: WorkItem): { ok: true } | { ok: false; why: string } {
+  if (item.bytes > MAX_INPUT_BYTES) return { ok: false, why: 'input too large' };
+  if (!isDecodable(item.body))      return { ok: false, why: 'undecodable input' };
+  if (estimateTokens(item.body) > MAX_PROMPT_TOKENS)
+    return { ok: false, why: 'input exceeds the context window' };
+  return { ok: true };
+}
+
+export async function processWithQuarantine(item: WorkItem, ctx: RunContext) {
+  const pre = admissible(item);
+  if (!pre.ok) return quarantine(item, pre.why, ctx);
+
+  // Incremented and PERSISTED before the work starts. A counter bumped on
+  // failure never runs when the failure is a SIGKILL.
+  const attempt = await store.incrementAttempt(item.id);
+
+  if (attempt > MAX_ATTEMPTS) {
+    // Preserved, not dropped. The customer's request still needs an answer.
+    return quarantine(item, `failed ${MAX_ATTEMPTS} attempts`, ctx);
+  }
+
+  return handle(item, ctx);   // may crash the worker; the counter survives
+}
+
+async function quarantine(item: WorkItem, reason: string, ctx: RunContext) {
+  await quarantineStore.put({ item, reason, attempts: await store.attempts(item.id) });
+  await escalate(ctx, `input quarantined: ${reason}`, item);
+  // Names the ITEM. An on-call reading a restart graph investigates memory.
+  alerts.itemQuarantined(item.id, reason);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/failure/quarantine.py"
+MAX_ATTEMPTS = 3
+MAX_INPUT_BYTES = 512 * 1024
+
+
+def admissible(item) -> tuple[bool, str | None]:
+    # Pre-flight: cheapest possible rejection, before a worker is involved.
+    if item.bytes > MAX_INPUT_BYTES:
+        return False, "input too large"
+    if not is_decodable(item.body):
+        return False, "undecodable input"
+    if estimate_tokens(item.body) > MAX_PROMPT_TOKENS:
+        return False, "input exceeds the context window"
+    return True, None
+
+
+async def process_with_quarantine(item, ctx):
+    ok, why = admissible(item)
+    if not ok:
+        return await quarantine(item, why, ctx)
+
+    # Incremented and PERSISTED before the work starts. A counter bumped on
+    # failure never runs when the failure is a SIGKILL.
+    attempt = await store.increment_attempt(item.id)
+
+    if attempt > MAX_ATTEMPTS:
+        # Preserved, not dropped. The request still needs an answer.
+        return await quarantine(item, f"failed {MAX_ATTEMPTS} attempts", ctx)
+
+    return await handle(item, ctx)   # may crash; the counter survives
+
+
+async def quarantine(item, reason: str, ctx) -> None:
+    await quarantine_store.put(
+        item=item, reason=reason, attempts=await store.attempts(item.id))
+    await escalate(ctx, f"input quarantined: {reason}", item)
+    # Names the ITEM. An on-call reading a restart graph investigates memory.
+    alerts.item_quarantined(item.id, reason)
+```
+
+</Tab>
+</Tabs>
+
+`incrementAttempt` running *before* `handle` is the line the whole pattern turns on. Every intuitive implementation increments in a `catch`, and a `catch` does not run when the process is killed, which is precisely the case that produces the cycling fleet.
+
+## Trade-offs
+
+**Three attempts of damage before quarantine.** With a crash-inducing item that is three worker restarts. Lowering the threshold quarantines items that would have succeeded on a genuine transient retry; raising it extends the outage. Three is a reasonable default, and the real fix is pre-flight rejection.
+
+**Pre-flight checks can be wrong in both directions.** A size cap rejects a legitimate large attachment; a permissive one lets the poison through. Log rejections and review them. A rising pre-flight rejection rate is usually a product signal about what customers are actually sending.
+
+**Quarantine needs an owner.** A store nobody looks at is a queue of lost customer requests with extra steps. It needs a review cadence, and the escalation is what makes the individual request recoverable while the store is being triaged.
+
+**Crashes may leave nothing to diagnose.** A killed process writes no stack trace. Record what you can *before* the risky step: item ID, size, encoding, estimated tokens, so the quarantine record has something in it even when the worker vanished.
+
+## When not to use it
+
+**When work runs in a durable workflow with per-item isolation.** [A fan-out where each item is its own child](/book/patterns/scale/fan-out) already contains the failure: one child fails, the batch continues, and the retry policy bounds it. The cycling-fleet problem is specific to shared queues with redelivery.
+
+**When the failure is genuinely transient.** Quarantining on a provider blip removes work that would have succeeded. The counter must be attempts against *this item*, and a [breaker](/book/patterns/failure/tool-circuit-breaker) should be handling the dependency-down case separately.
+
+**When items are cheap and idempotent to drop.** A telemetry event that fails three times can be discarded. A customer's support ticket cannot, and conflating the two is how requests disappear.
+
+**When admission control already rejects the shape.** If [the tool result cap and input limits](/book/patterns/context/tool-result-truncation) make the poison case impossible to construct, you do not also need the quarantine.
+
+<Aside type="caution" title="The metric that fires is not the metric that explains">
+This failure presents as **worker instability**: restart rate up, memory alarms, pods cycling. Every instinct points at the fleet: raise the memory limit, add replicas, check for a leak, and every one of those investigations takes an hour and finds nothing.
+
+The cause is one row in a queue.
+
+So the operational requirement is a metric keyed by *item*: attempts per item, and an alert when any single item crosses two. That is a cheap counter and it is the difference between a five-minute diagnosis and an afternoon. It is also the same lesson as [tenant-level queue age](/book/patterns/scale/tenant-fairness) and [per-tenant retrieval recall](/book/patterns/retrieval/filtered-retrieval): **aggregate metrics cannot see a problem that lives in one member of the aggregate**, and those are exactly the problems that consume a fleet.
+</Aside>
+
+## Related
+
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): the dependency-down case, which quarantine must not be used for
+- [Tool Result Truncation](/book/patterns/context/tool-result-truncation): capping input size before it reaches the assembler
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): per-item isolation that avoids the shared-queue failure entirely
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the budget version of a poison item, which costs money rather than workers
+- [Escalation Ladder](/book/patterns/control/escalation-ladder): where the quarantined customer request goes

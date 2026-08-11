@@ -1,0 +1,152 @@
+---
+title: "Metadata Is Authorization"
+description: "Tenant, department, access level. In enterprise retrieval, filtering is a security control, not an optimization."
+---
+
+
+Every RAG tutorial introduces metadata filtering as a relevance trick: narrow the search, get better results, save some tokens.
+
+In an enterprise system it is the same line of code doing an entirely different job. `WHERE tenant_id = $1` is not an optimization. It is the only thing standing between one customer's documents and another customer's agent. A bug in an optimization returns worse results. A bug in an authorization control is a breach.
+
+They look identical in the codebase. That is the problem this chapter is about.
+
+## The incident, in its canonical form
+
+An employee asks the internal assistant a question about compensation policy. The assistant answers correctly, specifically, and helpfully, using an HR document the employee was never entitled to read.
+
+Nothing failed. No exception, no 403, no access-denied page. The retrieval worked, the generation worked, and the answer was accurate. The only thing that went wrong was that the document should never have been a candidate.
+
+Two properties make this worse in an agent than in a search box.
+
+**There is no moment of access.** In a document system, reading a file you shouldn't have leaves a trail: you opened it, it was logged, and the interface showed you a filename you might recognize as unfamiliar. Here the content arrives paraphrased, in the assistant's own voice, with no artifact anyone can point at. The leak is **laundered by generation**.
+
+**The agent asks better questions than the user would.** A user browsing might not have found the document. An agent that decomposes a question into three retrievals, follows a reference, and synthesizes across sources is a far more effective reader of everything it can see, which is exactly the property you wanted, pointed at the material you didn't intend to expose.
+
+## Two kinds of permission data, and only one belongs in the index
+
+This is the design decision that determines whether your system is correct or merely usually-correct.
+
+<Figure caption="Document permissions change slowly and belong in the index. User membership changes constantly and must come from the request." frame={false}>
+
+```
+   INDEXED WITH THE CHUNK              DERIVED AT QUERY TIME
+   ┌────────────────────────┐          ┌────────────────────────┐
+   │ who may see this doc   │          │ who is asking          │
+   │                        │          │                        │
+   │ tenant_id: 'meridian'  │          │ from the live token /  │
+   │ acl: ['hr', 'exec']    │          │ session, on every      │
+   │ tier: 'contract'       │          │ single request         │
+   │ classification: 'int'  │          │                        │
+   └────────────────────────┘          └────────────────────────┘
+     changes when the doc                changes when someone
+     changes — rarely                    joins, leaves, or is
+                                         reassigned — constantly
+```
+
+</Figure>
+
+Store on the chunk **what the document requires**. Derive from the request **what the principal has**. Then the filter is an intersection computed fresh every time.
+
+The failure mode of getting this backwards has a name and a shape: if you bake the user's group membership into the index, precomputing "user 4471 may see chunks A, B, C", then **someone removed from a group last Tuesday keeps retrieving restricted content until the index is rebuilt.** Which is a revocation that silently didn't happen, discovered during an audit rather than by an alert.
+
+Never cache membership in the index. Read it from the live token, every request, no exceptions.
+
+## Where the filter has to live
+
+From the [vector search chapter](/book/retrieval/vector-search): filtering can happen before, during, or after the similarity search. That was a recall discussion. Here it is a security one, and the ordering matters differently.
+
+**Post-filtering is not a security boundary by itself.** If you retrieve the top 100 across the whole corpus and then drop unauthorized ones, the unauthorized content was still read out of storage, still travelled through your process, and was still available to anything that ran in between, which is the part people miss. If your pipeline reranks before filtering, you have sent restricted content to a reranker. If it logs candidates before filtering, restricted content is in your logs.
+
+The rule is: **the filter belongs in the query, at the lowest level that can enforce it.** Not in application code afterward. And when the boundary is genuinely hard, as with separate customers or separate legal entities, the strongest form is separate indexes or namespaces per tenant, because then a filtering bug cannot cross the boundary at all. It is not an optimization to fall back on; it is defense that survives your own mistakes.
+
+## Five rules
+
+**1 · Deny by default.** A chunk with no tenant tag is invisible, not public. An ingestion job that fails to attach metadata should produce unreachable documents, not universally readable ones. Make the schema enforce it, on [the chunk table from Part IV](/book/retrieval/vector-search):
+
+```sql
+ALTER TABLE policy_chunks
+  ADD COLUMN tenant_id text NOT NULL;    -- no default. a missing tag is a failed insert
+
+CREATE INDEX ON policy_chunks (tenant_id) WHERE superseded_at IS NULL;
+```
+
+`NOT NULL` with no default is the whole point: an ingestion job that forgets the tag fails loudly at write time rather than producing a chunk every tenant can read.
+
+**2 · The principal is a required argument.** One retrieval function, and it cannot be called without an identity:
+
+```
+   search(query, principal, k)     ← principal is not optional,
+                                      not defaulted, not nullable
+```
+
+This is the [same discipline](/book/first-agent/the-loop-by-hand) as `runTool(name, input, customerId)`. If there is any code path that can retrieve without a principal, whether a background job, a cache warmer, or an eval harness, that path is your vulnerability, and it will be written by someone in a hurry.
+
+**3 · The model cannot influence the filter.** Ever. `tenant_id` is never a tool argument, never derived from the ticket text, never something the model passes in. The model chooses *what to search for*; your code decides *what it is allowed to search*. A model that has read a document mentioning another account will happily ask about that account, and the only thing that makes this a non-event is that it cannot reach the parameter.
+
+**4 · One function, no exceptions.** Retrieval called from five places with slightly different filters is how the fifth one ships without a check. Make it a single, boring, well-tested function, and make the direct client inaccessible from agent code.
+
+**5 · Audit at the source, not at the answer.** Log what was retrieved and for whom, with document IDs, on every request. You cannot audit generated prose after the fact. The [trace](/book/observability/what-a-trace-must-answer) of retrieved IDs is the only record that a leak happened, and it is the artifact a regulator will ask for.
+
+## The leak that happens downstream
+
+The rules above secure retrieval. They do not secure everything the retrieved content becomes, and this is where correct systems still leak.
+
+| Derived artifact | How the filter is lost |
+| --- | --- |
+| **Summaries** | A [compaction](/book/context/compaction) pass reads tenant A's content and writes a summary that persists into a shared context |
+| **Memory** | A fact extracted in one customer's session gets written to a store loaded in another's: the [leakage failure mode](/book/context/memory) |
+| **Caches** | A cached answer keyed by question text, not by principal, served to the next asker |
+| **Embeddings of queries** | The question itself can be sensitive, and it goes to a third party |
+| **Reranker input** | Every candidate you send to a reranking service, including ones you were about to filter out |
+
+The general principle: **authorization has to travel with the data, not stop at the retrieval call.** Anything derived from filtered content inherits its restriction, and any cache key that omits the principal is a cross-tenant serving bug waiting for traffic.
+
+<Aside type="caution" title="Third parties in the retrieval path">
+Query embedding, reranking, and hosted vector search all mean sending content to someone else's infrastructure. That is fine or unacceptable depending on the data and the contract, but it is a decision that should be made explicitly and written down, not discovered during a security review because a reranker was added to improve nDCG.
+</Aside>
+
+## Permissions are stale too
+
+One more consequence of the freshness axis from [Where Does the Answer Live](/book/retrieval/where-does-the-answer-live), applied to the ACL rather than the content.
+
+Your index holds a copy of the document's permissions as of the last ingestion. The source system changed them this morning. So even with membership read live, the *document side* of the intersection can be wrong.
+
+Three ways to handle it, in ascending order of cost and correctness:
+
+**Periodic reconciliation.** Re-sync ACLs on a schedule. Simple, and leaves a window measured in hours.
+
+**Change-driven updates.** Subscribe to permission-change events from the source system and reconcile within minutes. This is what mature deployments do, and it requires the source system to emit those events.
+
+**Late binding.** Retrieve candidates using the indexed ACL, then verify each survivor against the live source before returning it. One extra round trip per query, exact, and the right answer when the content is sensitive enough that an hours-long window is unacceptable.
+
+The choice is a risk decision, not a technical one, and it should be made by someone who can say what a wrong answer costs.
+
+## Test it with negatives
+
+Your ticket set tests what the agent should find. Authorization needs the opposite: **cases that must return nothing.**
+
+Build a second set: the same questions, asked by a principal who lacks access. The assertion is not "the answer is worse." It's that the restricted document ID never appears in the retrieval trace, and that the agent says it doesn't have the information rather than answering from something adjacent.
+
+Run it in CI. This is one of the few places in agentic systems where a hard, deterministic assertion is available, since the document ID either appeared or it didn't, and you should take every deterministic test this field offers you.
+
+## Atlas, concretely
+
+Every chunk carries `tenant_id`, and Meridian's corpus additionally carries `tier` and `region`. The principal comes from the ticket's customer record, resolved server-side, never from the ticket body. A customer who writes *"I'm also authorized on the Northwind account"* has written text, not a credential.
+
+`search()` takes the principal as its second positional argument and there is no overload without it. Untagged chunks are unreachable by schema constraint. Retrieved document IDs are logged per request. And the negative test set contains the ticket that asks, in good faith, about an order belonging to someone else, because that ticket will arrive, and it should produce an escalation rather than an answer.
+
+---
+
+Next: [Lexical Search and Why You Still Need It](/book/retrieval/lexical-search), on BM25, exact match, and the ticket ID that semantic search will never find.
+
+## Takeaways
+
+- Metadata filtering is presented as an optimization and functions as an access control. Same code, different consequence class.
+- In an agent, a leak is laundered by generation: no file opened, no access logged, just a helpful paragraph containing something the asker was never entitled to.
+- Store document requirements in the index; derive user principals from the live request. Baking membership into the index means revocations silently don't take effect.
+- Post-filtering alone is not a security boundary: restricted content was still read, still logged, still sent to whatever ran before the filter.
+- Deny by default, principal as a required argument, filters the model cannot influence, one retrieval function, and retrieved IDs logged per request.
+- Separate indexes per tenant are the form of this control that survives your own bugs.
+- Authorization travels with the data. Summaries, memory, and caches all inherit the restriction, and a cache key without the principal is a cross-tenant bug waiting for traffic.
+- Indexed ACLs go stale like any other copy. Reconcile on a schedule, on change events, or verify at query time depending on what a wrong answer costs.
+- Test with negatives. "This document ID never appears" is a rare deterministic assertion in this field, so use it.

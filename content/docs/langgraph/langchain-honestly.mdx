@@ -1,0 +1,130 @@
+---
+title: "LangChain, Honestly"
+description: "What the abstraction earns, what to skip, and how to use it without handing over your architecture."
+---
+
+LangChain is simultaneously the most-adopted and most-criticized library in this field. Both facts are informative, and the useful move is to take them seriously at the same time rather than picking a side.
+
+[Part II ended](/book/first-agent/what-a-framework-buys) with a rule: adopt a framework for the problem it solves, when you have that problem. This chapter applies that rule to a specific, moving target. That means being clear about what "LangChain" refers to, because most of the argument about it is people discussing different things.
+
+## Five things wear the name
+
+<Figure caption="Criticism of one of these routinely gets applied to all five. So does praise." frame={false}>
+
+```
+   langchain-core          interfaces, message types, content blocks
+   langchain               the small composition surface
+   langchain-{provider}    integrations, one package per provider
+   langchain-classic       the legacy chains and memory classes
+   ───────────────────────────────────────────────────────────────
+   LangGraph               a separate library — the graph runtime
+   LangSmith               a separate product — tracing and evals
+```
+
+</Figure>
+
+The line matters. **LangGraph is installable on its own**, with no `langchain-*` package required. You can adopt the graph runtime, which is what Part VII is actually about, without adopting the composition layer, the integrations, or any of the history. A great many arguments about "should we use LangChain" are really arguments about whether to use LangGraph, and the answer to those is different.
+
+## What v1 actually changed
+
+The 2024 critique was specific: too many abstractions, too much churn, and too many cases where reading the source was faster than reading the docs. The library answered some of that directly.
+
+The 1.0 release (October 2025) cut the core down. Legacy machinery moved out to a separate `langchain-classic` package: `LLMChain`, `ConversationChain`, the old memory and retriever classes. That leaves a small main surface. Integrations split into per-provider packages, so you install what you use rather than a transitive dependency graph you didn't ask for. Content blocks were standardized across providers. And the prebuilt agent factory runs on LangGraph rather than the old chain machinery.
+
+That is a real cleanup, and a lot of writing about LangChain predates it. If you formed your opinion on the 2023–24 version, you formed it about a different library.
+
+## The 2026 critique is a different one
+
+The criticism that survives the cleanup is more interesting, and it's an argument about *value decay* rather than about code quality:
+
+> **The abstraction is overhead now, because the vendors converged.** A provider-abstraction layer earns its keep by hiding meaningful differences between providers. Those differences have shrunk. Messages, tool calling, streaming, and structured output look broadly alike across the major APIs. The abstraction's cost didn't shrink with them.
+
+This is worth sitting with, because it's the general shape of how integration layers age. The value was never in the code; it was in the incompatibility it absorbed. As the ecosystem standardizes, an adapter written for a world of five incompatible APIs is carrying weight for a problem that partially went away.
+
+It hasn't gone away entirely. Providers still differ on caching semantics, thinking configuration, beta features, and error taxonomies, and those are exactly the places where a generic abstraction is *least* likely to expose what you need. Which brings us to the sharpest practical point in this chapter.
+
+<Aside type="caution" title="The abstraction hides the mechanics you spent Part I learning">
+You now know that [tool schemas are billed on every request](/book/foundations/tokens), that [one changed byte at the front of the prompt costs the whole cache](/book/foundations/prompt-caching), and that `input_tokens` is only the uncached remainder.
+
+A generic wrapper is under no obligation to surface any of that. Cache breakpoints, per-request token breakdowns, and provider-specific controls are exactly the fields that get normalized away. When they're invisible, you tune a cost curve you cannot perceive.
+
+Before adopting any abstraction, check that you can still see `cache_read_input_tokens`, place a `cache_control` breakpoint where you want it, and pass provider-specific parameters through. If you can't, you have traded a real capability for convenience.
+</Aside>
+
+## What it genuinely earns
+
+Being fair, in descending order of value:
+
+**Integration breadth.** Dozens of providers, stores, and loaders behind one interface. This is unglamorous and real, and it is worth the most when you are *evaluating*, trying four embedding models or three vector stores without writing four adapters.
+
+**Standardized message and content types.** Multimodal content, tool calls, and reasoning blocks with a consistent shape across providers is genuine plumbing you'd otherwise write.
+
+**A common streaming, batching, and async surface.** Fiddly, well-solved, and easy to get subtly wrong yourself.
+
+**LangGraph.** Different proposition entirely, better founded, and the subject of the next seven chapters.
+
+Note the shape of that list: it is mostly **glue**. That's not faint praise. Glue is real work. But it does tell you where the boundary should be.
+
+## What to skip
+
+**Prebuilt agents as a starting point.** You [wrote the loop](/book/first-agent/the-loop-by-hand); you know what the eighty lines were and which decisions they contained. A prebuilt agent makes those decisions for you, out of sight, and the whole reason Part II exists is so you don't take that trade without seeing it. Use one when you have measured that its choices match yours.
+
+**Document loaders as an ingestion pipeline.** [Part IV](/book/retrieval/ingestion-pipeline) argued that ingestion's hard problems are lifecycle, not parsing: change detection, deletion, reconciliation, idempotency. A loader gives you parsing. Treat it as one stage of a pipeline you own, not as the pipeline.
+
+**Chains for things that are three lines.** If the composition is `a` then `b`, write `b(a(x))`. An abstraction that turns two function calls into a DSL has added a layer and a vocabulary for nothing.
+
+**The legacy surface.** It's in a separate package now precisely so you can not install it.
+
+## Let it own glue, never your domain
+
+The architectural rule, and it's the same list [Part II](/book/first-agent/what-a-framework-buys) said stays yours across every rewrite:
+
+| Yours, always | Framework's, happily |
+| --- | --- |
+| Tool definitions, descriptions, result shaping | Provider clients |
+| Authorization and tenancy | Message/content type plumbing |
+| The outcome union: answered, escalated, halted | Streaming and batching mechanics |
+| Prompts and the context budget | Retry/transport details |
+| The eval set and acceptance criteria | Store and loader adapters |
+
+The practical form of that rule is a boundary: **don't let framework types into your domain.** If `AIMessage` appears in your business logic, in your persisted state, or in your function signatures beyond a thin adapter layer, a future version bump becomes a refactor of your application rather than of one file.
+
+This is ordinary dependency hygiene, and it is the specific hygiene that this ecosystem punishes you for skipping, because the version churn is real.
+
+## Adopting it without regret
+
+Four practices, all cheap:
+
+**Wrap at the boundary.** One module that imports the framework, exposes your types, and can be replaced. You will not necessarily replace it. The option is what keeps the dependency honest.
+
+**Pin versions and read changelogs as production code.** Minor releases in this ecosystem have changed behaviour.
+
+**Keep the escape hatch open.** You can always call the provider SDK directly for one call. A framework that makes that awkward is one to be suspicious of; the good ones don't.
+
+**Adopt per capability, not wholesale.** Take the graph runtime because you need checkpointing. Take the integrations because you're comparing four models. Don't take everything because you took something.
+
+## The recommendation
+
+**Use LangGraph when [the determinism test](/book/workflows/the-determinism-test) says you have a genuine agent step and you need what a graph provides:** explicit state, checkpointing, interruption at node boundaries, and a run shape you can inspect. That's a specific problem with a specific answer, and the next chapters are about it.
+
+**Use the integrations when breadth is the point.** During evaluation, or when you genuinely support many providers.
+
+**Skip the composition layer when your composition is already code.** Most of Part VI's shapes are twenty lines of ordinary programming, and they are clearer as ordinary programming.
+
+**And don't take "LangChain" as one decision.** It's five, they have different answers, and the most valuable one, the graph runtime, is the one you can take on its own.
+
+---
+
+Next: [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The graph model, and rebuilding Atlas as an explicit state machine.
+
+## Takeaways
+
+- Five different things share the name. Criticism and praise both get misapplied across them, and most "should we use LangChain" arguments are really about LangGraph.
+- LangGraph installs standalone. You can take the graph runtime without the composition layer, the integrations, or the history.
+- The v1 release moved legacy chains and memory to a separate package, split integrations per provider, and rebuilt the prebuilt agent on LangGraph. If you formed your opinion before that, you formed it about a different library.
+- The surviving critique is about value decay: a provider abstraction earns its keep by hiding differences, and the providers converged. The cost didn't converge with them.
+- Generic wrappers normalize away exactly the provider-specific controls Part I taught you to watch: cache breakpoints and token breakdowns. Check you can still see them.
+- What it earns is mostly glue: integration breadth, content types, streaming mechanics. Glue is real work, and it tells you where the boundary belongs.
+- Skip prebuilt agents as a default, loaders as an ingestion pipeline, and chains for two-line compositions.
+- Keep framework types out of your domain. Tools, authorization, prompts, outcomes, and evals stay yours.
+- Adopt per capability, wrap at the boundary, pin versions, and keep the direct-SDK escape hatch open.

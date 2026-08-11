@@ -1,0 +1,176 @@
+---
+title: "TypeScript ↔ Python Cheat Sheet"
+description: "The same concept in both tracks, side by side."
+---
+
+Nearly every code sample in this book appears in both languages. This page is the translation table between them: not a language tutorial, but the specific places where the *same design* looks different enough to trip you up when reading the other track.
+
+The exceptions are worth naming, because they are exactly where you will need this page. About a dozen short illustrations run in one track only, where the point is a mechanism rather than an idiom, most of them Python, in [Part VII](/book/langgraph/state-nodes-edges), where the graph API is itself the subject. And [the Temporal LangGraph plugin](/book/durability/langgraph-on-temporal) is Python-only in the product, not merely in the book.
+
+Ordered by how often it matters.
+
+## Structured output and validation
+
+The single most-used pattern in the book. Both tracks define a schema, hand it to the model, and get a validated object back.
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Schema library | Zod | Pydantic |
+| Define | `z.object({ ... })` | `class X(BaseModel)` |
+| Validate, throwing | `Schema.parse(x)` | `X.model_validate(x)` |
+| Validate, non-throwing | `Schema.safeParse(x)` | `try` / `ValidationError` |
+| To JSON Schema | `zodToJsonSchema(S)` | `X.model_json_schema()` |
+| Optional field | `z.string().optional()` | `str \| None = None` |
+| Enum | `z.enum(['a','b'])` | `Literal["a","b"]` |
+
+The asymmetry worth knowing: **Zod has a non-throwing parse and Pydantic does not.** Python code in this book uses `try/except ValidationError` where the TypeScript uses `safeParse`, and the difference is idiom rather than design.
+
+## Immutable data
+
+Both tracks use "a plain data record you do not mutate," which shows up in almost every `RunContext`, `Delegation`, and `ConfigBundle` in the book.
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Declare | `interface X { ... }` | `@dataclass(frozen=True)` |
+| Copy with changes | `{ ...x, field: v }` | `replace(x, field=v)` |
+| Read-only collection | `readonly string[]` | `tuple[str, ...]` |
+| Mutable by design | `class` with methods | `@dataclass` (unfrozen) |
+
+`readonly` is compile-time only in TypeScript; `frozen=True` raises at runtime in Python. Where the book relies on immutability as a *safety* property, like the delegation record or the config bundle, Python enforces it and TypeScript documents it.
+
+## Async, and the differences that bite
+
+Concurrency looks similar and differs in ways that matter for [fan-out](/book/patterns/scale/fan-out) and [sliding windows](/book/patterns/scale/sliding-window).
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Define | `async function f()` | `async def f()` |
+| Await | `await f()` | `await f()` |
+| Run in parallel | `Promise.all([...])` | `asyncio.gather(*[...])` |
+| Parallel, keep failures | `Promise.allSettled` | `gather(..., return_exceptions=True)` |
+| First to finish | `Promise.race` | `asyncio.wait(..., FIRST_COMPLETED)` |
+| …and reading which one won | the resolved value | inspect `done`, see below |
+| Timeout | `AbortSignal.timeout(ms)` | `asyncio.timeout(s)` |
+| Cancel | `AbortController` | Task `.cancel()` |
+
+Four things to carry across:
+
+**Units differ.** TypeScript APIs take **milliseconds**; Python's `asyncio` takes **seconds**. Every timeout in this book follows the host convention, which is why the same value appears as `30_000` in one track and `30.0` in the other.
+
+**A promise starts immediately; a coroutine does not, but `create_task` does.** Calling an `async function` in TypeScript begins the work. Calling an `async def` in Python produces a coroutine that runs only when awaited or scheduled, so a list of coroutines passed to `gather` has not started anything yet.
+
+The trap is the other direction. `[asyncio.create_task(f(i)) for i in items]` schedules *everything* the moment it is built, and a semaphore inside `f` limits only how many run at once, not how many exist. Over a large input that allocates the whole job up front, and it defeats any early-exit check, because the work already exists by the time you decide to stop. Where TypeScript throttles naturally by only constructing a promise when there is room, Python needs you to write that admission loop yourself.
+
+**`race` tells you who won; `wait` does not.** `Promise.race` resolves to the winner's value, so tagging each branch, `p.then(() => 'reply')`, and switching on the tag is natural. `asyncio.wait` returns *sets of tasks*, and the obvious next step, `if my_coro in done`, is a trap: `wait` wraps bare coroutines in Tasks, so the identity test compares against objects that no longer exist and silently never matches. Wrap every branch in `create_task` yourself, have each return a tag, and read the tag off the winner.
+
+**A finished Task does not remove itself.** In TypeScript you attach `.finally(() => inFlight.delete(p))` and the tracking set stays accurate on its own. Python has no equivalent hook, so a `Task` that completed sits in your set until something reaps it. Any code that gates on `len(in_flight)` is counting work that finished. Reap before you measure, or a concurrency window silently shrinks toward zero as tasks accumulate.
+
+## Absent values, and the gotcha that bites hardest
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Fall back only when absent | `a ?? b` | `a if a is not None else b` |
+| Fall back on anything falsy | `a \|\| b` | `a or b` |
+| Optional field | `T \| undefined` | `T \| None` |
+| Two flavours of absent | `null` and `undefined` | just `None` |
+
+**`or` is not `??`, and Python has no `??`.** This is the single most transferable bug between the two tracks, because `or` in Python behaves like `||` in TypeScript: it replaces `0`, `""`, `[]`, and `False`, not just the absent case.
+
+It bites hardest on exactly the values this book cares about. A `Retry-After` of zero means *retry now*; `retry_after_ms(err) or fallback` silently discards it and sleeps. A [token budget](/book/patterns/cost/token-budget-enforcement) of `0` means *exhausted*; `budget or default` hands back the default. A retrieved `k` of `0` means *retrieve nothing*.
+
+Reach for `x if x is not None else y` in Python wherever the TypeScript says `??`, and reserve `or` for the cases where you genuinely want every falsy value replaced.
+
+## Errors
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Custom class | `class E extends Error` | `class E(Exception)` |
+| Catch specific | `if (e instanceof E)` | `except E:` |
+| Re-raise | `throw e` | `raise` (bare, keeps traceback) |
+| Chain a cause | `new E(msg, { cause: e })` | `raise E(msg) from e` |
+| Anything can be thrown | **Yes**, `catch (e: unknown)` | No, must derive from `BaseException` |
+
+That last row is why TypeScript samples in this book narrow with `instanceof` before reading fields off a caught value, and Python samples do not need to. It also means [the error classifier](/book/reliability/error-taxonomy) has slightly more defensive work to do on the TypeScript side.
+
+## Hashing and canonical JSON
+
+Used for [idempotency keys](/book/tools/idempotency) and [config bundle hashes](/book/production/versioning), where an unstable serialization is a real bug rather than a style issue.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts
+import { createHash } from 'node:crypto';
+
+// Sorted keys — the second argument to JSON.stringify is a key allowlist
+// that also fixes the order.
+const canonical = JSON.stringify(obj, Object.keys(obj).sort());
+const hash = createHash('sha256').update(canonical).digest('hex');
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import hashlib, json
+
+# sort_keys=True, and separators to drop insignificant whitespace.
+canonical = json.dumps(obj, sort_keys=True, separators=(",", ":"))
+hash_ = hashlib.sha256(canonical.encode()).hexdigest()
+```
+
+</Tab>
+</Tabs>
+
+The two do **not** produce identical bytes for the same object by default. Python's `json.dumps` emits `", "` separators unless told otherwise, and `JSON.stringify`'s allowlist form does not recurse into nested objects. If a key has to match across services written in both languages, canonicalize deliberately and test it, rather than assuming.
+
+## Time, IDs, and randomness
+
+The three things [durable workflow code must not call directly](/book/durable-execution/determinism-and-retries).
+
+| | TypeScript | Python |
+| --- | --- | --- |
+| Wall clock | `Date.now()` → ms | `time.time()` → s |
+| Monotonic | `performance.now()` | `time.monotonic()` |
+| UUID | `crypto.randomUUID()` | `uuid.uuid4()` |
+| Random | `Math.random()` | `random.random()` |
+| In a workflow | The SDK's replay-safe equivalents | The SDK's replay-safe equivalents |
+
+Use monotonic time for deadlines and elapsed measurement in both tracks. The book's `RunBudget` uses `Date.now()` in TypeScript for readability and `time.monotonic()` in Python, and the Python choice is the more correct one.
+
+## Framework surfaces
+
+Where the two tracks diverge most in naming, though not in concept.
+
+| Concept | TypeScript | Python |
+| --- | --- | --- |
+| Graph state | `Annotation.Root({...})` | `TypedDict` + `Annotated` reducers |
+| Add a node | `.addNode('name', fn)` | `.add_node("name", fn)` |
+| Conditional edge | `.addConditionalEdges(...)` | `.add_conditional_edges(...)` |
+| Compile | `.compile({ checkpointer })` | `.compile(checkpointer=...)` |
+| Interrupt | `interrupt(value)` | `interrupt(value)` |
+| Temporal workflow | `@workflow` / proxied activities | `@workflow.defn` / `@activity.defn` |
+| Temporal sleep | `await sleep('3 days')` | `await asyncio.sleep(...)` via the SDK |
+| Wait for a condition | `condition(fn, timeout)` → **boolean** | `wait_condition(fn, timeout=…)` → **raises** |
+
+The naming is `camelCase` in TypeScript and `snake_case` in Python throughout, mechanically. Where this book's prose names a parameter such as `maxAttempts` or `retryAfterMs`, the Python track uses the snake-case form of the same name.
+
+## Idioms this book uses in only one track
+
+Three places where the tracks are not literal translations, deliberately:
+
+**Discriminated unions vs. sentinel returns.** TypeScript returns `{ ok: true } | { ok: false, reason: string }` because the type checker narrows on the tag. Python returns `tuple[bool, str | None]`, which is idiomatic but weaker. A caller that ignores the second element compiles fine in both, and only TypeScript will complain about reading `.reason` off the success branch.
+
+**Context managers.** Python's `async with` is the natural home for [transaction scoping](/book/security/tenant-isolation) and lease handling; TypeScript uses a callback-taking function (`withTenant(id, async tx => ...)`). Same guarantee, different shape.
+
+**Type-level enforcement.** Where the book says a value is "required, not optional," such as the retrieval principal or the delegation on a backend client, TypeScript expresses it in the type and Python expresses it as a required positional argument. Both work; only one is checked before the code runs.
+
+<Aside type="note" title="If you only read one track">
+Read the samples in the language you ship in and skim the other for the comment lines. The comments carry the design decision; the code carries the idiom, and the design is what this book is about.
+
+The one place to read both is the [dispatcher](/book/capstone/building-it), because the numbered checks line up one-to-one and seeing the same eight steps in two languages is a reasonable check that you have understood what each one is for.
+</Aside>
+
+---
+
+Next: [Temporal Pattern Index](/book/appendix/temporal-pattern-index), every pattern in the Temporal catalog, mapped to where this book uses it.

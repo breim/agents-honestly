@@ -1,0 +1,215 @@
+---
+title: "Your Agent Is Not a Background Job"
+description: "The `await agent.run()` in a route handler, and every production problem hiding behind it."
+---
+
+Part X taught durable execution with no AI in it. Here is where the two halves meet, and the meeting starts with a line of code that everybody writes:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts
+app.post('/tickets/:id/resolve', async (req, res) => {
+  const result = await atlas.run(req.params.id);
+  res.json(result);
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+@app.post("/tickets/{ticket_id}/resolve")
+async def resolve(ticket_id: str):
+    result = await atlas.run(ticket_id)
+    return result
+```
+
+</Tab>
+</Tabs>
+
+It is correct, it is readable, it works in development, and it contains most of the production problems in this part.
+
+## Seven things hiding in one await
+
+**It will time out.** Agent runs in production cluster around **five to eleven minutes**. Load balancers and reverse proxies idle out around sixty seconds. The `await` and the request lifecycle are not in the same order of magnitude, and the gap is not closable by raising a timeout. The extreme tail runs to hours.
+
+**The connection is the state.** If the client navigates away, the run is orphaned: still executing, still buying tokens, and nobody will ever read its answer. Nothing cancels, because nothing knows the reader left.
+
+**It is not addressable.** There is no identifier for the running thing. You cannot ask how it is going, cannot cancel it, cannot resume it, cannot find it tomorrow. The only handle is a TCP connection.
+
+**A deploy kills it.** Every run in flight is executing code that is about to stop existing, [the failure nobody counts](/book/durable-execution/everything-that-breaks) because it is a normal Tuesday.
+
+**Retrying means starting over.** The client's retry button re-runs from step zero, which re-runs the refund. [The third state](/book/tools/idempotency) arrives at the HTTP layer, where it is even less visible.
+
+**There is no backpressure.** A hundred concurrent requests are a hundred concurrent agents, which is a hundred concurrent model calls, which is a `429`. And if your breaker counts those as failures, the incident is now yours rather than the provider's.
+
+**Cost is unbounded and unattributed.** Nothing caps what one request may spend, and nothing records which ticket spent it.
+
+## The naive fix is also wrong
+
+The standard remedy is to make it asynchronous: accept the request, return `202` with an ID, and run the agent as a background job on a worker.
+
+That fixes the first four items and it is genuinely better. It is also where most teams stop, and it is the wrong shape, because **a background job and an agent run are different kinds of thing.**
+
+| | A background job | An agent run |
+| --- | --- | --- |
+| Interaction while running | None. Fire and forget. | **Approve, correct, cancel, add information** |
+| Visible progress | A status field | **Intermediate output people watch** |
+| On failure | Retry from the start | **Resume**, or the refund happens twice |
+| Duration | Seconds to minutes | Minutes, or **days**, waiting for a person |
+| Output | One result | An [outcome union](/book/first-agent/the-loop-by-hand): answered, escalated, halted |
+| Identity | `job-a91f2c` | **Ticket 8823** |
+
+Every row is a mismatch, and the last one is the most consequential. A job ID is an infrastructure identifier that exists because the queue needed a key. But there is already a perfectly good identifier: the ticket. And the question people actually ask is never *"how is job a91f2c doing"*, it is *"what is happening with ticket 8823."*
+
+If those are different identifiers, you will build a mapping table, and then you will build the logic that handles two jobs racing for the same ticket, and then you will discover the mapping table is the state you were trying not to have.
+
+## What it actually is
+
+Not a request. Not a job.
+
+> **A durable process with a business identity, that you can talk to while it runs.**
+
+Which is precisely the thing [Part X spent five chapters building](/book/durable-execution/temporal-in-forty-minutes), and the mapping is one-to-one:
+
+| The agent needs | Part X calls it |
+| --- | --- |
+| To survive the process, the deploy, the crash | A workflow |
+| To be named by the ticket, not by a queue | The workflow ID |
+| To be started by an event that may arrive twice | [Signal-with-start](/book/durable-execution/signals-and-children) |
+| To accept an approval and report whether it took | An [update](/book/durable-execution/signals-and-children) |
+| To answer "how is it going" without side effects | A query |
+| To wait three days for a person | A durable timer |
+| To not re-issue the refund on recovery | An activity whose result is journalled |
+| To stop when told | Cancellation |
+
+<Figure caption="Three shapes for the same work. Only the third has an identity that outlives the connection and the process." frame={false}>
+
+```
+   ① IN THE REQUEST          ② AS A JOB              ③ AS A DURABLE PROCESS
+
+   client ──┐                client ──┐              client ──┐
+            │ 8 min                   │ 202               │ 202 + ticket id
+   [ agent runs ]            queue ───┤              workflow `ticket-8823`
+            │                worker ──┤                   │  ├─ query: status
+   response ┘                  status ┘                   │  ├─ update: approve
+                                                          │  ├─ signal: reply
+   dies with the             opaque while                 │  └─ timer: 3 days
+   connection                running; retries        survives everything;
+                             from zero               resumes where it was
+```
+
+</Figure>
+
+## The latency objection, answered with numbers
+
+The reflex against this is that durability adds overhead to something already slow.
+
+Measurements of production agent runs, tasks in the five-to-eleven-minute range in the [AgentCgroup study](https://arxiv.org/abs/2602.09345), put the split roughly like this: **model reasoning is 26–44% of end-to-end time**, tool execution around a quarter, and container plus agent initialization 31–48%. Which means **the majority of user-perceived latency, somewhere between 56% and 74%, is overhead that has nothing to do with the model at all.**
+
+Against that distribution, the cost of journalling a step is noise. The thing worth optimizing is initialization and tool time, not the durability layer, and [the chapter on paying for durability in milliseconds](/book/durability/latency) covers the cases where the overhead does matter, which are narrower than people expect.
+
+<Aside type="caution" title="Asynchronous does not mean invisible">
+Moving the agent off the request path removes the timeout and introduces a new obligation: the user now has no idea what is happening.
+
+A job's answer is a status field polled every few seconds. An agent's answer is [intermediate output](/book/langgraph/streaming-and-control): what it is doing, what it found, what it is about to do. That is a product requirement rather than a nicety, because a system that says nothing for eight minutes is indistinguishable from a broken one.
+
+The mechanism is a stream decoupled from the compute: the run publishes events, the client subscribes, and the connection carrying the stream is not the connection running the agent. [Part XIII](/book/interface/ui-to-durable-backend) builds it; the reason it needs building is this chapter.
+</Aside>
+
+## The shape, concretely
+
+The route handler's job shrinks to almost nothing. It starts or notifies the process, and hands back its identity:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/api/tickets.ts"
+app.post('/tickets/:id/resolve', async (req, res) => {
+  const ticketId = req.params.id;
+
+  // Starts the workflow if it isn't running; delivers the event either way.
+  // Called twice, this does not start two runs.
+  await client.workflow.signalWithStart(atlasWorkflow, {
+    taskQueue: 'atlas',
+    workflowId: `ticket-${ticketId}`,   // the business identity, not a queue key
+    args: [ticketId],
+    signal: ticketEvent,
+    signalArgs: [{ type: 'resolve_requested' }],
+  });
+
+  res.status(202).json({ ticketId, stream: `/tickets/${ticketId}/events` });
+});
+
+// And the questions people actually ask, answered without touching the run:
+const phase = await client.workflow.getHandle(`ticket-${ticketId}`).query(status);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/api/tickets.py"
+@app.post("/tickets/{ticket_id}/resolve", status_code=202)
+async def resolve(ticket_id: str):
+    # Starts the workflow if it isn't running; delivers the event either way.
+    # Called twice, this does not start two runs.
+    await client.start_workflow(
+        AtlasWorkflow.run,
+        ticket_id,
+        id=f"ticket-{ticket_id}",        # the business identity, not a queue key
+        task_queue="atlas",
+        start_signal="ticket_event",
+        start_signal_args=[{"type": "resolve_requested"}],
+    )
+    return {"ticket_id": ticket_id, "stream": f"/tickets/{ticket_id}/events"}
+
+
+# And the questions people actually ask, answered without touching the run:
+handle = client.get_workflow_handle(f"ticket-{ticket_id}")
+phase = await handle.query(AtlasWorkflow.status)
+```
+
+</Tab>
+</Tabs>
+
+Three things disappeared from the system rather than moving:
+
+**The mapping table.** `ticket-8823` *is* the address. Nothing translates between business identity and infrastructure identity, because there is only one identity.
+
+**The duplicate-run race.** Two events for the same ticket arriving simultaneously do not start two runs; the second joins the first. That was going to be a distributed lock.
+
+**The status endpoint's storage.** A query reads the live execution's own state. Nothing writes progress to a table for the API to read back, which means progress cannot be stale or disagree with reality.
+
+## Atlas, concretely
+
+Twenty tickets, and the shape now matches the work:
+
+- **One workflow per ticket**, addressed as `ticket-8823`, started by whichever event arrives first: a customer email, an agent clicking Resolve, an SLA timer firing.
+- **Model calls and tool calls are activities**, so a crash does not re-run the ones that completed. That port is [the next chapter](/book/durability/agent-as-workflow).
+- **The approval is an update**, so the ops console learns whether it was accepted.
+- **Progress is a query**, so a dashboard polls without writing anything.
+- **The three-day wait is a timer**, so a ticket parked over a weekend costs nothing.
+- **The customer's reply is a signal** into the running execution rather than a new run against stale state.
+
+None of that is a feature you build. It is the shape of the thing, and Part XI is about living in it.
+
+## References
+
+- [arXiv:2602.09345](https://arxiv.org/abs/2602.09345), the measured breakdown of where an agent run's latency actually goes.
+
+---
+
+Next: [The Agent as a Workflow](/book/durability/agent-as-workflow), Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity.
+
+## Takeaways
+
+- Production agent runs cluster around five to eleven minutes, against proxy idle timeouts near sixty seconds. Raising the timeout does not close a gap whose tail runs to hours.
+- Inside `await agent.run()`: no addressability, no cancellation, no backpressure, no cost attribution, a deploy that kills it, and a retry that re-runs the refund.
+- Making it a background job fixes the timeout and keeps the wrong shape. Jobs are fire-and-forget, opaque, restarted on failure, and identified by a queue key.
+- An agent run must be steerable mid-flight, visibly progressing, resumable rather than restartable, capable of waiting days, and named by the business entity.
+- If the job ID and the ticket ID are different identifiers, you will build a mapping table, then a lock to stop two jobs racing for one ticket, and the table becomes the state you were avoiding.
+- What it actually is: a durable process with a business identity that you can talk to while it runs, which is exactly what Part X built.
+- Model reasoning is only 26–44% of end-to-end latency; initialization and tool execution dominate. Durability overhead is noise against that distribution.
+- Asynchronous is not invisible. Eight silent minutes is indistinguishable from broken, so the stream must be decoupled from the compute.
+- Using the entity as the workflow ID removes the mapping table, the duplicate-run race, and the progress table. They do not move, they cease to exist.

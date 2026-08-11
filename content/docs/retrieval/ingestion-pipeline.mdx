@@ -1,0 +1,169 @@
+---
+title: "Building the Ingestion Pipeline"
+description: "Parse, clean, normalize, enrich, embed, index, and keep it reproducible when the source changes."
+---
+
+
+Every chapter of Part IV so far has assumed the chunks exist, correctly parsed and properly tagged. Getting them there is the least discussed part of retrieval and the one that determines its ceiling.
+
+It also has a lopsided discourse. The public conversation about ingestion is almost entirely about **parsers**, meaning which vendor extracts tables best. The incidents in production are almost entirely about **lifecycle**: a document that changed and wasn't reindexed, a document that was deleted and wasn't removed, a batch that half-failed and nobody noticed. This chapter covers both, weighted toward the half nobody writes about.
+
+## The funnel
+
+<Figure caption="Six stages. The counts between them are your best diagnostic, and almost nobody records them." frame={false}>
+
+```
+   1,200 documents
+        │  PARSE        ← garbage here is unfixable downstream
+        ▼
+   1,187 parsed  (13 failed — do you know which?)
+        │  CLEAN / NORMALIZE
+        ▼
+   1,187 normalized
+        │  ENRICH       ← where the WHERE clause gets its data
+        ▼
+   1,187 + metadata
+        │  CHUNK
+        ▼
+   41,320 chunks
+        │  EMBED        ← rate limits, cost, partial failure
+        ▼
+   41,320 vectors
+        │  INDEX
+        ▼
+   searchable
+```
+
+</Figure>
+
+## Parse: the only stage you cannot recover from
+
+If a table comes out of a PDF as a jumble of numbers with no column association, nothing downstream fixes it. Not chunking, not embedding, not reranking. The corpus simply contains nonsense in the shape of text, and the agent will confidently retrieve it.
+
+The state of the art has moved here, and it's worth knowing what your options are:
+
+| Approach | How | Good for |
+| --- | --- | --- |
+| Text extraction | Pull the text layer out of the file | Clean, single-column, born-digital documents |
+| Layout-aware | Detect headers, columns, reading order, then extract | Most business documents; fast and cheap |
+| Vision-language | Render each page as an image and have a multimodal model read it | Dense tables, multi-column layouts, scanned pages |
+
+Vision-language parsers matured through 2025–26 and handle the cases that used to be hopeless. They are also the most expensive per page, which is why the pattern that has settled out is **hybrid**: run the cheap layout-aware parser by default, and route only the hard pages, the ones with detected tables or that fail a quality check, to the expensive one.
+
+And one evaluation rule worth adopting wholesale:
+
+> **For any document containing tables, table quality is the single most important criterion.** Not average text accuracy across the corpus.
+
+Because a mangled paragraph produces a slightly worse chunk, while a mangled table produces numbers attached to the wrong labels, which is the [confident-wrong-number failure](/book/retrieval/sql-is-still-the-answer) arriving through a different door.
+
+Evaluate parsers on *your* documents, on the twenty pages you know are hardest. Vendor benchmarks are, as ever, measured on a different corpus than yours.
+
+## Clean and normalize: be careful what you throw away
+
+Two opposite mistakes.
+
+**Not cleaning enough.** Every page's header and footer repeated in every chunk. Navigation chrome from an HTML export. Cover pages and tables of contents that match every query weakly and nothing strongly. This is pure noise, indexed and paid for forever.
+
+**Cleaning too much.** Stripping section numbers you need for [citations](/book/first-agent/the-problem). Collapsing whitespace inside a code block or an address. Removing "boilerplate" that turned out to be the effective-date line. A cleaner tuned on one document type quietly destroys another.
+
+Normalization has one requirement beyond correctness: **determinism.** Same input, same bytes out: stable Unicode normalization, stable whitespace handling, stable date formats, sorted keys anywhere you serialize. You will re-run this pipeline, and if it is not deterministic you cannot tell whether a quality change came from your change or from the pipeline shrugging differently.
+
+## Enrich: where the filters get their data
+
+The stage that gets treated as an afterthought and is load-bearing for three earlier chapters.
+
+Everything the retriever filters on has to be extracted here, because after ingestion it is too late:
+
+| Extracted | Used by |
+| --- | --- |
+| `document_id`, `version`, `superseded_at` | The version filter: [correctness, not ranking](/book/retrieval/vector-search) |
+| `tenant_id`, `acl`, `classification` | [Authorization](/book/retrieval/metadata-and-authorization) |
+| `tier`, `region`, `effective_date` | Business-scope filtering |
+| Identifiers: part numbers, codes | The [exact-match lexical path](/book/retrieval/lexical-search) |
+| Heading trail | [Chunk self-containment](/book/retrieval/chunking) |
+
+Two rules. **Fail loudly on missing required metadata.** A document that can't be assigned a tenant should fail ingestion, not get indexed as untagged. And **prefer extraction from structure over inference**: if the version is in the filename or a header field, parse it; ask a model only when there's genuinely nothing else, and mark those values as inferred so you can audit them later.
+
+## Embed and index
+
+The mechanical stages, with three practical notes.
+
+**Batch, and handle partial failure explicitly.** Embedding APIs rate-limit. A batch of 500 where 40 fail must not silently produce 460 vectors. Either retry the failures or fail the batch, but never let the corpus quietly become incomplete.
+
+**Index atomically where you can.** Build into a new table or namespace, validate, then swap. An in-place rebuild means a window where the corpus is half old and half new, and queries during that window get a mixture of two pipelines.
+
+**Write the pipeline version on every row.** `e5-large/chunk-v3/1536`, as established two chapters ago. This is what makes a partial migration diagnosable instead of mysterious.
+
+## The half nobody writes about
+
+Now the lifecycle problems, which is where the actual incidents live.
+
+### Change detection
+
+How do you know a document changed? Not by timestamp, because source systems touch timestamps for reasons unrelated to content. **Hash the normalized content.** If the hash matches, skip everything downstream; if it differs, re-run from parse. This is what makes incremental ingestion possible at all, and it's about fifteen lines.
+
+### Deletion, which almost nobody implements
+
+A document is removed from the source. What happens in your index?
+
+In most systems: **nothing.** The ingestion job iterates over what exists and adds it. Nothing iterates over what no longer exists. So the deleted document remains searchable, indefinitely, and the agent cites a policy that was withdrawn.
+
+<Aside type="caution" title="The superseded-policy failure">
+Recall from [the problem chapter](/book/first-agent/the-problem) that Meridian's corpus contains contradictory documents, including superseded versions of the same policy. That's a data problem. It becomes an *agent* problem when the withdrawn version is still in the index because ingestion has no deletion path.
+
+The version filter in the query defends against the ones you know are superseded. It does nothing about a document that was deleted upstream and that your index still believes is current.
+
+Reconcile: periodically list what the source has, diff against what the index has, and remove the difference. It is a boring batch job and it is the only thing standing between you and citing a retracted policy.
+</Aside>
+
+### Idempotency
+
+Re-running ingestion over the same document must produce the same chunks in the same place, not a second copy. Key chunks by a deterministic identity, such as document ID plus chunk index or a content hash, rather than by an auto-incrementing row. Otherwise a re-run after a partial failure doubles part of your corpus, and duplicate near-identical chunks are exactly the [distractors](/book/context/context-as-budget) you least want.
+
+### Partial failure and the manifest
+
+Thirteen of 1,200 documents failed to parse. Two questions decide whether your corpus is trustworthy: **do you know which thirteen**, and **does anyone see the number?**
+
+Write a manifest per run: documents attempted, succeeded, failed with reasons, chunks produced. Then reconcile: source count versus indexed count. A silent skip is how a corpus develops holes that nobody discovers until a customer asks about the one policy that never made it in.
+
+## The counts are your monitoring
+
+The funnel at the top of this chapter is not an illustration; it's the dashboard. Record the count at every stage of every run, and alert on the **ratios** rather than the absolutes:
+
+- Documents in → chunks out. If 1,200 documents produced 41,000 chunks yesterday and 12,000 today, a parser silently degraded.
+- Parse failure rate. A jump means the source started emitting a new format.
+- Chunks per document, distribution. A document producing one chunk probably failed to parse; one producing 900 probably lost its structure.
+- Index count versus source count. Any gap is a hole or a tombstone you didn't apply.
+
+This is the cheapest observability in Part IV and it catches the failures that retrieval metrics cannot, because a corpus that is missing documents has excellent recall over the documents it has.
+
+## Reproducibility
+
+The property that makes everything above debuggable: **the same source, run through the same pipeline version, produces the same index.**
+
+That means no wall-clock timestamps in derived content, no unordered iteration where order affects chunking, no model calls in the pipeline without a pinned version, and pipeline configuration in version control rather than in someone's notebook.
+
+Without it, you cannot answer the question you will eventually be asked: *"did retrieval get worse because of your change, or because the corpus changed?"* A retrieval system whose behaviour can't be attributed is one you can only tune by superstition.
+
+## Atlas, concretely
+
+Layout-aware parsing by default, vision-language on pages where table detection fires. Content-hash change detection; a nightly reconciliation that lists the source and tombstones anything missing. Required metadata of `tenant_id`, `document_id`, and `version` is enforced at ingestion, with failures rejected rather than indexed untagged. Manifest per run, counts published, alert on chunks-per-document drift.
+
+Roughly 1,200 documents, 41,000 chunks, rebuilt incrementally on change and fully on any pipeline version bump. The full rebuild takes about forty minutes and costs real money, which is the [migration cost](/book/retrieval/embeddings) made concrete, and the reason `pipeline_ver` is on every row.
+
+---
+
+Next: [Multimodal Document Intelligence](/book/retrieval/multimodal-document-intelligence), on PDFs, scans, tables, images, and audio without flattening away the evidence.
+
+## Takeaways
+
+- The discourse is about parsers; the incidents are about lifecycle. Budget attention accordingly.
+- Parsing errors are unrecoverable downstream. Use layout-aware parsing by default and route hard pages to a vision-language parser.
+- For documents with tables, table fidelity is the evaluation criterion, because a mangled table is numbers attached to the wrong labels.
+- Cleaning too much is as damaging as cleaning too little. Don't strip the section numbers your citations need.
+- Normalization must be deterministic, or you can't attribute a quality change to anything.
+- Enrichment is where the version, tenant, and identifier filters get their data. Fail loudly on missing required metadata rather than indexing untagged.
+- Implement deletion. Most pipelines only add, so a withdrawn document stays retrievable forever.
+- Make ingestion idempotent with deterministic chunk identity, or a retry duplicates your corpus.
+- Write a manifest and reconcile source count against index count. Silent skips become holes nobody finds.
+- Alert on stage-to-stage ratios. A corpus missing documents still shows excellent recall over the ones it has.

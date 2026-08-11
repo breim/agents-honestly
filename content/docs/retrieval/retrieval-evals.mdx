@@ -1,0 +1,139 @@
+---
+title: "Evaluating Retrieval"
+description: "Recall, precision, and the fact that a perfect generator cannot rescue a bad retriever."
+---
+
+
+Retrieval sets a ceiling. If the answer is not in the context, no model produces it: not a bigger one, not a better-prompted one, not one asked to think harder. Generation can ignore material it was given; it cannot invent material it wasn't.
+
+Which means the end-to-end quality you measure is a **product** of two components, and when the answer is wrong you have to know which one failed. Teams that don't measure retrieval separately guess, and the guess is almost always "the model," because the model is the part that produced the visible mistake.
+
+## The four buckets
+
+The single most useful thing in this chapter is a classification. Take every failed case from your ticket set and put it in exactly one bucket:
+
+<Figure caption="Four failures, four different fixes. Without this decomposition every one of them looks like a model problem." frame={false}>
+
+```
+   Was the necessary content retrieved?
+        │
+   NO ──┴── YES
+   │         │
+   │    Was it SUFFICIENT to answer?
+   │         │
+   │    NO ──┴── YES
+   │    │          │
+   │    │     Did the model use it correctly?
+   │    │          │
+   │    │     NO ──┴── YES
+   ▼    ▼     ▼         ▼
+  ①    ②     ③        ④
+ RETRIEVAL  CONTEXT  GENERATION  the question was
+   MISS    INSUFFICIENT  MISS     unanswerable
+
+ fix:      fix:        fix:       fix:
+ recall —  chunking,   prompt,    say so, and
+ hybrid,   parent/     model,     escalate
+ k, index  child       grounding
+```
+
+</Figure>
+
+Bucket ② is the one that classic information-retrieval metrics cannot see, and it is where a lot of real failure lives.
+
+## Relevance is not sufficiency
+
+Traditional IR assumes the relevant document *is* the answer: you found the right paper, you're done. RAG breaks that assumption, because a chunk can be indisputably the right chunk and still not contain enough to answer correctly.
+
+This is the [chunking chapter's bug](/book/retrieval/chunking) made measurable. The chunk containing *"opened electrical components may be returned within 30 days"* is the correct retrieval for "can we return opened relays?": recall@5 counts it as a hit, precision looks fine, nDCG is excellent. And the exception clause that changes the answer was in the next chunk.
+
+So retrieval evaluation needs two distinct questions, not one:
+
+| Question | Metric | Fails when |
+| --- | --- | --- |
+| Did we retrieve the relevant material? | **Context recall** | The retriever missed it |
+| Is the retrieved set enough to answer correctly? | **Context sufficiency** | Chunking split it, or a dependency wasn't retrieved |
+| Is what we retrieved mostly useful? | **Context precision** | You're paying attention for distractors |
+
+Precision matters more here than it does in web search, for a reason established in [Context as an Allocation Problem](/book/context/context-as-budget): the irrelevant chunks aren't merely wasted tokens, they're the near-misses most likely to be confused with the answer. Low precision doesn't just cost money; it costs accuracy.
+
+## The labeling problem
+
+All of the above needs ground truth, and that is the actual barrier. Three ways to get it, each with a trap.
+
+**Manual gold sets.** For each question, a human marks which chunks are necessary. Expensive, and the highest quality. Fifty questions labeled carefully beats five hundred labeled sloppily, and you already have twenty from [the problem chapter](/book/first-agent/the-problem).
+
+**Mined from production.** If Atlas cites its sources, and the acceptance spec requires it, then every correctly-answered ticket is a labeled example, for free. Every escalation that mentions missing information is a candidate negative. This is the cheapest high-quality labeling available, and it exists only because citations were a requirement from day one.
+
+**Synthetic questions.** Generate a question from each chunk, then check whether that chunk is retrieved. Scalable, and it carries a trap worth stating plainly:
+
+<Aside type="caution" title="The synthetic-question trap">
+A question generated *from* a chunk shares that chunk's exact vocabulary. It is trivially findable by the chunk it came from, often by lexical overlap alone, so your retriever scores far higher on synthetic questions than on real ones.
+
+Real users don't phrase things the way your documents do. That vocabulary mismatch is [precisely the hard case](/book/retrieval/lexical-search), and synthetic generation is the one method guaranteed not to test it.
+
+Use synthetic questions for coverage and regression detection, never for absolute quality claims. Anchor absolute numbers to human-labeled or production-mined examples.
+</Aside>
+
+## Judging with a model, carefully
+
+Sufficiency in particular is hard to label by rule: "does this set of chunks contain enough to answer correctly" is a judgment. So the practical answer is a model as judge, and it works, with known caveats.
+
+Model judges have documented systematic biases: they **prefer longer responses**, exhibit **positional bias** (the order you present candidates changes the verdict), and tend to **favor outputs from their own model family**. For retrieval evaluation, positional bias is the dangerous one. If you ask a judge to rank passages, randomize the order and average, or you are measuring your own presentation.
+
+Two disciplines make judges trustworthy:
+
+**Calibrate against humans.** Keep a human-labeled subset and periodically check that the judge agrees with it. Re-check after changing the judge model or the judge prompt, because both silently change the scale.
+
+**Judge one narrow thing at a time.** "Does this passage contain the fact needed to answer X, yes or no" is a question a model answers reliably. "Rate the overall quality of this retrieval from 1 to 10" is a question that produces numbers with no meaning.
+
+## Guardrail metrics
+
+Two evaluations that aren't about quality and should fail the build outright.
+
+**The negative set.** From [the authorization chapter](/book/retrieval/metadata-and-authorization): questions asked by a principal who lacks access, asserting that the restricted document ID never appears in the retrieval trace. Deterministic, binary, and one of the very few hard assertions this field offers.
+
+**Freshness.** Assert that a superseded document is never returned as current, and that a document deleted upstream is no longer retrievable at all. This is the [ingestion lifecycle](/book/retrieval/ingestion-pipeline) verified from the query side, and it catches the reconciliation job silently failing.
+
+Both belong in CI. Both are pass/fail rather than rates, because there is no acceptable rate of serving another tenant's documents.
+
+## When the numbers disagree with reality
+
+The situation that teaches the most: **nDCG improved and end-to-end answer accuracy didn't move.**
+
+That is not a measurement error. It is a diagnosis, and it means ordering was not your bottleneck. Check bucket ②: if the right chunk was already arriving and the answers were still wrong, better ranking was never going to help, and the problem is chunking, or the model, or the question set.
+
+The reverse also happens: retrieval metrics flat, answers better. Usually someone fixed a prompt or the chunks got more self-contained. Both cases argue the same thing: **retrieval metrics are proxies, and the end-to-end number is the one you actually ship.** Keep both, and treat disagreement between them as information rather than noise.
+
+## Making it routine
+
+Run retrieval evals on every change to chunking, the embedding model, the pipeline, the index parameters, or the reranker, which is to say on every change in Part IV. Each of those alters retrieval behaviour, and several of them ([re-chunking](/book/retrieval/chunking), [re-embedding](/book/retrieval/embeddings)) invalidate every number you'd measured before.
+
+Run each question [several times](/book/foundations/nondeterminism) where any stage involves a model, and report rates rather than single results, since the discipline from Part I applies here exactly as it does everywhere else.
+
+And record the retrieved document IDs on every production request. That single log line is what makes production mining possible, what makes an incident investigable, and what turns "search seems worse lately" into a query you can run.
+
+## Where Part IV leaves you
+
+Eleven chapters on a question most projects answer with a reflex. The route matters more than the technology; identifiers and aggregates aren't retrieval problems; chunking sets the ceiling; the filter is what makes results correct rather than merely relevant; hybrid exists because dense and lexical fail in opposite directions; the pipeline's lifecycle causes more incidents than its parser; and none of it is knowable without evaluating retrieval on its own.
+
+The catalog carries the fixes with the code attached: [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks) for the right document and the wrong chunk, [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion) and [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank) for recall and precision in that order, [Query Rewriting](/book/patterns/retrieval/query-rewriting) for conversational phrasing, [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval) for the authorization filter, [Freshness Routing](/book/patterns/retrieval/freshness-routing) for the questions an index answers stale, [Grounded Citations](/book/patterns/retrieval/grounded-citations) for making a claim checkable, and [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool) for letting the agent decide whether to search at all.
+
+Atlas can now answer policy questions with citations, order questions with live data, and aggregate questions with exact numbers. What it still cannot answer is *"why is the Acme account at risk"*, because that answer isn't in any single record. It's in the relationships between several, and that is Part V.
+
+---
+
+Next: [When Relationships Are the Query](/book/graphs/when-relationships-are-the-query), on multi-hop questions that similarity search structurally cannot answer, and how to recognize one.
+
+## Takeaways
+
+- Retrieval sets a ceiling on generation. A model can ignore extra context; it cannot invent missing context.
+- Classify every failure into four buckets: retrieval miss, insufficient context, generation miss, or unanswerable. Each has a different fix, and without the split they all look like model problems.
+- Relevance is not sufficiency. The right chunk can be retrieved and still not contain enough to answer, and classic IR metrics cannot see this.
+- Precision matters more in RAG than in search, because the extra chunks are near-misses that actively degrade the answer.
+- Labeling is the real barrier. Production mining is the cheapest good source, and it only works if you required citations from the start.
+- Synthetic questions share their source chunk's vocabulary, so they test the easy case. Use them for regression, not for absolute claims.
+- Model judges have positional and length biases. Randomize order, ask narrow binary questions, and calibrate against a human-labeled subset.
+- Keep two pass/fail guardrails in CI: the authorization negative set and the freshness check.
+- If ranking improves and answers don't, ordering wasn't your bottleneck. Disagreement between proxy and end-to-end metrics is information.
+- Log retrieved document IDs on every request. It's what makes everything above possible after the fact.

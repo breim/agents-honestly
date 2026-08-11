@@ -1,0 +1,210 @@
+---
+title: "Judge With Rubric"
+description: "An LLM judge that is specific enough to be reproducible."
+---
+
+## Problem
+
+Some things a [golden set](/book/patterns/evaluation/golden-set) needs to check have no mechanical answer. Does the reply address what the customer actually asked? Is the tone right for someone on their third follow-up? Is the explanation complete enough to act on?
+
+The available substitute is a model scoring the output. The version everyone builds first is:
+
+```
+   "Rate this support reply from 1 to 10."
+```
+
+It produces a number, the number moves between runs on identical input, and nobody can say what a 7 means or why yesterday's 8 is today's 6. The score is not wrong so much as **uninterpretable**: it cannot gate anything, cannot be debugged, and cannot be compared across a prompt change.
+
+## Forces
+
+- **Judgment dimensions are real** and no deterministic check expresses them.
+- **A judge is a model**, with the same nondeterminism as the thing it is judging.
+- **Judges have documented, specific biases**: position, verbosity, and self-preference.
+- **Reproducibility is the requirement.** A score that moves on identical input measures nothing.
+- **Free-form scoring hides disagreement** inside a single number.
+- **A judge that is never calibrated drifts** without anyone noticing.
+
+## Solution
+
+Replace the score with a **rubric of independent binary criteria**, each with an explicit definition and an evidence requirement.
+
+<Figure caption="Six yes-or-no questions with stated definitions, instead of one number nobody can interpret." frame={false}>
+
+```
+   ✗ "rate 1–10"                    ✓ RUBRIC
+      → 7                              addresses_question      ✓
+      → what changed?                  cites_current_policy    ✗  ← the finding
+      → nobody knows                   amount_matches_tools    ✓
+                                       states_next_step        ✓
+                                       no_unsupported_claims   ✓
+                                       tone_appropriate        ✓
+                                       ────────────────────────────
+                                       5/6 · and you know WHICH one
+
+   each criterion carries:
+     · a definition ("cites the version marked current at run time")
+     · required evidence (the span, the chunk id)
+     · a worked positive and negative example
+
+   ORDER is randomized per call     ── position bias
+   LENGTH is not a criterion        ── verbosity bias
+   JUDGE ≠ GENERATOR where possible ── self-preference bias
+```
+
+</Figure>
+
+Four rules:
+
+**Binary criteria, never a scale.** *Does the reply cite the policy version marked current at run time* is answerable and checkable. *How good is the citation, 1 to 5* is not, and the middle of any scale is where disagreement hides.
+
+**Define each criterion in the rubric, with examples.** A criterion named `tone_appropriate` with no definition is the 1-to-10 problem with extra steps. One sentence of definition plus a worked positive and negative example is what makes two runs agree.
+
+**Require evidence per criterion.** The judge returns the span it based each verdict on. That makes a wrong verdict debuggable rather than mysterious, and it is what lets you calibrate: you can see whether the judge failed the criterion or misread the text.
+
+**Mitigate the known biases structurally.** Randomize criterion order per call. Never make length a criterion or let it correlate with one. Where the stakes justify it, use a different model family for the judge than for the generator.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/judge.ts"
+// Binary criteria with definitions. The definition IS the rubric.
+const CRITERIA = [
+  { id: 'addresses_question',
+    definition: 'Every question the customer asked receives a direct answer or an explicit statement that it is out of scope.' },
+  { id: 'cites_current_policy',
+    definition: 'Any policy claim cites a chunk whose version was marked current at run time.' },
+  { id: 'amount_matches_tools',
+    definition: 'Every monetary figure appears in a tool result from this run.' },
+  { id: 'states_next_step',
+    definition: 'The reply says what happens next and who is doing it.' },
+  { id: 'no_unsupported_claims',
+    definition: 'No factual assertion lacks a retrieved source or tool result.' },
+  { id: 'tone_appropriate',
+    definition: 'Neither dismissive nor over-apologetic; matches the customer’s register.' },
+] as const;
+
+const Verdict = z.object({
+  results: z.array(z.object({
+    id: z.enum(CRITERIA.map(c => c.id) as [string, ...string[]]),
+    pass: z.boolean(),
+    evidence: z.string(),      // the span the verdict is based on
+  })).length(CRITERIA.length),
+});
+
+export async function judge(reply: string, ctx: RunContext, seed: number) {
+  const out = await model.structured({
+    model: JUDGE_MODEL,          // pinned; ideally a different family
+    temperature: 0,
+    schema: Verdict,
+    system: renderRubric(shuffle(CRITERIA, seed)),   // order randomized: position bias
+    input: {
+      question: ctx.question,
+      reply,
+      // The judge reads the SOURCES, not the generator's rendering of them.
+      sources: await loadChunks(ctx.retrievedIds, ctx),
+      toolResults: ctx.scratchpad.toolResults(),
+      // Length is deliberately NOT provided and NOT a criterion.
+    },
+  });
+  return { passed: out.results.filter(r => r.pass).length, results: out.results };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/judge.py"
+# Binary criteria with definitions. The definition IS the rubric.
+CRITERIA = [
+    ("addresses_question",
+     "Every question the customer asked receives a direct answer or an "
+     "explicit statement that it is out of scope."),
+    ("cites_current_policy",
+     "Any policy claim cites a chunk whose version was marked current at run time."),
+    ("amount_matches_tools",
+     "Every monetary figure appears in a tool result from this run."),
+    ("states_next_step", "The reply says what happens next and who is doing it."),
+    ("no_unsupported_claims",
+     "No factual assertion lacks a retrieved source or tool result."),
+    ("tone_appropriate",
+     "Neither dismissive nor over-apologetic; matches the customer's register."),
+]
+
+
+class CriterionResult(BaseModel):
+    id: str
+    passed: bool
+    evidence: str        # the span the verdict is based on
+
+
+class Verdict(BaseModel):
+    results: list[CriterionResult]
+
+
+async def judge(reply: str, ctx, seed: int) -> Verdict:
+    return await model.structured(
+        model=JUDGE_MODEL,          # pinned; ideally a different family
+        temperature=0,
+        schema=Verdict,
+        system=render_rubric(shuffle(CRITERIA, seed)),   # position bias
+        input={
+            "question": ctx.question,
+            "reply": reply,
+            # The judge reads the SOURCES, not the generator's rendering.
+            "sources": await load_chunks(ctx.retrieved_ids, ctx),
+            "tool_results": ctx.scratchpad.tool_results(),
+            # Length is deliberately NOT provided and NOT a criterion.
+        },
+    )
+```
+
+</Tab>
+</Tabs>
+
+Two criteria in that list, `amount_matches_tools` and `no_unsupported_claims`, are *also* computable deterministically. Keep them in the rubric anyway: they are your calibration signal. When the judge disagrees with the mechanical check, the judge is wrong, and the rate of that disagreement is the cheapest ongoing measure of judge health you can get.
+
+## Trade-offs
+
+**Cost and latency per judged item.** Six criteria in one structured call is one model pass, which is why they go in one call rather than six. On a [golden set](/book/patterns/evaluation/golden-set) that runs on every commit this is a real per-build cost.
+
+**Calibration is required, not optional.** A judge is only useful if it agrees with people on cases where people agree with each other. Score a few dozen items by hand, compare, and keep them as a calibration set. Reported practice puts strong judges above 80% agreement with human annotators, which is roughly the level humans achieve with each other, and is therefore the ceiling to aim at rather than a number to be disappointed by.
+
+**Judges drift.** A pinned model still changes behaviour, so a moving score on a stable system is a judge problem until proven otherwise. The [frozen canary](/book/observability/drift) should include judge fixtures, not just agent fixtures.
+
+**Rubric changes invalidate history.** Adding a criterion changes what the score means, so trend lines break. Version the rubric with the [config bundle](/book/production/versioning) and report per-criterion rates rather than only the total, so one added criterion does not erase the series.
+
+## When not to use it
+
+**When a deterministic check exists.** Citation resolution, amount grounding, schema validity, [forbidden retrievals](/book/patterns/evaluation/trajectory-assertion). Those are free, total, and cannot be lenient. A judge is for what they cannot express.
+
+**As a gate on an interactive path.** A judge is an eval, not a [guardrail](/book/patterns/evaluation/online-guardrail). It samples and reports; it does not sit between the agent and the customer.
+
+**Without calibration data.** An uncalibrated judge produces numbers that feel like measurement. If there is no budget to hand-score a calibration set, be honest that the output is a signal rather than a score.
+
+**For preference between two outputs, without care.** Pairwise comparison is where position bias is strongest. If you must, run both orderings and count only the cases where the verdict is consistent.
+
+<Aside type="caution" title="The three biases are specific, documented, and easy to design around">
+Zheng et al. ([NeurIPS 2023](https://arxiv.org/abs/2306.05685)), the study that introduced MT-Bench and Chatbot Arena, names them, and each has a cheap structural mitigation, which is why leaving them in is a choice rather than an accident.
+
+**Position bias.** Judges prefer whichever item appears in a particular position, independent of content. Randomize criterion order per call, and for pairwise comparisons run both orderings and discard inconsistent verdicts.
+
+**Verbosity bias.** Longer answers score higher even when the extra text adds nothing. Never make length a criterion, do not show the judge a word count, and check whether your pass rate correlates with reply length. If it does, the rubric is measuring verbosity.
+
+**Self-enhancement**, called self-preference in the follow-up literature. Judges rate their own outputs more favourably. Use a different model family for the judge where the stakes justify the operational cost, and treat a judge scoring its own generator as a known upward bias rather than a neutral measurement.
+
+None of these makes the technique unusable. The same work found strong judges agreeing with humans at above 80%, about the rate humans agree with each other. The point is that reaching that requires designing against the biases, not hoping they cancel.
+</Aside>
+
+## Related
+
+- [Golden Set](/book/patterns/evaluation/golden-set): the cases the judge scores
+- [Trajectory Assertion](/book/patterns/evaluation/trajectory-assertion): the deterministic checks to exhaust first
+- [Scoring](/book/evals/scoring): the chapter, including rubric design and inter-rater agreement
+- [Critic and Reviser](/book/patterns/control/critic-reviser): the same independence argument, applied at runtime rather than in evals
+- [Online Guardrail](/book/patterns/evaluation/online-guardrail): why a judge is not a gate
+
+## References
+
+- [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685), Zheng et al.: the judge biases a rubric has to be written against.

@@ -1,0 +1,212 @@
+---
+title: "Trajectory Assertion"
+description: "Assert on the path the agent took, not only on what it said."
+---
+
+## Problem
+
+The agent answers *"returns are accepted within 30 days"* and the expected answer is *"returns are accepted within 30 days."*
+
+The case passes. It should not have.
+
+The agent never retrieved the policy. It answered from parametric knowledge, and it happened to be right, this quarter. When the policy changes to 45 days next month, the corpus will be updated, the agent will still say 30, and the golden set will still pass because the fixture was written when 30 was correct.
+
+The same blindness hides worse things. A run that got the right number by asking for the wrong account and being lucky. A run that took eleven turns to do a two-turn job. A run that retrieved a document it should never have been able to see and did not happen to quote it. **Output-only assertions grade the destination and ignore the route**, and in an agent the route is where most of the failures live.
+
+## Forces
+
+- **The right answer for the wrong reason is a latent bug**, indistinguishable from correctness at the output.
+- **The path is recorded already**: [the trace has the tool calls, arguments, and retrieved IDs](/book/observability/what-a-trace-must-answer).
+- **Path assertions are deterministic**, which is rare and valuable here.
+- **Over-specifying the path makes the suite brittle**: a legitimate improvement that reorders two calls fails every fixture.
+- **Some steps are genuinely optional**, and requiring them forbids a better route.
+- **Negative assertions are the strongest** and the ones nobody writes.
+
+## Solution
+
+Assert on **properties of the trajectory** rather than on an exact sequence, grouped into required, forbidden, and bounded.
+
+<Figure caption="Three assertion kinds. The forbidden ones are the strongest and the ones nobody writes." frame={false}>
+
+```
+   ✓ REQUIRED     the run MUST have done this
+     · called search_policies at least once
+     · the answer's citation is in retrieved_ids
+     · the amount came from compute_credit, not from the model
+
+   ✗ FORBIDDEN    the run must NEVER have done this
+     · retrieved any chunk outside this tenant       ◀── isolation
+     · called issue_credit at all                    ◀── scope
+     · called any tool after the taint ceiling fired ◀── security
+     · cited a superseded policy version
+
+   ≤ BOUNDED      the run must have stayed within
+     · turns ≤ 6        cost ≤ cap        searches ≤ 3
+     · no tool called twice with identical arguments
+
+   ── deterministic. an id either appeared or it did not.
+   ── does NOT specify the ORDER, so a better route still passes
+```
+
+</Figure>
+
+Four rules:
+
+**Assert properties, not sequences.** *Called `search_policies` before answering* is robust. *Called `get_order`, then `search_policies`, then `compute_credit`* breaks the first time someone improves the routing, and a suite that fails on improvements gets disabled.
+
+**Write the forbidden assertions first.** *Never retrieved another tenant's chunk. Never called `issue_credit` on a read-only path. Never acted after the taint ceiling fired.* These are the [invariants](/book/patterns/evaluation/golden-set), they gate with no threshold, and they are the rare place where a probabilistic system offers a hard yes-or-no.
+
+**Ground the answer to the path.** The strongest required assertion is that the output's claims trace to something the run actually retrieved or computed, which is [grounding](/book/patterns/retrieval/grounded-citations) expressed as a trajectory property, and it is what catches the opening scene.
+
+**Bound the shape, not just the outcome.** Turn count, cost, and repeated calls. A run that produced the right answer in eleven turns is a regression even though its output is correct, and nothing but a trajectory assertion will report it.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/trajectory.ts"
+export interface TrajectoryExpect {
+  required?: {
+    calledTools?: string[];              // at least once, order-free
+    citationsResolve?: boolean;          // every cite ∈ retrievedIds
+    amountsGrounded?: boolean;           // every number ∈ tool results
+  };
+  forbidden?: {
+    tools?: string[];                    // must never be called
+    retrievedIds?: string[];             // must never appear — isolation
+    actionsAfterTaint?: boolean;         // security invariant
+  };
+  bounded?: { maxTurns?: number; maxCostMicros?: number; noRepeatedCalls?: boolean };
+}
+
+export function assertTrajectory(t: Trace, e: TrajectoryExpect): Violation[] {
+  const v: Violation[] = [];
+  const called = new Set(t.toolCalls.map(c => c.tool));
+
+  // REQUIRED — properties, not sequences. A better route still passes.
+  for (const tool of e.required?.calledTools ?? [])
+    if (!called.has(tool)) v.push({ kind: 'required', detail: `never called ${tool}` });
+
+  if (e.required?.citationsResolve)
+    for (const id of t.citedIds)
+      if (!t.retrievedIds.includes(id))
+        v.push({ kind: 'grounding', detail: `cited ${id}, never retrieved` });
+
+  // FORBIDDEN — the strongest assertions, and the ones nobody writes.
+  for (const tool of e.forbidden?.tools ?? [])
+    if (called.has(tool)) v.push({ kind: 'forbidden', detail: `called ${tool}` });
+
+  for (const id of e.forbidden?.retrievedIds ?? [])
+    if (t.retrievedIds.includes(id))
+      v.push({ kind: 'isolation', detail: `retrieved ${id}` });   // hard fail
+
+  if (e.forbidden?.actionsAfterTaint && t.taintFiredAt != null)
+    for (const c of t.toolCalls)
+      if (c.step > t.taintFiredAt && c.toolClass >= 4)
+        v.push({ kind: 'security', detail: `${c.tool} after taint ceiling` });
+
+  // BOUNDED — a right answer in eleven turns is still a regression.
+  if (e.bounded?.maxTurns && t.turns > e.bounded.maxTurns)
+    v.push({ kind: 'bounded', detail: `${t.turns} turns` });
+
+  if (e.bounded?.noRepeatedCalls) {
+    const seen = new Set<string>();
+    for (const c of t.toolCalls) {
+      const k = `${c.tool}:${canonical(c.args)}`;
+      if (seen.has(k)) v.push({ kind: 'bounded', detail: `repeated ${c.tool}` });
+      seen.add(k);
+    }
+  }
+  return v;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/trajectory.py"
+def assert_trajectory(t: Trace, e: TrajectoryExpect) -> list[Violation]:
+    v: list[Violation] = []
+    called = {c.tool for c in t.tool_calls}
+
+    # REQUIRED — properties, not sequences. A better route still passes.
+    for tool in e.required_tools:
+        if tool not in called:
+            v.append(Violation("required", f"never called {tool}"))
+
+    if e.citations_resolve:
+        for cid in t.cited_ids:
+            if cid not in t.retrieved_ids:
+                v.append(Violation("grounding", f"cited {cid}, never retrieved"))
+
+    # FORBIDDEN — the strongest assertions, and the ones nobody writes.
+    for tool in e.forbidden_tools:
+        if tool in called:
+            v.append(Violation("forbidden", f"called {tool}"))
+
+    for cid in e.forbidden_retrieved_ids:
+        if cid in t.retrieved_ids:
+            v.append(Violation("isolation", f"retrieved {cid}"))   # hard fail
+
+    if e.no_actions_after_taint and t.taint_fired_at is not None:
+        for c in t.tool_calls:
+            if c.step > t.taint_fired_at and c.tool_class >= 4:
+                v.append(Violation("security", f"{c.tool} after taint ceiling"))
+
+    # BOUNDED — a right answer in eleven turns is still a regression.
+    if e.max_turns and t.turns > e.max_turns:
+        v.append(Violation("bounded", f"{t.turns} turns"))
+
+    if e.no_repeated_calls:
+        seen = set()
+        for c in t.tool_calls:
+            k = f"{c.tool}:{canonical(c.args)}"
+            if k in seen:
+                v.append(Violation("bounded", f"repeated {c.tool}"))
+            seen.add(k)
+    return v
+```
+
+</Tab>
+</Tabs>
+
+The isolation assertion, *this chunk ID never appeared in the retrieval trace*, is worth singling out. It is a set membership test with no threshold, no judgment, and no false positives, which makes it the strongest kind of assertion available anywhere in this field.
+
+## Trade-offs
+
+**Over-specification produces brittleness.** Every step you require is a route you have forbidden. Require the minimum that makes the answer trustworthy, and let the agent find better paths to it.
+
+**It needs a trace with arguments, not just tool names.** [The same instrumentation replay and incident scoping need](/book/observability/replay-debugging), which is three requirements landing on one field, usually a sign it is not optional.
+
+**Trajectories change legitimately.** A routing improvement or a new tool shifts every path, and a suite full of sequence assertions fails wholesale. Property assertions survive this; sequence assertions are why teams stop trusting the suite.
+
+**It cannot tell you the answer was good.** A run can satisfy every trajectory assertion and produce a fluent, well-cited, correct-shaped answer to the wrong question. Path and output assertions are complements, not substitutes.
+
+## When not to use it
+
+**For single-call features.** A classifier with no tools has no trajectory.
+
+**When any path is acceptable.** If the only requirement is that the answer is right and the cost is bounded, an outcome assertion plus a cost bound is simpler.
+
+**As the only assertion.** Path without output means a run that did all the right things and said something wrong. Assert both.
+
+**When the trace is not reliable.** If tool calls are dispatched from several places and only some are instrumented, the assertions are checking a partial record: [one dispatcher](/book/production/reference-architecture) is a prerequisite for this pattern being meaningful.
+
+<Aside type="note" title="This is where the deterministic assertions live">
+Almost everything about evaluating an agent is probabilistic: a rubric score, a faithfulness rate, a resolution percentage, all noisy, all needing distributions and flake budgets and careful thresholds.
+
+The trajectory is not. *Did chunk `c-4410` appear in the retrieval trace for this principal?* has a yes-or-no answer. *Was `issue_credit` called?* has a yes-or-no answer. *Did any class ④ tool run after the taint ceiling fired?* has a yes-or-no answer.
+
+Those are the assertions that can gate a build with no threshold and no discussion, and they are how every [invariant](/book/capstone/the-brief) in this book becomes testable: cross-tenant isolation, argument scoping, the taint ceiling, the no-uncited-policy rule.
+
+**Take every deterministic assertion this field offers you.** There are not many, they are all in the trajectory, and a suite built only on scores is a suite that cannot enforce anything.
+</Aside>
+
+## Related
+
+- [Golden Set](/book/patterns/evaluation/golden-set): the cases these assertions run against
+- [Trajectory Evals](/book/evals/trajectory-evals): the chapter, including claim-level grounding across steps
+- [Grounded Citations](/book/patterns/retrieval/grounded-citations): the grounding assertion, as its own pattern
+- [What a Trace Must Answer](/book/observability/what-a-trace-must-answer): the instrumentation this depends on
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): the isolation invariant these assertions enforce

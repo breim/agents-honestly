@@ -1,0 +1,158 @@
+---
+title: "Scoring"
+description: "Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge, including calibrating a judge you can trust."
+---
+
+You have [a set](/book/evals/datasets). Now something has to decide whether each case passed, and the instrument you pick determines whether the resulting number means anything.
+
+The order of preference is the opposite of the order most teams try.
+
+## Use the cheapest instrument that can decide
+
+<Figure caption="Cost and reliability move together here, in the good direction. Start at the top and only descend when the top cannot answer." frame={false}>
+
+```
+   ①  DETERMINISTIC ASSERTION      exact · free · zero variance
+       assert credit == 420000       ↓ only for verifiable facts
+
+   ②  BINARY RUBRIC CHECKS         cheap · high agreement
+       "did it cite a document?"     ↓ needs statable criteria
+
+   ③  PAIRWISE COMPARISON          best human agreement
+       "is A better than B?"         ↓ relative only — cannot gate
+
+   ④  GRADED JUDGE (1–5)           flexible · least reliable
+       "rate helpfulness"
+```
+
+</Figure>
+
+The mistake is starting at rung four because the question feels subjective. Most of what gets scored by a judge is **deterministic and nobody noticed**:
+
+- Did the reply cite a policy document? → assertion
+- Was it the *right* document, at the right version? → assertion
+- Did it call `crm_account_risk_profile` rather than `query_warehouse`? → assertion
+- Was the credit amount within the policy limit? → assertion
+- Was the customer's actual question answered? → judge
+
+Four assertions and one judgement. [Part IV made this point](/book/retrieval/sql-is-still-the-answer) about warehouse numbers: twenty questions with independently verified answers, `assert result == 184532`, no rubric, no judge, no agreement rate. That opportunity exists more often than it is taken.
+
+## Binary beats graded, and the numbers are not close
+
+The single most useful finding for designing a rubric:
+
+> **Inter-rater reliability on absolute 1–5 helpfulness scales sits around 0.45–0.60 on public datasets.**
+
+That is *humans* barely agreeing with each other. A judge model inherits that variance and adds its own drift on top, so a 1–5 helpfulness score is an unreliable measurement of a thing humans cannot measure reliably either.
+
+The fix is decomposition. Replace one graded judgement with a checklist of binary questions and score the proportion answered affirmatively:
+
+```
+   ✗  "Rate this reply's quality, 1–5."
+
+   ✓  Does it answer the question that was asked?            yes/no
+      Does it cite a policy document?                         yes/no
+      Is the cited section actually about this situation?     yes/no
+      Does it state the return window?                        yes/no
+      Does it avoid claiming anything not in the sources?     yes/no
+      … (15 more)                                             → 18/20
+```
+
+Each question is answerable by a careful reader without argument. The aggregate is a number with a meaning. And when the score drops, you know **which line** moved, which a 3.4 never tells you.
+
+## Pairwise for ranking, rubrics for gates
+
+Pairwise comparison reaches higher human agreement than absolute scoring, for a structural reason: the judge is making a relative comparison rather than an absolute calibration, and relative judgements are what models are good at.
+
+But it produces no absolute number, which means **you cannot gate a release on it.** "B beat A" says nothing about whether either is acceptable.
+
+> **Pairwise is the right primitive for choosing between candidates. Rubric scoring is the right primitive for an absolute gate.**
+
+Use pairwise when deciding between two prompts, two models, or two retrieval strategies. Use rubrics when deciding whether to ship.
+
+## Five biases, with their sizes
+
+A judge is a component with known, measured failure modes. Treating it as an oracle is how an eval program produces confident wrong numbers instead of catching them.
+
+| Bias | Reported size | Mitigation |
+| --- | --- | --- |
+| **Position** | ~40% inconsistency in pairwise | Run both orderings; count only **consistent** wins |
+| **Verbosity** | ~15% inflation | Short scales; an explicit "do not prefer longer answers" line |
+| **Self-preference** | 10–25% win rate, depending on the judge | A **different model family** as judge |
+| **Format** | — | Fix formatting before scoring, so style is not content |
+| **Calibration drift** | — | Re-measure on a cadence; it moves under you |
+
+Two of those deserve a second sentence.
+
+**The verbosity mitigation is partial.** A rubric line telling the judge not to prefer longer answers reduces the bias by roughly half on most judges and does not eliminate it. Plan for a residue rather than assuming a fix.
+
+**Self-preference is large, varies by judge, and is subtler than a score bump.** The measurement that named the effect found one judge favouring its own outputs by about 10 points of win rate and another by about 25. So the magnitude is a property of the judge you picked, not a constant you can subtract, and any single figure quoted for it averages over a spread wide enough to change a decision. It is also not only a bump. Judge ratings of a model's behaviour have been found to converge with that model's *own self-report* in a way human ratings of the same outputs do not, which suggests the judge is partly measuring something about the model family rather than about the output. That is the strongest argument for crossing families, and it is the same rule [the dataset chapter](/book/evals/datasets) gave for generation.
+
+## Calibrating a judge you can trust
+
+The chapter's actual promise, and it is a procedure rather than a choice of model:
+
+1. **Human-label a calibration slice**, a couple of hundred cases, using the same discipline as the golden set: two annotators, and [kappa of at least 0.7](/book/evals/datasets) or the labels are noise.
+2. **Run the judge on that slice.**
+3. **Measure judge-versus-human agreement**, with the same statistic.
+4. **If it falls short, fix the rubric, not the model.** Ambiguous criteria are the usual cause, and swapping judges hides the problem rather than solving it.
+5. **Re-measure on a schedule.** Drift is one of the five biases, and a judge calibrated in March is a March instrument.
+
+The reported ceiling is around **80% agreement with human preferences, which happens to match human-to-human consistency.** That is a useful bar and it is not a licence to skip step three. It is the agreement someone else measured, on their task, with their rubric.
+
+<Aside type="caution" title="An uncalibrated judge is an unmeasured instrument">
+This is the [measurement-validity failure](/book/durable-execution/everything-that-breaks) in its purest form: a number produced by a component whose accuracy nobody established, used to gate releases.
+
+The uncomfortable version: a judge is itself an agent, scored by nothing. Everything this book says about needing evals applies to it, and it is the one component teams routinely exempt.
+</Aside>
+
+## What a better judge cannot fix
+
+Three things, and reaching for a stronger model on any of them wastes a week:
+
+**A vague criterion.** "Is the reply helpful?" has no fixed answer, so no judge can be reliable on it. Decompose it or drop it.
+
+**A missing definition of success.** If the [acceptance spec](/book/first-agent/the-problem) does not say what a good outcome is, the judge is being asked to invent the standard and then apply it.
+
+**Genuine human disagreement.** If your annotators cannot reach 0.7 with each other, no judge will exceed them. It will produce a confident number over an unsettled question, which is worse than no number.
+
+## Atlas, concretely
+
+| What | Instrument |
+| --- | --- |
+| Warehouse figures | **Assertion**: known-correct answers, computed independently |
+| Correct tool selected | **Assertion** against the expected call |
+| Requester check enforced | **Assertion**. It either filtered or it did not |
+| Credit within policy limit | **Assertion** |
+| Citation present, correct version | **Assertion** |
+| Reply answers the question | **Binary rubric**, 20 checks |
+| Tone and clarity | **Binary rubric**, 6 checks |
+| Prompt A versus prompt B | **Pairwise**, both orderings, consistent wins only |
+| Judge itself | Calibrated quarterly against 200 human-labelled cases |
+
+Nine rows, and only three involve a model scoring anything. That ratio is the chapter: **the judge is the last resort, not the default**, and every criterion moved up the ladder is a criterion that stops being an argument.
+
+## References
+
+- [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685), Zheng et al., position, verbosity, and self-enhancement bias, and the human-agreement ceiling on the technique.
+- [Self-Preference Bias in LLM-as-a-Judge](https://arxiv.org/abs/2410.21819), Wataoka, Takahashi and Ri, the perplexity account of why a judge favours its own output.
+
+---
+
+Next: [Evaluating the Path, Not Just the Answer](/book/evals/trajectory-evals), tool choice, argument correctness, step efficiency, and recovery behaviour.
+
+## Takeaways
+
+- Use the cheapest instrument that can decide: deterministic assertion, then binary rubric, then pairwise, then a graded judge.
+- Most of what teams score with a judge is deterministic and unnoticed: citation presence, tool choice, policy limits, version correctness.
+- Human inter-rater reliability on 1–5 helpfulness sits around 0.45–0.60. A judge inherits that variance and adds drift, so graded scales measure something humans cannot measure reliably either.
+- Decompose a graded judgement into binary checks and score the proportion affirmative. When the score moves you learn which line moved.
+- Pairwise reaches higher agreement because relative comparison is easier than absolute calibration, and it produces no number you can gate on.
+- Pairwise for choosing between candidates; rubrics for deciding whether to ship.
+- Five judge biases: position (~40% inconsistency), verbosity (~15% inflation), self-preference (10–25% win rate, and it varies by judge), format, and calibration drift.
+- Run both orderings and count only consistent wins. Telling the judge not to prefer long answers halves verbosity bias and does not remove it.
+- Judge ratings converge with the evaluated model's own self-report in a way human ratings do not. Cross model families.
+- Calibrate as a procedure: human-label a slice at kappa ≥ 0.7, run the judge, measure agreement, fix the **rubric** when it falls short, and re-measure on a schedule.
+- The reported ceiling is ~80% agreement, matching human-to-human. That is someone else's measurement on someone else's rubric.
+- An uncalibrated judge is an unmeasured instrument gating your releases, and it is itself an agent that nothing scores.
+- A better judge cannot fix a vague criterion, a missing definition of success, or genuine human disagreement.

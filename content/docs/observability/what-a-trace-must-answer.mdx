@@ -1,0 +1,136 @@
+---
+title: "What a Trace Must Answer"
+description: "The checklist a single agent run has to satisfy before you can debug it at 3am."
+---
+
+[Part XIV](/book/evals/online-evals) can tell you that Atlas got ticket #8823 wrong. It cannot tell you why, and the difference between those two capabilities is the whole of this part.
+
+## A service trace and an agent trace answer different questions
+
+Conventional tracing was built to answer *where did the time go* and *which call failed*. It is very good at that, and it is structurally unable to help here:
+
+> **APM can show that every service behaved normally, while the agent made the wrong decision inside a technically healthy request.**
+
+Every span green. Every latency nominal. Every status 200. And a customer was told the wrong return window. A trace built for latency attribution has captured which services were called and how long each took, and none of what actually determined the outcome.
+
+An agent trace has to answer a different question, **why did it decide that**, and answering it requires reconstructing not just the request but [the accumulated state that shaped it](/book/context/context-as-budget).
+
+## The eight questions
+
+At 3am, holding one trace ID, you should be able to answer all of these without opening another system:
+
+| # | Question | Requires | Missing it costs you |
+| --- | --- | --- | --- |
+| 1 | **Which prompt?** | A version identifier, not the text | You debug the current prompt, not the one that ran |
+| 2 | **Which model?** | Model ID, parameters, and the *served* version | A silent provider-side change is invisible |
+| 3 | **What was in the window?** | Retrieved doc IDs **and versions**, history state | The only question that matters is unanswerable |
+| 4 | **Which tools, which arguments, what order?** | Full call records | You cannot tell a wrong tool from a wrong argument |
+| 5 | **What came back?** | Results, **and whether they were truncated** | [Silent truncation](/book/tools/result-design) reads as a model failure |
+| 6 | **What did it say it was doing?** | Stated reasoning as a field | You have actions without intent |
+| 7 | **Tokens, money, and duration per step** | Per-span usage | You find the slow run and not the slow step |
+| 8 | **Where did it go wrong?** | State at the point of divergence | You get an outcome, not a cause |
+
+Rows 2 and 3 are the ones people discover they are missing during an incident rather than before one.
+
+**Row 2** matters because the model can change underneath you without a deploy on your side, [which is its own chapter](/book/observability/drift), and which is undiagnosable if the trace records `claude-opus-5` and nothing about which served version answered.
+
+**Row 3** is the hard one, and it gets its own section.
+
+## The expensive question
+
+The input to a model call is the entire context: system prompt, tool schemas, accumulated history, retrieved documents, tool results. It is large, it is different on every turn, and it is the only thing that explains the decision.
+
+Storing it in full is genuinely expensive in a way that catches teams out:
+
+> **A single agentic request generates hundreds of spans, and full prompt-and-completion capture turns each request into kilobytes or megabytes.** The instrumentation habits that were fine for a web request cost an order of magnitude more here.
+
+Not storing it makes the trace decorative. Row 3 is the reason the trace exists, and the first cost-reduction anyone proposes is to drop payloads.
+
+## Split the storage instead
+
+The pattern that resolves it, and it is worth adopting before the first invoice rather than after:
+
+<Figure caption="The index stays small and queryable; the payloads live where storage is cheap. A content hash joins them and proves which is which." frame={false}>
+
+```
+   OBSERVABILITY BACKEND              OBJECT STORAGE
+   (fast, queryable, expensive)       (cheap, dumb)
+   ┌──────────────────────────┐       ┌────────────────────┐
+   │ trace id, span id        │       │  full prompt       │
+   │ model, params, version   │       │  full completion   │
+   │ tokens in / out          │──────▶│  retrieved docs    │
+   │ latency, status          │ hash  │  tool payloads     │
+   │ tool name, outcome       │       │                    │
+   │ content hash ────────────┼───────┘                    │
+   └──────────────────────────┘       └────────────────────┘
+```
+
+</Figure>
+
+Lightweight metadata goes to the observability backend: token counts, latencies, model, outcome, and a **content hash**. The full payloads go to cheap object storage or a dedicated eval store.
+
+The hash earns its place twice: it is the join key, and it is an integrity check. You can prove which payload a span refers to without keeping the payload in the expensive place, and you can detect that the payload changed.
+
+## Sample the boring, keep the interesting
+
+Head-based sampling decides at trace start and is simpler. Tail-based decides after the trace completes and can therefore keep the failures. For agents the answer is the hybrid, and the selection rule should look familiar:
+
+**Keep 100% of** escalations, errors, [guardrail blocks](/book/evals/online-evals), cost and duration outliers, runs with a repeated identical error, and anything on a route that changed this week. **Sample the rest.**
+
+That is deliberately the same stratification as [online eval sampling](/book/evals/online-evals), and it should be, because they are the same runs. A trace you kept and a run you scored being different sets is how a team ends up with a finding they cannot investigate.
+
+## Reasoning is a field, not a byproduct
+
+Capture the model's stated reasoning as a **first-class field**, not as text discarded once the answer is extracted. Without it you have what the agent did and nothing about what it thought it was doing, and the bug usually lives in the gap.
+
+One honest caveat, because this is easy to over-claim: **stated reasoning is not a record of the model's computation.** It is a claim the model produced, and it can be wrong about itself.
+
+It is still diagnostic, and specifically so: when the stated reason **contradicts the action taken**, that is a finding rather than noise. *"The policy does not cover opened packaging, so I will decline"* followed by a call to `issue_credit` tells you something precise about where the failure is, and neither half tells you alone.
+
+## One ID that joins everything
+
+The trace has to be joinable to the [event history](/book/durability/agent-as-workflow), the [eval score](/book/evals/online-evals), the [audit record](/book/human-in-the-loop/escalation-and-audit), and the ticket itself. Otherwise 3am becomes an exercise in matching timestamps across four systems.
+
+The good news is that [Part XI already made this free](/book/durability/not-a-background-job): the workflow ID *is* the business entity. Use `ticket-8823` as the trace correlation ID and every system lines up without a mapping table, the same decision paying off for the fourth time.
+
+<Aside type="caution" title="This is the third copy of your customers' data">
+Worth counting, because no single team usually does.
+
+The [event history](/book/durability/agent-as-workflow) is a durable record of every payload passed through it. The [golden set](/book/evals/datasets) is a second copy, harvested from production. The trace payload store is a third, and it is the one with the most data, the loosest access controls, and the retention policy nobody set.
+
+**Three copies, three lifetimes, and usually only one of them has been thought about.** Scrub and mask at the instrumentation layer, before content reaches any backend, and decide the retention deliberately. It is the same conversation [Part XII](/book/human-in-the-loop/escalation-and-audit) forced for the audit trail, arriving with a larger volume and less ceremony.
+</Aside>
+
+## Atlas, concretely
+
+| Captured per span | Where |
+| --- | --- |
+| Prompt version, model ID and served version, parameters | Backend |
+| Tokens in/out, latency, cost | Backend |
+| Tool name, arguments hash, outcome, truncation flag | Backend |
+| Retrieved document IDs **with versions** | Backend |
+| Full prompt, completion, tool payloads, retrieved text | Object store, joined by hash |
+| Stated reasoning | Backend, as a field |
+| [Scratchpad](/book/patterns/context/structured-scratchpad) values per step, with provenance | Backend. Without it, question 8 has no answer |
+| Correlation ID | `ticket-8823`, the same ID as everything else |
+
+The truncation flag is the row that looks trivial and is not. [Results are shaped inside the activity](/book/durability/agent-as-workflow) before they are returned, so by the time anything is traced the payload is already the shortened one. Without an explicit marker, an answer that failed because a field was cut is indistinguishable in the trace from an answer that failed because the model ignored the field.
+
+That distinction is the difference between fixing a tool and rewriting a prompt, and the flag costs one boolean.
+
+---
+
+Next: [OpenTelemetry for GenAI](/book/observability/otel-genai), the semantic conventions for models, tokens, retrieval, and tool calls, and instrumenting the whole stack against them.
+
+## Takeaways
+
+- Evals tell you a run was wrong; traces tell you why. APM can show every service behaving normally while the agent made the wrong decision inside a technically healthy request.
+- Eight questions a trace must answer alone: which prompt, which model and served version, what was in the window, which tools and arguments in what order, what came back and whether it was truncated, what it said it was doing, per-step tokens and cost and time, and the state where it diverged.
+- The expensive question is what was in the window: large, different every turn, and the only one that explains the decision.
+- A single agentic request produces hundreds of spans, and full payload capture turns each into kilobytes or megabytes. Web-request instrumentation habits cost an order of magnitude more here.
+- Split the storage: metadata and a content hash to the observability backend, full payloads to cheap object storage. The hash is both the join key and an integrity check.
+- Sample the boring and keep the interesting: 100% of escalations, errors, guardrail blocks, and outliers. Use the same stratification as online eval sampling, because they are the same runs.
+- Capture stated reasoning as a first-class field. It is not a record of the model's computation, but a stated reason contradicting the action taken is a precise finding.
+- Use the business entity as the correlation ID and the trace, event history, eval score, audit record, and ticket all join without a mapping table.
+- The trace payload store is the third copy of your customers' data, with the most volume, the loosest access, and the retention policy nobody set.
+- Record a truncation flag. Without it, an answer that failed because a field was cut is indistinguishable from one that failed because the model ignored it, and that is the difference between fixing a tool and rewriting a prompt.

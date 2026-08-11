@@ -1,0 +1,269 @@
+---
+title: "The Loop, By Hand"
+description: "Atlas v0 in about eighty lines. No framework, no magic, every decision visible."
+---
+
+
+Change the `if` to a `while` and you have an agent. That part takes a second.
+
+What takes the rest of this chapter is everything the `while` drags in behind it, because the moment the model can decide again after seeing a result, you have to answer questions the `if` never asked. When does this stop? What does it cost? What happens when it doesn't converge? Those are not framework concerns. They are yours, and writing them by hand once is the only reliable way to know what you're delegating later.
+
+## Atlas v0
+
+Here is the whole thing. No framework, no helper library, nothing elided.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="atlas.ts"
+type Outcome =
+  | { status: 'answered'; reply: string; steps: number; cost: number }
+  | { status: 'escalated'; reason: string; steps: number; cost: number }
+  | { status: 'halted'; bound: string; steps: number; cost: number };
+
+const MAX_STEPS = 12;
+const MAX_COST_USD = 0.50;
+const DEADLINE_MS = 90_000;
+
+export async function runAtlas(ticket: Ticket): Promise<Outcome> {
+  const messages: Anthropic.MessageParam[] = [
+    { role: 'user', content: ticket.body },
+  ];
+  const startedAt = Date.now();
+  let cost = 0;
+
+  for (let step = 1; step <= MAX_STEPS; step++) {
+    if (cost > MAX_COST_USD) return { status: 'halted', bound: 'cost', steps: step, cost };
+    if (Date.now() - startedAt > DEADLINE_MS)
+      return { status: 'halted', bound: 'deadline', steps: step, cost };
+
+    const response = await client.messages.create({
+      model: 'claude-opus-5',
+      max_tokens: 2048,
+      system: SYSTEM,
+      tools: TOOLS,
+      messages,
+    });
+
+    cost += priceOf(response.usage);
+    messages.push({ role: 'assistant', content: response.content });
+
+    // The model answered instead of asking. Done.
+    if (response.stop_reason !== 'tool_use') {
+      return { status: 'answered', reply: textOf(response), steps: step, cost };
+    }
+
+    const calls = response.content.filter((b) => b.type === 'tool_use');
+
+    // Terminal tool: the model declaring it cannot finish.
+    const handoff = calls.find((c) => c.name === 'escalate_to_human');
+    if (handoff) {
+      return { status: 'escalated', reason: handoff.input.reason, steps: step, cost };
+    }
+
+    const results = await Promise.all(calls.map(async (call) => {
+      try {
+        const data = await runTool(call.name, call.input, ticket.customerId);
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: call.id,
+          content: truncate(JSON.stringify(data), 4_000),
+        };
+      } catch (err) {
+        return {
+          type: 'tool_result' as const,
+          tool_use_id: call.id,
+          content: `Error: ${err.message}`,
+          is_error: true,
+        };
+      }
+    }));
+
+    messages.push({ role: 'user', content: results });
+  }
+
+  return { status: 'halted', bound: 'steps', steps: MAX_STEPS, cost };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="atlas.py"
+MAX_STEPS = 12
+MAX_COST_USD = 0.50
+DEADLINE_S = 90
+
+def run_atlas(ticket: Ticket) -> Outcome:
+    messages = [{"role": "user", "content": ticket.body}]
+    started_at = time.monotonic()
+    cost = 0.0
+
+    for step in range(1, MAX_STEPS + 1):
+        if cost > MAX_COST_USD:
+            return Outcome("halted", bound="cost", steps=step, cost=cost)
+        if time.monotonic() - started_at > DEADLINE_S:
+            return Outcome("halted", bound="deadline", steps=step, cost=cost)
+
+        response = client.messages.create(
+            model="claude-opus-5",
+            max_tokens=2048,
+            system=SYSTEM,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        cost += price_of(response.usage)
+        messages.append({"role": "assistant", "content": response.content})
+
+        # The model answered instead of asking. Done.
+        if response.stop_reason != "tool_use":
+            return Outcome("answered", reply=text_of(response), steps=step, cost=cost)
+
+        calls = [b for b in response.content if b.type == "tool_use"]
+
+        # Terminal tool: the model declaring it cannot finish.
+        handoff = next((c for c in calls if c.name == "escalate_to_human"), None)
+        if handoff:
+            return Outcome("escalated", reason=handoff.input["reason"],
+                           steps=step, cost=cost)
+
+        results = []
+        for call in calls:
+            try:
+                data = run_tool(call.name, call.input, ticket.customer_id)
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": truncate(json.dumps(data), 4_000),
+                })
+            except Exception as err:
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": f"Error: {err}",
+                    "is_error": True,
+                })
+
+        messages.append({"role": "user", "content": results})
+
+    return Outcome("halted", bound="steps", steps=MAX_STEPS, cost=cost)
+```
+
+</Tab>
+</Tabs>
+
+That is a working agent. Read it again and notice what it is *not* doing: no planning phase, no memory system, no orchestration, no state machine. An agent is a `for` loop around a stateless function, and the sophistication is in the boundary conditions rather than the structure.
+
+## Four exits, and only one belongs to the model
+
+The most important thing in that code is that `Outcome` is a union of three states rather than a string.
+
+| Exit | Who decided | What it means |
+| --- | --- | --- |
+| `answered` | The model | It stopped requesting tools. The happy path. |
+| `escalated` | The model, explicitly | It called `escalate_to_human`. A deliberate, structured handoff. |
+| `halted` (steps / cost / deadline) | You | It did not converge. An outcome, not an error. |
+
+[Part I](/book/foundations/what-is-an-agent) argued that a loop whose only stopping condition is the model's own judgment has delegated its termination to a probability distribution. Here is what fixing that costs: three constants and two guard clauses.
+
+Note that the bounds are checked *before* the call, not after. A budget you enforce after spending it is a report, not a limit.
+
+<Aside type="caution" title="Halting is a result, and someone must be told">
+The single most common bug in hand-written loops is falling out of the bottom and returning whatever was lying around: the last partial text, an empty string, `undefined`. That converts "the agent could not finish" into "the agent finished," silently, and it is how a support queue fills with tickets marked handled that nobody handled.
+
+`halted` is a first-class outcome. It routes to a human exactly like `escalated` does, and the difference between the two is worth tracking: an escalation is the agent working correctly, a halt is the agent failing to.
+</Aside>
+
+There is also a fourth kind of bound worth knowing about, which does something the three above cannot. Step caps, cost caps, and deadlines are invisible to the model, which gets cut off mid-thought. Current APIs also offer a **task budget**: a token ceiling the model is *told about*, so it paces itself and wraps up gracefully instead of being severed. The two are complementary. Give the model a budget it can see so it finishes well, and keep a hard cap it cannot see so a runaway loop still terminates.
+
+## Watching it run
+
+Here is Atlas on ticket #8841, *"Why is the Acme account at risk?"*, the case that one round of tool use could never handle:
+
+```
+ step 1   → get_account("Acme Industrial")
+           ← { id: 4471, tier: "gold", renewal: "2026-09-30", owner: "…" }
+
+ step 2   → get_open_tickets(4471)          ┐ two calls, one turn,
+           → get_order_volume(4471, "12mo")  ┘ issued in parallel
+           ← 6 open, 3 escalated, oldest 41 days
+           ← Q3 volume down 38% year over year
+
+ step 3   → search_policies("gold tier renewal risk")
+           ← "Accounts with >2 escalations in 90 days before renewal…"
+
+ step 4   ← answered  (4 steps, $0.11, 22s)
+```
+
+Two things in that trace matter more than the answer.
+
+**Step 2 chose itself.** Nothing in the code says "after fetching an account, fetch its tickets and volume." The model saw a renewal date sixty days out and decided what to look at next. That is the capability you bought, and it is why the sequence could not have been written in advance.
+
+**Step 2 is also where the cost lives.** Those two calls returned into a context that now carries the system prompt, four tool schemas, the ticket, and every prior result, all resent in full on steps 3 and 4. The [growth curve](/book/foundations/context-window) is no longer theory; it is `messages.push` in a loop, running four times for one user-visible reply.
+
+## Every decision you just made
+
+The value of writing this by hand is the list it produces. Each line below is a choice a framework would have made silently:
+
+| Decision | What v0 chose | Where it goes wrong |
+| --- | --- | --- |
+| History policy | Keep everything | Long tickets exceed the window ([compaction](/book/context/compaction)) |
+| Tool result size | Truncate at 4,000 chars | A blunt cut loses the field that mattered ([result design](/book/tools/result-design)) |
+| Parallel execution | All calls at once | One slow tool blocks the turn |
+| Tool errors | Text back to the model | Some errors should retry, not inform ([retries](/book/reliability/timeouts-and-retries)) |
+| Authorization | `customerId` passed into `runTool` | Easy to forget on the fifth tool ([tenancy](/book/security/tenant-isolation)) |
+| Termination | Steps, cost, deadline, terminal tool | Nothing detects a two-tool ping-pong |
+| Observability | The `Outcome` return value | You cannot debug a run you didn't record |
+
+That authorization row deserves emphasis. `runTool` takes `ticket.customerId` and every tool must filter on it, because the model chooses the *arguments*, and a model that has read a document mentioning another account can ask for that account's data. The filter is not a prompt instruction. It is a parameter your code passes and your tool enforces, which is the [invariant-versus-request](/book/first-agent/the-problem) distinction showing up in a function signature.
+
+## What v0 cannot do
+
+Be precise about this, because the list is the table of contents for the rest of the book.
+
+**It dies with the process.** A deploy mid-run loses the run. Ticket #8823 needs a refund, and a crash between "issue credit" and "email the customer" leaves money moved and nobody told. → [Durable execution](/book/durable-execution/why-durable-execution).
+
+**It cannot wait.** If a customer needs to confirm something, there is no version of this loop that holds for three days. A `while` loop cannot survive lunch. → [Human in the loop](/book/human-in-the-loop/approval-gates).
+
+**It has no memory.** Every ticket starts blank. The same customer explaining the same context, forever. → [Memory](/book/context/memory).
+
+**It cannot repeat safely.** Run it twice on #8823 and you have issued two credits. Nothing here is idempotent. → [Idempotency](/book/tools/idempotency).
+
+**It is invisible.** `console.log` is not observability. When the 2-in-20 confident-wrong case happens in production, there is no way to see which lookup went wrong. → [Tracing](/book/observability/what-a-trace-must-answer).
+
+**Its history grows without bound.** Fine for a four-step ticket, fatal for a forty-step investigation. → [Context engineering](/book/context/context-as-budget).
+
+None of those is a flaw in the eighty lines. They are the difference between an agent and an agentic system, which is the thesis of this book stated as a punch list.
+
+## Score it
+
+| | v0 classify | v1 one round | **v2 the loop** |
+| --- | --- | --- | --- |
+| Fully resolved | 0 / 20 | 9 / 20 | **14 / 20** |
+| Correctly escalated | — | — | 4 / 20 |
+| Halted on a bound | — | — | 1 / 20 |
+| Wrong-but-confident | 0 | 2 | 1 |
+| Median cost / ticket | $0.01 | $0.04 | $0.13 |
+| Median steps | 1 | 2 | 3 |
+
+Fourteen resolved, four escalated correctly, one halt, one wrong answer. Against the acceptance spec, which asked for 60% resolved without a human, v2 clears the bar on the sample.
+
+It also costs thirteen times v0 per ticket and has six ways to lose a customer's money that we have enumerated but not fixed. **Both of those facts are the point.** The loop is not the finish line; it is the smallest thing that works, and now we know exactly what it costs and exactly what it can't survive.
+
+Which raises the obvious question: should we have written this by hand at all?
+
+---
+
+Next: [What a Framework Buys You](/book/first-agent/what-a-framework-buys). Now that you have written it, an honest accounting of what you would delegate and what you would keep.
+
+## Takeaways
+
+- An agent is a bounded loop around a stateless function. The structure is trivial; the boundary conditions are the engineering.
+- Return a union of outcomes, not a string. `answered`, `escalated`, and `halted` are different events and only the first two are success.
+- Check bounds before the call. A limit enforced after the spend is a report.
+- Falling out of the loop and returning whatever remains is the most common hand-written-loop bug. It silently converts failure into success.
+- Hard caps the model can't see guarantee termination; a task budget it *can* see lets it finish gracefully. Use both.
+- Parallel tool calls inside one step are chosen by the model, not by you, and that adaptivity is the whole reason to be here.
+- Authorization is an argument your tools enforce, never an instruction in the prompt.
+- v0 dies with the process, cannot wait, has no memory, cannot repeat safely, is invisible, and grows without bound. That list is the rest of the book.

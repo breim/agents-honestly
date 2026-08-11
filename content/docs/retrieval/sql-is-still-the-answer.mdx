@@ -1,0 +1,174 @@
+---
+title: "SQL Is Still the Answer"
+description: "\"How much did we sell in Spain in Q2\" is not a retrieval problem. Give the agent a query tool, not a corpus."
+---
+
+
+[Part IV opened](/book/retrieval/where-does-the-answer-live) with the observation that an aggregate is a computation rather than a document, and that top-*k* over rows is structurally incomplete for a question that needs all of them. That argument is short and most people accept it immediately.
+
+The interesting question is the one after it: **what shape of database access do you actually give an agent?** Because "give it SQL" spans everything from a fixed query with two parameters to an open connection and a schema dump, and the distance between those is where this chapter lives.
+
+## The benchmark gap you should assume applies to you
+
+Text-to-SQL, where the model writes the query, is where everyone starts, and the published accuracy is encouraging until you look at what was measured.
+
+| Setting | Execution accuracy |
+| --- | --- |
+| Academic benchmark, single-turn, small clean schema | **>90%** |
+| Enterprise-workflow benchmark: large schemas, multiple dialects | **~21%** |
+| Reported industry evaluations on real enterprise schemas | **~40%** |
+
+That is not a small gap. It is the difference between a demo and a system, and it repeats a pattern this book has hit twice already: with [tool-count benchmarks](/book/first-agent/first-tools) averaging three candidate tools, and with [recall benchmarks](/book/retrieval/ann-indexes) measured without filters. **The published number is measured in a regime you will never deploy in.**
+
+Meridian's warehouse has forty million rows, columns named in 2014, three tables that all look like they might hold order totals, and a rule that "revenue" excludes cancelled orders but includes partially-returned ones at the retained amount. None of that is in the schema.
+
+## Valid SQL that means the wrong thing
+
+Here is the specific reason the gap is so wide, and it's not what you'd guess.
+
+**Roughly 81% of text-to-SQL errors are schema and semantic failures, not syntax errors.** The model is not producing broken SQL. It is producing *perfectly valid* SQL that answers a different question than the one asked: the wrong join, the wrong date column (`created_at` versus `shipped_at`), the wrong status filter, the wrong grain.
+
+And a valid query returns rows. There is no exception, no parse error, no red text. The agent receives a number, formats it into a sentence, and sends it to a customer.
+
+<Aside type="caution" title="The asymmetry that should decide your architecture">
+The single most useful framing available on this topic:
+
+> **Semantic-layer failures are refusals: "I can't answer that."**
+> **Text-to-SQL failures are confident wrong numbers.**
+
+Those are not two points on a quality scale. They are different *kinds* of failure with wildly different costs. A refusal routes to a human and costs a few minutes. A wrong number goes in a quarterly report.
+
+If you take one thing from this chapter: prefer the architecture whose failure mode is a refusal.
+</Aside>
+
+There is a second-order version of this called **metric drift**: the same question returns different numbers depending on who asked or which agent answered, because each generated query made slightly different assumptions. Nothing is obviously wrong, but the organization loses the ability to agree on a figure, which is worse than a broken dashboard, because a broken dashboard gets fixed.
+
+## Three shapes, ascending in power and risk
+
+<Figure caption="More freedom for the model, more surface for it to be confidently wrong on. Move right only when the left can't do the job." frame={false}>
+
+```
+   ①  PARAMETERIZED           ②  QUERY BUILDER          ③  TEXT-TO-SQL
+      TOOLS                      (semantic layer)          (raw schema)
+
+   you write the SQL          you define metrics        model writes SQL
+   model fills params         model picks + filters     against the schema
+
+   get_order(id)              { metric: 'revenue',      SELECT SUM(...)
+   shipments_by_region(       dimensions: ['region'],   FROM orders o
+     region, from, to)        filter: {q: '2026Q2'} }   JOIN ...
+
+   exact, testable            flexible within           anything, including
+   inflexible                 governed definitions      the wrong thing
+```
+
+</Figure>
+
+**① Parameterized tools.** You write the query; the model supplies arguments. `shipments_by_region(region, from_date, to_date)` is a tool like any other, with a schema and a description. It cannot produce a wrong join because it contains no join the model chose. It is fully testable with ordinary unit tests.
+
+The objection is that it doesn't generalize, because a question you didn't anticipate has no tool. That objection is correct and usually overstated: in most enterprise agents, a dozen parameterized queries cover the large majority of real questions, because real questions cluster hard. Start here, log what you can't answer, and add tools where the traffic is.
+
+**② A governed query builder.** The model emits a *structured query object* with metric, dimensions, filters, and time range, and your code compiles it to SQL. The model never chooses a join or a date column; it selects from definitions you certified.
+
+This is the semantic-layer approach, and it is the recommended production default. The evidence is unusually strong: grounding generation in a governed semantic layer rather than a raw schema moves benchmark accuracy from around 90% to 98%+ on frontier models, and in one enterprise case from **8.3% with schema alone to 78.3% with a business-context document.**
+
+That 8.3% deserves a moment. Given the schema and nothing else, a frontier model answered fewer than one in ten domain questions correctly. **The schema is not the context.** Column names and types tell you the shape of the data and nothing about what it means, and the meaning is where all the accuracy is.
+
+**③ Text-to-SQL over a raw schema.** Maximum flexibility, and the accuracy figures at the top of this chapter. Reasonable for exploratory internal analysis by people who can read SQL and will notice a wrong answer. Not reasonable for an agent that emails customers.
+
+## What a semantic layer actually is
+
+Less exotic than the name suggests. It's the business logic, written down once:
+
+```
+   metric revenue:
+     sql:        sum(net_amount_cents)
+     from:       orders
+     filters:    status not in ('cancelled', 'draft')
+     grain:      order
+     time_column: shipped_at        # not created_at. this is the whole point.
+     description: "Recognized revenue. Excludes cancelled and draft orders.
+                   Partial returns count at the retained amount."
+
+   dimension region:
+     sql:        country_to_region(ship_country)
+     description: "Iberia = ES, PT. Note: Canary Islands map to Iberia."
+```
+
+Three things that buys you.
+
+**One definition of revenue.** Metric drift becomes impossible by construction, because there is one place the number comes from. Ask the same question twice, or ask it through two different agents, and you get the same answer.
+
+**The tribal knowledge is now a file.** `shipped_at` not `created_at`, the Canary Islands rule, the partial-return treatment: the things that live in one analyst's head and cause a 6% discrepancy nobody can explain.
+
+**It is testable and reviewable.** A metric definition can be code-reviewed by the person who owns the number, versioned, and covered by a test asserting last quarter's revenue. None of that is available for SQL a model invents at request time.
+
+The honest caveat: a semantic layer is real work, it needs an owner, and its quality is now your accuracy ceiling. This is a genuine cost, and it is work you owed anyway, because the alternative is that the definitions exist only in queries scattered across the company.
+
+## The rails, regardless of shape
+
+Whatever you chose above, these are not optional.
+
+| Rail | Why |
+| --- | --- |
+| **Read-only role** | The agent's credentials cannot `UPDATE`, `DELETE`, or `DROP`. Not "shouldn't" but cannot. |
+| **Statement timeout** | A generated query can be accidentally quadratic. Kill it at a few seconds. |
+| **Row limit, always** | Enforced server-side, not requested politely in the query. |
+| **Separate connection pool** | Analytical queries must not starve the pool serving your application. |
+| **Tenancy injected by your code** | The `WHERE tenant_id = ?` is appended by the compiler, never written by the model: [the same rule](/book/retrieval/metadata-and-authorization) as retrieval, and for the same reason. |
+| **Cost/scan ceiling** | On a warehouse that bills per byte scanned, an unbounded query is an unbounded invoice. |
+
+The tenancy row is the one that gets skipped, because with text-to-SQL it feels natural to let the model write the filter it was told to write. Don't. A filter the model writes is a filter the model can be talked out of.
+
+## Returning results the agent can use
+
+Two rules, both learned expensively.
+
+**Aggregate in SQL, return small.** Never hand 40,000 rows to the model. You are paying [attention](/book/context/context-as-budget) for data the database could have reduced to one number. If a result exceeds a few dozen rows, that is a signal the query was underspecified, and returning "12,412 rows matched; add a grouping or narrow the range" is more useful than truncating.
+
+**Return the query with the result.** This is SQL's version of a citation, and it is what makes the answer auditable:
+
+```json
+{ "value": 184532, "unit": "kg", "rows_matched": 3211,
+  "metric": "shipped_tonnage", "filters": {"region":"Iberia","period":"2026Q2"},
+  "sql": "SELECT sum(net_weight_kg) FROM shipments WHERE ..." }
+```
+
+Now the trace shows what was actually asked, the model can state its assumptions in the reply, and a human who doubts the number has something to check. Given [the acceptance spec's](/book/first-agent/the-problem) citation requirement, an unsourced number should be treated exactly like an unsourced policy claim.
+
+## Test it with numbers
+
+The one place in this book where a hard assertion is genuinely available: build a set of questions with **known correct answers**, computed independently.
+
+Twenty questions, twenty numbers, verified by someone who owns the data. Run them on every change to the semantic layer, the schema, or the model. `assert result == 184532`: no rubric, no judge, no rate. Take it.
+
+Include the traps deliberately: a question that hinges on `shipped_at` versus `created_at`, one that spans a quarter boundary, one whose answer is legitimately zero, and one the layer *should* refuse. That last one matters as much as the rest, because you are testing that the refusal failure mode still works.
+
+## Atlas, concretely
+
+A governed query builder over a small semantic layer: six metrics, five dimensions, all defined by the analyst who owns the numbers. The agent's `query_warehouse` tool takes a structured object and never a SQL string. Read-only role, five-second timeout, 500-row cap, tenancy appended by the compiler.
+
+Ticket #8817, the Q2 versus Q1 tonnage to Iberia, becomes two metric queries and a subtraction, returns two numbers and two SQL strings, and lands in the reply with the period and region stated so the customer can tell whether Atlas understood the question.
+
+And when a question arrives that the layer can't express, Atlas says so and escalates. That is the failure mode we chose, on purpose, at the start of the chapter.
+
+## References
+
+- [Spider 2.0](https://proceedings.iclr.cc/paper_files/paper/2025/file/46c10f6c8ea5aa6f267bcdabcb123f97-Paper-Conference.pdf), enterprise text-to-SQL evaluated over real data applications, and the source of the benchmark gap this chapter opens with.
+
+---
+
+Next: [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline), covering parse, clean, normalize, enrich, embed, index, and keeping it reproducible when the source changes.
+
+## Takeaways
+
+- Text-to-SQL benchmarks are measured on small clean schemas. On enterprise workflows, execution accuracy drops from over 90% to roughly 20–40%.
+- About 81% of the errors are semantic, not syntactic. The SQL is valid; it answers a different question, and it returns a number rather than an error.
+- Semantic-layer failures are refusals; text-to-SQL failures are confident wrong numbers. Prefer the architecture that refuses.
+- Metric drift, the same question yielding different numbers per asker, is worse than a broken dashboard, because nothing looks broken.
+- Three shapes: parameterized tools, a governed query builder, raw text-to-SQL. Start left; move right only when traffic demands it.
+- The schema is not the context. One enterprise evaluation went from 8.3% to 78.3% by adding business meaning to the same schema.
+- A semantic layer makes the tribal knowledge a reviewable, versioned, testable file, and it is work you owed anyway.
+- Rails regardless: read-only role, statement timeout, server-side row cap, separate pool, cost ceiling, and tenancy appended by your code rather than written by the model.
+- Aggregate in SQL and return small. Return the query with the result, because it's the citation.
+- Build a question-to-number eval set with independently verified answers, including one the system should refuse.

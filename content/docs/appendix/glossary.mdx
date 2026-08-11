@@ -1,0 +1,145 @@
+---
+title: "Glossary"
+description: "Terms this field uses inconsistently, defined once."
+---
+
+This is not a dictionary of every term in the book. It is the shorter, more useful list: **words that two people in the same meeting will use to mean different things**, with the meaning this book uses and, where it matters, a note on what else they might mean.
+
+Terms whose meaning is uncontested, such as embedding, token, or cosine similarity, are defined where they are introduced and are not repeated here.
+
+## The contested core
+
+**Agent.** A system where **the model decides the control flow**: what to do next, which tool to call, when to stop. That is the whole definition, and it is a spectrum rather than a category.
+
+*What else people mean:* any LLM feature at all; a chatbot; anything with a tool call; a persona in a prompt. The distinction that matters, and the one [the determinism test](/book/workflows/the-determinism-test) turns on, is whether the *sequence of steps* is decided by your code or by the model. If you wrote the branches, it is a workflow with model calls in it, and it will be cheaper, faster, and more testable for it.
+
+**Agentic.** Adjective for the above. Widely used as a synonym for "modern" or "good." Treat any sentence where replacing "agentic" with "AI-powered" changes nothing as marketing.
+
+**Workflow.** Overloaded, and the two meanings sit in different parts of this book.
+
+1. **A workflow pattern.** A system whose control flow you wrote, with model calls at specific steps. The opposite of an agent, in the sense above. [Part VI](/book/workflows/the-determinism-test).
+2. **A durable workflow.** A Temporal (or equivalent) execution whose state survives crashes via event-history replay. [Part X](/book/durable-execution/why-durable-execution).
+
+They are orthogonal. An agent can run *inside* a durable workflow, and [Part XI](/book/durability/agent-as-workflow) is entirely about doing exactly that. This book says **"durable workflow"** wherever the second sense could be misread; a bare "workflow" means the first, and the part you are reading usually settles it: Part VI is the pattern throughout, Parts X–XII the execution.
+
+**Memory.** Three unrelated things share this word, and conflating them is the most common source of confused design discussions in the field. [Part III](/book/context/memory) separates them:
+
+| Called "memory" | Actually is | Lives in |
+| --- | --- | --- |
+| The conversation so far | The transcript | The context window |
+| Facts remembered across sessions | A fact store | A database |
+| Retrieved documents | Retrieval | An index |
+
+Only the second is memory in any useful sense. When someone says "we need to add memory," ask which of the three.
+
+**Context.** Also three things:
+
+1. **The context window.** The model's input-length limit. A hard number.
+2. **The context.** The assembled token sequence sent on this call: system prompt, tools, history, retrieved material.
+3. **Context engineering.** The discipline of deciding what goes into (2) given (1).
+
+This book uses (2) by default and says "context window" for (1).
+
+**RAG.** Nominally "retrieval-augmented generation," in practice a label for "we put a vector database in front of the model." The term obscures the decision that actually matters, which is [where the answer lives](/book/retrieval/where-does-the-answer-live). A `SUM` over forty million rows is not a retrieval problem, and calling the whole architecture RAG hides that. This book avoids the term for that reason.
+
+## Tools and effects
+
+**Tool / function / action.** The same thing under three names. A capability you expose to the model with a schema. "Function calling" is the API mechanism; "tool" is the design object; "action" usually implies a write. This book says **tool**, and the useful distinction is not the name but [the class](/book/tools/read-and-write-tools): pure read, observed read, reversible write, irreversible write, external write.
+
+**Computer use.** An agent observing and controlling a browser or desktop through semantic elements, screenshots, keyboard, and pointer actions. It is still tool use, but with a far larger action set and an observation channel full of untrusted content. [Part VIII](/book/tools/computer-using-agents) uses the narrowest available control: API, semantic locator, browser script, then coordinates.
+
+**Coding agent.** An agent that explores and modifies a software workspace, runs development tools, and produces a patch or artifact. The repository is untrusted input, the workspace is disposable, and release authority stays outside it. [Part VIII](/book/tools/coding-agents-and-workspaces) separates exploration, mutation, verification, and shipping.
+
+**MCP vs. A2A.** MCP exposes context and capabilities to a client that retains the plan. A2A delegates a task to another agent that owns its internal plan and may work asynchronously, request input, and produce artifacts. [Part IX](/book/mcp/remote-agents-and-a2a) defines the boundary.
+
+**Agent Card.** A discoverable A2A document describing a remote agent's identity, endpoint, skills, interfaces, authentication, and capabilities. It is a claim to verify and approve, not a trust decision.
+
+**Idempotent.** Performing the operation twice produces the same world as performing it once. **Not** "returns the same result." A `GET` that increments a counter returns the same body and is not idempotent.
+
+**Exactly-once.** Two very different claims travel under this phrase:
+
+- **Exactly-once *delivery*.** Not achievable over an unreliable network. Any product claiming it means the next line.
+- **Exactly-once *effect*.** Achievable, and built from at-least-once delivery plus a deduplication store you own.
+
+This book says **effectively-once**, and adds the caveat that makes it honest: it holds only inside [the dedup window](/book/reliability/idempotency-in-practice).
+
+**Blast radius.** How much damage one specific call does if it is wrong. A property of the **arguments**, computed at call time, not of the tool. `issue_credit` is one tool; $5 and $500,000 are not one risk.
+
+**Compensation.** Undoing a completed effect by performing an opposite one, a credit note rather than an erasure. Distinct from a rollback, which pretends the thing never happened. [Part XI](/book/durability/compensation).
+
+## Failure
+
+**Hallucination.** The model asserting something not supported by its input. Useful, but too narrow to be the diagnosis you actually need: in production the same wrong output more often comes from [a poisoned context](/book/context/context-poisoning), [a stale document](/book/security/untrusted-retrieval), or a tool that returned something wrong. Calling all of it hallucination points the fix at the model when it usually belongs upstream.
+
+**Grounding.** Whether every claim in the output traces to something in the input: a retrieved span or a tool result. Measurable, unlike hallucination, which is why this book grades grounding.
+
+**Drift.** Any of four different things, and the entire job of [that chapter](/book/observability/drift) is telling them apart: the model changed, the data changed, the users changed, or you changed. "We have drift" is a symptom report, not a diagnosis.
+
+**Deterministic.** Same input, same output. Note that a durable workflow's determinism requirement is narrower and more specific: [the same *sequence of commands* on replay](/book/durable-execution/determinism-and-retries), which permits plenty of computation that is not referentially transparent.
+
+**Guardrail.** A check between the agent and the outside world. Taken as a whole it is **mitigation**, not a boundary. A classifier has a false-negative rate and an adversary gets unlimited attempts.
+
+The nuance worth keeping: a well-built guardrail has [two tiers](/book/patterns/evaluation/online-guardrail), and only one of them is mitigation. Deterministic assertions against recorded state, *is this chunk ID in the set we retrieved*, have no false negatives and qualify as **invariants**, which is why they may block. Classifiers may only flag. Conflating the tiers is how a detector ends up standing where a boundary belongs.
+
+An **invariant** is enforced in code the model cannot route around and is the reason an action is impossible. [A prompt instruction is neither.](/book/first-agent/the-problem)
+
+**Semantic failure.** The class with no exception type: a `200 OK`, a clean trace, valid arguments, and a wrong answer. Named in [the error taxonomy](/book/reliability/error-taxonomy) because a taxonomy without it lets you believe your error rate is your failure rate.
+
+## Security
+
+**Prompt injection vs. jailbreaking.** Different attacks with different victims, routinely conflated:
+
+| | Prompt injection | Jailbreaking |
+| --- | --- | --- |
+| Target | **Your application** | The model's alignment |
+| Goal | Make the agent use its own legitimate capabilities wrongly | Make the model emit content it was trained to refuse |
+| Victim | Usually a third party | The vendor's policy |
+| Fixed by | Capability constraints | Model safety training |
+
+`issue_credit(4471, 250000)` is not harmful output. It is a valid call requested by the wrong party, which is why better safety training does not address it. [Part XVII](/book/security/prompt-injection).
+
+**Direct vs. indirect injection.** Direct: the user writes the payload, usually attacking their own session. Indirect: it arrives in content the agent reads, such as a ticket, a document, or a web page, and the victim is someone else. Indirect is the one that matters, because it converts *the ability to place text where your agent reads it* into *the ability to act as your agent*.
+
+**Taint.** A flag meaning this run has read attacker-controlled bytes. Assigned by the **fetcher**, from where the bytes came from, never inferred from the content, so there is no classifier to evade. Monotonic: nothing clears it.
+
+**Tenant.** The isolation boundary, which is not always "customer." For Atlas it is one of Meridian's customer accounts. What matters is that it is a property of the *run's identity*, not a field in a mutable state object, and that it rides every asynchronous hop. [Part XVII](/book/security/tenant-isolation).
+
+**Least privilege vs. least agency.** Least privilege scopes what an agent may touch. **Least agency** adds that *autonomy is itself a permission*. An agent allowed to act unattended holds strictly more authority than one that acts with a human present, even with an identical credential.
+
+## Operations
+
+**Run.** One execution of the agent for one task, from trigger to terminal state. The unit that budgets, tiers, taint, tracing, and cost accounting all key on. Not a request, not a turn, not a session.
+
+**Turn.** One iteration of the loop: a model call plus any tool calls it produced. Turn count is the strongest cost lever, because the transcript is re-sent each time.
+
+**Replay.** Two meanings, and this book keeps them apart deliberately:
+
+1. **Durable-execution replay.** Re-running workflow code against a recorded event history so it converges to the same position. A correctness mechanism. [Part X](/book/durable-execution/determinism-and-retries).
+2. **Debugging replay.** Re-running your code against recorded model and tool responses, to test a fix deterministically. [Part XV](/book/observability/replay-debugging).
+
+The second is contrasted with **re-run**: fresh model calls against the same inputs. Replay holds the model constant to test your code; re-run holds your code constant to test the model.
+
+**Trace / span / run.** A trace is the record of one run. A span is one operation inside it. In agents the trace has to answer [eight specific questions](/book/observability/what-a-trace-must-answer) that a service trace does not.
+
+**Canary.** Also two things:
+
+1. **A canary rollout.** A percentage of real traffic served by a new version.
+2. **A frozen canary.** A fixed fixture set on a pinned configuration, run on a schedule to detect provider change.
+
+Both appear in this book; the second is the one most teams do not have.
+
+**Shadow.** Running a candidate configuration without serving its output. **Shadow replay** uses recorded runs; **shadow execution** makes real calls on live traffic and serves the old version. Neither exposes a user.
+
+**Escalation.** Handing a task to a person. In this book it is a **first-class outcome**, not a failure path, including as a [fallback rung](/book/reliability/fallbacks-and-breakers) when infrastructure is degraded. An escalation that arrives as "I couldn't handle this" has followed the rule and failed the contract.
+
+**Human in the loop vs. on the loop.** *In* the loop: a person approves before the action. *On* the loop: a person is notified and can intervene after. The [tiers](/book/human-in-the-loop/risk-tiers) are largely a policy for choosing between them, plus the observation that both spend a finite budget of human attention.
+
+<Aside type="note" title="Words that should make you ask a question">
+Not wrong, just underspecified. When one of these appears in a design discussion, the useful move is to ask which meaning is intended before agreeing to anything.
+
+**"Memory"**: which of the three? **"Context"**: the window, or the assembly? **"Workflow"**: the pattern, or the durable execution? **"Replay"**: for correctness, or for debugging? **"Agent"**: does the model choose the steps? **"Exactly-once"**: delivery or effect? **"Guardrail"**: mitigation or invariant? **"Drift"**: which of the four changed? **"It works"**: measured how, against what?
+</Aside>
+
+---
+
+Next: [Further Reading](/book/appendix/further-reading), primary sources worth your time.

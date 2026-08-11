@@ -1,0 +1,10 @@
+{
+  "title": "Part II · From LLM to Agent",
+  "pages": [
+    "the-problem",
+    "one-call",
+    "first-tools",
+    "the-loop-by-hand",
+    "what-a-framework-buys"
+  ]
+}

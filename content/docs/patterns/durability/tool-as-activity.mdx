@@ -1,0 +1,193 @@
+---
+title: "Tool as Activity"
+description: "Every side effect becomes a retryable, timed, independently observable unit."
+---
+
+## Problem
+
+The agent loop is running inside a [durable workflow](/book/patterns/durability/agent-as-entity-workflow), and someone calls the payments API directly from workflow code.
+
+It works in development. In production it fails in a way that is hard to even describe: the worker crashes at step nine, Temporal [replays the workflow from its history](/book/durable-execution/determinism-and-retries) to rebuild state, and the replay *calls the payments API again*, because there is no record of the first call in the history, only the code that made it. The credit is issued twice, and the second one has no event anywhere saying why.
+
+The same applies to the model call. A completion is nondeterministic by definition, so replaying workflow code that calls a model produces a different answer, a different tool choice, and a different branch, and the workflow diverges from its own history, which is a hard error rather than a subtle one.
+
+## Forces
+
+- **Replay must converge.** Workflow code runs again from the top after any crash, and every non-recorded side effect runs again with it.
+- **Model calls are nondeterministic by construction**, the one thing a workflow cannot contain.
+- **Tools have wildly different timing profiles**: a 20 ms database read and a 90-second document generation should not share a timeout.
+- **Retry policy is per-operation.** A read retries freely; [an irreversible write does not](/book/tools/read-and-write-tools).
+- **Every boundary costs a payload round trip** through the history, which is [size-limited](/book/patterns/durability/continue-as-new-memory).
+
+## Solution
+
+**Workflow code decides; activity code discovers.** Every tool call and every model call is an activity.
+
+<Figure caption="One rule decides the layout. If a line needs to find something out, it is an activity." frame={false}>
+
+```
+   WORKFLOW  (replayed, must converge)
+   ┌─────────────────────────────────────────────────┐
+   │  the loop, the branches, the stopping rule      │
+   │  the budget counters, the taint flag            │
+   │  the approval wait                              │
+   │                                                 │
+   │   result = await callModel(ctx)      ───────┐   │
+   │   if (result.toolCall) {                    │   │
+   │     out = await runTool(name, args) ────┐   │   │
+   │   }                                     │   │   │
+   └─────────────────────────────────────────┼───┼───┘
+                                             │   │
+   ACTIVITY  (runs once, result recorded)    ▼   ▼
+   ┌─────────────────────────────────────────────────┐
+   │  the model call        nondeterministic         │
+   │  the tool call         touches the world        │
+   │                                                 │
+   │  each with its OWN timeout and retry policy;    │
+   │  the result lands in the history, so replay     │
+   │  reads it instead of re-running it              │
+   └─────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+Four rules:
+
+**One activity per tool, not one activity for "run a tool."** A generic `executeTool(name, args)` activity gives every tool the same timeout and the same retry policy, which means the 20 ms read and the 90-second generation are configured identically and one of them is wrong. Separate activities let each carry its own.
+
+**Set the retry policy from the [tool class](/book/tools/read-and-write-tools).** Class ① reads retry freely. Class ④ and ⑤ writes retry only if idempotent, and their permanent failures are listed as non-retryable so the workflow can decide rather than the SDK looping.
+
+**Keep the dispatcher's checks in the activity, not the workflow.** Taint, scope, tier, delegation, and the idempotency key all live in [the dispatcher](/book/capstone/building-it), and the dispatcher runs inside the activity, because minting a token and hashing arguments are things you *discover*, and because the checks must run on the real call rather than on a replayed one.
+
+**Pass references, not payloads.** Activity arguments and results are written to the event history verbatim. A 200 KB tool result crossing the boundary is 200 KB of permanent history per call, which is how a workflow hits its size limit in an afternoon.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/agent.ts"
+// Proxied with per-activity timeouts. Nothing here shares a policy.
+const { callModel } = proxyActivities<typeof modelActivities>({
+  startToCloseTimeout: '2 minutes',
+  heartbeatTimeout: '20 seconds',        // streaming; see heartbeat pattern
+  retry: { maximumAttempts: 3, nonRetryableErrorTypes: ['ContextTooLong'] },
+});
+
+const { getOrder } = proxyActivities<typeof readActivities>({
+  startToCloseTimeout: '30 seconds',
+  retry: { maximumAttempts: 5 },          // class ① — retry freely
+});
+
+const { issueCredit } = proxyActivities<typeof writeActivities>({
+  startToCloseTimeout: '30 seconds',
+  scheduleToCloseTimeout: '10 minutes',   // unsettled after 10m is a human's problem
+  retry: {
+    maximumAttempts: 3,                   // safe ONLY because it is idempotent
+    nonRetryableErrorTypes: ['CreditLimitExceeded', 'AccountNotFound'],
+  },
+});
+
+export async function ticketAgent(input: TicketInput): Promise<Outcome> {
+  const state = initState(input);         // workflow-local: budgets, taint, scratchpad
+
+  while (!state.done && state.turn < MAX_TURNS) {
+    // Nondeterministic → activity. Its result is recorded, so replay
+    // reads the same completion instead of sampling a new one.
+    const step = await callModel(state.toRequest());
+
+    if (step.toolCall) {
+      // The dispatcher's eight checks run INSIDE the activity, on the
+      // real call — not on a replay, and not in workflow code.
+      const result = await dispatchActivityFor(step.toolCall.name)(
+        step.toolCall.args, state.contextRef,   // a reference, not a payload
+      );
+      state.record(step, result);
+    } else {
+      state.done = true;
+    }
+    state.turn += 1;
+  }
+  return state.outcome();
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/agent.py"
+@workflow.defn
+class TicketAgent:
+    @workflow.run
+    async def run(self, input: TicketInput) -> Outcome:
+        state = init_state(input)   # workflow-local: budgets, taint, scratchpad
+
+        while not state.done and state.turn < MAX_TURNS:
+            # Nondeterministic → activity. Its result is recorded, so replay
+            # reads the same completion instead of sampling a new one.
+            step = await workflow.execute_activity(
+                call_model, state.to_request(),
+                start_to_close_timeout=timedelta(minutes=2),
+                heartbeat_timeout=timedelta(seconds=20),
+                retry_policy=RetryPolicy(
+                    maximum_attempts=3,
+                    non_retryable_error_types=["ContextTooLong"],
+                ),
+            )
+
+            if step.tool_call:
+                # The dispatcher's eight checks run INSIDE the activity, on
+                # the real call — not on a replay, not in workflow code.
+                result = await workflow.execute_activity(
+                    activity_for(step.tool_call.name),
+                    args=[step.tool_call.args, state.context_ref],  # a reference
+                    **policy_for(step.tool_call.name),   # per-tool timeouts
+                )
+                state.record(step, result)
+            else:
+                state.done = True
+            state.turn += 1
+
+        return state.outcome()
+```
+
+</Tab>
+</Tabs>
+
+`policy_for(tool)` deriving timeouts and retry rules from the tool class is what keeps this from becoming forty hand-tuned constants. The class is already recorded in the catalogue for [security reasons](/book/security/least-privilege); reuse it.
+
+## Trade-offs
+
+**Payload round trips.** Every argument and result serializes into the history. This is the cost that bites first on agents, because [the transcript is the payload](/book/durability/agent-as-workflow). Passing the whole context to the model activity on every turn writes it to history on every turn. Pass a reference to state held outside, or you will hit the size limit long before the event count.
+
+**Latency per boundary.** An activity dispatch is a queue round trip, typically single-digit to low tens of milliseconds. Negligible against a model call, meaningful if you make an activity out of something trivial.
+
+**Two places to look when debugging.** The workflow shows the decisions; the activity shows what happened. Good tracing joins them under one run ID, and [without that join](/book/observability/what-a-trace-must-answer) an investigation crosses a boundary with nothing linking the sides.
+
+**Non-retryable classification is load-bearing.** Getting it wrong in one direction burns money retrying a permanent failure; in the other it fails a run that would have succeeded on the second attempt. This is [the error taxonomy](/book/reliability/error-taxonomy) with real consequences attached.
+
+## When not to use it
+
+**For pure computation.** Formatting, arithmetic, parsing, and branching belong in workflow code. They are deterministic, they replay correctly, and making them activities adds latency and history for nothing.
+
+**For clocks, IDs, and randomness.** Those have replay-safe SDK equivalents. Reaching for an activity to get the current time is a common first-week mistake with a one-line fix.
+
+**When you are not using durable execution.** Outside a workflow, this is just "call your tools through a dispatcher", which [you should do anyway](/book/production/reference-architecture), without the activity machinery.
+
+**For a tool you call fifty times in a tight loop.** Fifty activities is fifty history entries and fifty round trips. Batch them into one activity that loops internally, and accept that the whole batch retries together.
+
+<Aside type="caution" title="The model call is the reason this pattern is not optional">
+Everything else here has a workaround. A tool call could, in principle, be made idempotent enough to survive re-execution.
+
+The model call cannot. It is nondeterministic by definition, and a workflow that contains one will diverge from its own history on the first replay, producing a different completion, a different tool choice, and a different branch. That is not a subtle degradation; it is the failure mode durable execution exists to prevent, occurring inside the mechanism meant to prevent it.
+
+**One activity whose output is not a function of its input** is what makes an agent an agent, and putting it on the activity side of the line is the single decision that lets everything else in this part work.
+</Aside>
+
+## Related
+
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the workflow this pattern lives inside
+- [Heartbeat for Long Tools](/book/patterns/durability/heartbeat-long-tools): detecting a hung activity before its timeout
+- [Resumable Activity](/book/patterns/durability/resumable-activity): restarting a long activity from a checkpoint
+- [Saga for Tool Side Effects](/book/patterns/durability/saga-for-tools): undoing activities that succeeded before a later failure
+- [Determinism and Retries](/book/durable-execution/determinism-and-retries): what replay actually compares, and the four sources of divergence

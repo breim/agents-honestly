@@ -1,0 +1,137 @@
+---
+title: "OpenTelemetry for GenAI"
+description: "The semantic conventions for models, tokens, retrieval, and tool calls, and instrumenting the whole stack against them."
+---
+
+[The previous chapter](/book/observability/what-a-trace-must-answer) listed eight questions a trace must answer. You could answer every one of them with field names you invent this afternoon, and the code would work.
+
+The reason not to is that **you are not the only thing emitting spans.**
+
+## Four layers will instrument the same run
+
+A production agent has a model SDK, possibly an agent framework, a gateway, and a workflow engine. Each of them ships instrumentation. They will all emit something about the same model call, and whether that composes into one coherent trace or four overlapping ones depends entirely on whether they agreed on names in advance.
+
+That is what the conventions buy:
+
+> **A fixed set of span names, attribute keys, and metrics, so that an LLM call looks like an LLM call no matter who emitted it.**
+
+Which also means vendor portability, dashboards that work before you configure them, and cost attribution that does not need a translation layer per library.
+
+## The shape is three levels
+
+The conventions define a hierarchy that should look familiar:
+
+<Figure caption="The span hierarchy the conventions describe, and the Part XI structure it lands on." frame={false}>
+
+```
+   invoke_agent                        ← the run
+   ├── chat                            ← a model call
+   ├── execute_tool  get_order     ← a tool call
+   ├── execute_tool  search_policies
+   ├── chat
+   └── execute_tool  issue_credit
+
+   ────────────────────────────────────────────────
+   the same boundaries you already have:
+
+   invoke_agent   ≈  the workflow
+   chat           ≈  the model activity
+   execute_tool   ≈  the tool activity
+```
+
+</Figure>
+
+An agent built the way [Part XI](/book/durability/agent-as-workflow) describes already has those boundaries, because the workflow/activity split forced them. Instrumenting is naming what exists rather than restructuring anything. That is a pleasant and slightly accidental payoff of putting model calls in activities for entirely different reasons.
+
+## Which of the eight questions the conventions answer
+
+| Question from the checklist | Convention support |
+| --- | --- |
+| Which model | `gen_ai.request.model`, and the response model |
+| Tokens | `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` |
+| Why it stopped | `gen_ai.response.finish_reasons` |
+| What was in the window | `gen_ai.system_instructions`, `gen_ai.input.messages`: **opt-in** |
+| What came back | `gen_ai.output.messages`: opt-in |
+| Which tools, arguments, order | `execute_tool` spans, in trace order |
+| Duration, cost | Span duration; cost is derived from tokens |
+| **Which prompt version** | **Not covered: yours** |
+| **Retrieved doc IDs with versions** | **Partially: the version pinning is yours** |
+| **Truncation flag** | **Not covered: yours** |
+
+Read the bottom three. The conventions cover the **mechanical** fields well and none of the fields specific to *your* correctness story. That is not a gap in the conventions, it is the boundary of what a general convention can standardise.
+
+So the practical rule: **use `gen_ai.*` for everything it defines, and put your own attributes in your own namespace.** A trace with `gen_ai.usage.input_tokens` alongside `meridian.prompt.version` and `meridian.tool.truncated` is correct and portable; overloading a `gen_ai.*` key with your own meaning is neither.
+
+## Content capture is opt-in, and that default is right
+
+Messages, system instructions, and tool calls are recorded as structured attributes **only when the application is configured to record content.** Off by default.
+
+That aligns exactly with [the previous chapter's storage split](/book/observability/what-a-trace-must-answer): the payloads are the expensive and sensitive part, and the observability backend is the wrong place for them. Leave content capture off in the backend, route the payloads to the object store, and keep the hash in the span.
+
+Turning it on wholesale is how a team discovers that their observability bill and their [third copy of customer data](/book/observability/what-a-trace-must-answer) arrived on the same day.
+
+<Aside type="caution" title="These conventions are not stable, and they moved">
+The most important fact in this chapter, and the one that dates fastest.
+
+The GenAI conventions are **pre-stable and experimental. There is no 1.0.** They carry Development stability, meaning breaking changes are expected rather than exceptional. And as of semantic-conventions **v1.42.0 in June 2026**, all `gen_ai.*` spans and attributes were moved out of the main repository into a dedicated GenAI conventions repository.
+
+Two consequences for how you write the code:
+
+**Put the attribute names in one module**, not scattered across every call site. A rename should be one edit, and with the conventions in Development that rename is a matter of when.
+
+**Record the convention version as an attribute on the trace.** A span emitted in March is only interpretable next year if something says which vocabulary it was speaking.
+</Aside>
+
+## Do not instrument the same call twice
+
+The failure that follows from four layers each shipping instrumentation: two of them wrap the same model call, and your token counts double.
+
+It is easy to miss because the trace looks *more* complete rather than broken: an extra span, plausibly nested. And the number it corrupts is the one feeding [cost attribution](/book/observability/cost-accounting) and [cost-per-resolved-ticket](/book/evals/cost-and-latency-evals).
+
+The rule is one owner per span type:
+
+| Span | Owned by |
+| --- | --- |
+| `chat` | The model SDK's instrumentation, because it is closest to the truth |
+| `execute_tool` | Your dispatcher, because it knows the tool catalogue |
+| `invoke_agent` | The workflow, because it owns the run's identity |
+
+Then turn off whatever else was going to emit those, and verify by checking that summed span tokens equal the provider's reported usage for a known run. That check takes ten minutes and finds the double-count immediately.
+
+## Atlas, concretely
+
+| | Value |
+| --- | --- |
+| `invoke_agent` | Emitted by the workflow, `trace_id` = `ticket-8823` |
+| `chat` | Emitted by the SDK instrumentation inside the model activity |
+| `execute_tool` | Emitted by the dispatcher, one per tool call |
+| Content capture | **Off**. Payloads go to the object store with a hash in the span |
+| Custom namespace | `meridian.prompt.version`, `meridian.tool.truncated`, `meridian.route`, `meridian.tier` |
+| Convention version | Recorded as an attribute on every trace |
+| Attribute names | One module, one place to edit when they move |
+
+The `meridian.route` attribute is doing quiet work. Everything in [Part XIV](/book/evals/datasets) is per-route: golden sets, gates, latency budgets, fairness keys. So having the route on every span is what lets a trace query answer *"what changed for policy questions this week"* without a join against anything.
+
+## References
+
+- [OpenTelemetry GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/), span and attribute definitions for model, tool, and retrieval operations.
+- [The gen-ai attribute registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/), canonical attribute names with their stability levels.
+- [The dedicated GenAI conventions repository](https://github.com/open-telemetry/semantic-conventions-genai), where these conventions now develop.
+
+---
+
+Next: [Replay-Driven Debugging](/book/observability/replay-debugging), event histories as ground truth, and re-running a real failure against new code.
+
+## Takeaways
+
+- Four layers will instrument the same run: the model SDK, the agent framework, the gateway, and the workflow engine. Whether that composes into one trace depends on agreeing names in advance.
+- The conventions exist so an LLM call looks like an LLM call regardless of who emitted it, which is what makes dashboards, alerting, and cost attribution portable.
+- The span hierarchy is `invoke_agent` → `chat` → `execute_tool`, and it maps directly onto the workflow/activity split, so instrumenting is naming what already exists.
+- The conventions cover model, tokens, finish reasons, messages, and tool calls. They do not cover prompt version, retrieved-document versions, or truncation: the fields specific to your correctness story.
+- Use `gen_ai.*` for what it defines and put your own fields in your own namespace. Overloading a convention key is neither correct nor portable.
+- Content capture is opt-in and should stay off in the backend. Payloads belong in the object store with a hash in the span.
+- The conventions are pre-stable with no 1.0, and as of June 2026 they moved to a dedicated repository. Breaking changes are expected, not exceptional.
+- Put attribute names in one module so a rename is one edit, and record the convention version on the trace so old spans stay interpretable.
+- One owner per span type: the SDK owns `chat`, your dispatcher owns `execute_tool`, the workflow owns `invoke_agent`. Double instrumentation looks like a more complete trace and corrupts your cost numbers.
+- Verify by checking that summed span tokens match the provider's reported usage for a known run.
+- Put the route on every span. Everything in the eval part is per-route, and this is what lets a trace query answer a per-route question without a join.

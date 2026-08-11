@@ -1,0 +1,209 @@
+---
+title: "Long-Lived Agents"
+description: "One workflow per case, alive for weeks: entity workflows, signals for inbound events, continue-as-new as history grows."
+---
+
+Atlas so far handles one ticket in about eight minutes. Real support threads do not work like that. A customer replies two days later, an engineer adds a note, the SLA clock runs, someone escalates, the customer replies again, and the case is open for three weeks.
+
+That is a different program, and three things change.
+
+## One workflow, for the life of the case
+
+[The previous chapters](/book/durability/not-a-background-job) established the shape: the workflow ID is the business entity. Extended to a long case, that becomes the **entity workflow**, a single execution that persists for the entity's entire lifetime and handles every state transition through signals and updates.
+
+<Figure caption="One execution, many events, weeks of wall clock. Nothing is running between them." frame={false}>
+
+```
+   ticket-8823                                    created by whichever
+   ├── day 0   customer email      → signal       event arrives first
+   ├── day 0   agent resolves      → run
+   ├── day 0   awaiting reply      → timer (7d)
+   ├── day 2   customer replies    → signal       ┐ three in four
+   ├── day 2   customer replies    → signal       ┤ seconds — respond
+   ├── day 2   customer replies    → signal       ┘ once
+   ├── day 2   agent resolves      → run
+   ├── day 9   SLA fires           → timer
+   ├── day 9   escalated           → update
+   └── day 21  closed              → workflow completes
+```
+
+</Figure>
+
+Between those lines nothing is executing. There is no process, no thread, no row being polled, just a durable execution with a timer against it. That is the property that makes a three-week agent affordable, and it is the same one that made [a three-day approval affordable](/book/durable-execution/signals-and-children).
+
+## Inbound events arrive in bursts, and naive handling answers three times
+
+A customer replies. Then, four seconds later, corrects themselves. Then adds a screenshot.
+
+Handle each signal by starting a run and Atlas produces three replies: the second contradicts the first, and the third answers a question the customer already withdrew. This is not a rare edge; it is how people type.
+
+The fix is an **accumulator**. Take signals into a buffer, wait for a quiet window, then act once on everything that arrived:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/ticket-workflow.ts"
+const QUIET = '4 seconds';
+
+export async function ticketWorkflow(state: TicketState): Promise<void> {
+  const inbox: InboundEvent[] = [];
+  setHandler(inboundEvent, (e) => { inbox.push(e); });
+
+  while (!state.closed) {
+    // Wait for something to arrive.
+    await condition(() => inbox.length > 0);
+
+    // Then wait for it to stop arriving. Each new event restarts the window.
+    let seen = inbox.length;
+    do {
+      seen = inbox.length;
+      await sleep(QUIET);
+    } while (inbox.length > seen);
+
+    const batch = inbox.splice(0, inbox.length);   // take all, leave none
+    await runAtlasOnce(state, batch);              // one run, one reply
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/ticket_workflow.py"
+QUIET = timedelta(seconds=4)
+
+@workflow.defn
+class TicketWorkflow:
+    def __init__(self) -> None:
+        self._inbox: list[InboundEvent] = []
+        self._closed = False
+
+    @workflow.signal
+    def inbound_event(self, e: InboundEvent) -> None:
+        self._inbox.append(e)
+
+    @workflow.run
+    async def run(self, state: TicketState) -> None:
+        while not self._closed:
+            # Wait for something to arrive.
+            await workflow.wait_condition(lambda: len(self._inbox) > 0)
+
+            # Then wait for it to stop arriving. Each new event restarts it.
+            seen = -1
+            while len(self._inbox) > seen:
+                seen = len(self._inbox)
+                await asyncio.sleep(QUIET.total_seconds())
+
+            batch, self._inbox = self._inbox, []     # take all, leave none
+            await run_atlas_once(state, batch)       # one run, one reply
+```
+
+</Tab>
+</Tabs>
+
+Four seconds of latency, one coherent reply instead of three contradictory ones. The window is a product decision, long enough that a person finishing a thought is one event, short enough that the reply still feels prompt.
+
+## History grows until it doesn't
+
+A three-week thread with tool calls and model responses runs into the ceiling [Part X named](/book/durable-execution/signals-and-children): **51,200 events or 50 MB per execution.** Both are reachable, and the payload figures make it concrete. Ten substantial conversational turns approach 40 KB of raw content before Temporal's own per-event metadata.
+
+Continue-as-new is the answer: end this execution, immediately start a fresh one with the same workflow ID, passing forward a summary as input. History resets to empty and the case continues under the same address.
+
+It is also the operation with the most sharp edges in this book, and all of them are quiet.
+
+<Aside type="caution" title="Five things that bite on continue-as-new">
+**Pending signals are lost.** Signals that were delivered but not yet processed vanish when the execution ends. Drain the channel before you continue.
+
+**Signals sent *during* the transition are safe.** The service buffers them for the new execution. Know which of these two cases you are looking at, because they behave oppositely.
+
+**Pending activities are cancelled** if they are not awaited first.
+
+**Do not wait until you are near the limit.** Draining pending signals itself generates events, so triggering continue-as-new at 50,000 can produce the events that terminate the workflow. Continue at a fraction of the ceiling and leave headroom.
+
+**Signals can outpace draining.** If events arrive faster than the workflow can process them and reach continue-as-new, the execution can hit the signal limit, at which point new signals are rejected until it does. Which means your system needs periodic quiet moments, and if the traffic pattern does not produce them naturally, you have to create them.
+</Aside>
+
+That last one deserves emphasis because it is a design constraint rather than an API detail: **an entity workflow under continuous load cannot recycle its history.** The accumulator above helps by batching bursts into single runs, which is fewer events. But a genuinely relentless stream needs the work partitioned across [child workflows](/book/durable-execution/signals-and-children) instead.
+
+## What crosses the boundary
+
+Continue-as-new hands the new execution one thing: its input. So the design question is what state deserves to survive, and this is where [the transcript problem](/book/durability/agent-as-workflow) deferred from two chapters ago comes due.
+
+Three things can cross, in ascending order of preference:
+
+**The raw transcript.** Simple, and it defeats the purpose. You reset history and immediately fill it with what you were trying to shed.
+
+**A summary.** Compact, lossy, and it forces you to decide what mattered. This is exactly [the compaction decision from Part III](/book/context/compaction), arriving with a deadline attached. The wall makes you choose, where before you could postpone.
+
+**A reference and a cursor.** The messages live in an external store; the workflow carries an ID and a position. This is the recommended shape for conversational agents, and it decouples history growth from conversation length entirely.
+
+Atlas carries the third, plus a rolling summary for the model's context, because the store answers *"what was said"* and the summary answers *"what matters,"* and those are [different questions](/book/context/memory).
+
+<Aside type="note" title="What doesn't cross is still auditable">
+State you choose not to carry forward is gone from the new execution's perspective. But the *old* execution's history still exists, with its retention policy, containing everything.
+
+So the distinction is between **addressable** and **auditable**. The new run cannot reach the old turns; an investigator can. That is usually the right trade, and it is worth knowing you have it before you agonise over what to carry.
+</Aside>
+
+## Timers must be absolute, not relative
+
+The gotcha that catches everyone once. An SLA deadline written as `sleep('7 days')` restarts on every continue-as-new, so a case that recycles history three times gets twenty-one days of SLA instead of seven.
+
+Carry the **deadline** as input, not the duration, and sleep until it:
+
+```ts
+// ✗ restarts on every continue-as-new
+await sleep('7 days');
+
+// ✓ absolute, survives any number of transitions
+await sleep(state.slaDeadline.getTime() - Date.now());
+```
+
+Derive the sleep at arming time, from *now*, not from `workflowInfo().startTime`, which is the start of the whole execution **chain** and does not reset on continue-as-new. Subtracting it would hand every new run the full original window, which is the bug above wearing a fix.
+
+Anything measured against the case rather than against the current execution must be an absolute timestamp carried forward. That covers SLA clocks, retention windows, and escalation ladders. And [the SLA timer pattern](/book/patterns/durability/sla-timer) is this rule with the cancel-and-re-arm machinery attached.
+
+## Atlas, concretely
+
+| | Choice |
+| --- | --- |
+| Workflow ID | `ticket-8823`, the case, for the life of the case |
+| Inbound | Customer replies, agent notes, and system events, all as signals |
+| Burst handling | Four-second quiet window, one run per batch |
+| Continue-as-new at | ~10,000 events, headroom against 51,200, not a race to it |
+| Carried forward | Ticket metadata, absolute SLA deadline, rolling summary, message-store cursor |
+| Children | None, so the [parent-close policy trap](/book/durable-execution/signals-and-children) does not apply, which is worth confirming rather than assuming |
+| Ends | When the ticket closes, or after 90 days of silence |
+
+That last row matters more than it looks. **An entity workflow needs a defined end**, or you have created an execution that runs until someone notices it in a list six months later. "Closed, or ninety days quiet" is a policy decision that belongs in the design rather than in a cleanup script.
+
+## When not to do this
+
+Being honest about the cost, because entity workflows are attractive and slightly addictive.
+
+**An execution that lives for months is code you cannot change freely.** Worker versioning pins in-flight runs to the version that started them, which is the right default. And it means a workflow open for three months is running three-month-old code until it closes or recycles. Long-lived executions and rapid iteration pull against each other, and continue-as-new is also the moment you get to adopt new code.
+
+**Most cases are not long-lived.** If ninety percent of tickets close the same day, the entity workflow is machinery serving the tail. That can still be correct, since one shape for all cases is simpler than two, but it should be a decision rather than an accident.
+
+**Continuous load is the disqualifier.** As above. If there is never a quiet moment, history cannot recycle, and the ceiling is not negotiable.
+
+---
+
+Next: [When Tools Have Side Effects](/book/durability/compensation), the saga pattern for refunds, emails, and inventory, plus the "we already sent it" problem.
+
+## Takeaways
+
+- An entity workflow is one execution per case, addressed by the case, alive for its whole lifetime, with every transition arriving as a signal or an update.
+- Between events nothing runs. Three weeks of wall clock costs a durable timer.
+- Inbound events arrive in bursts because that is how people type. Handling each one separately produces contradictory replies.
+- Accumulate into a buffer, wait for a quiet window that each new event restarts, then act once on the whole batch. The window length is a product decision.
+- History caps at 51,200 events or 50 MB, and ten substantial turns approach 40 KB before metadata. Continue-as-new resets it under the same workflow ID.
+- Pending signals are lost on continue-as-new unless drained; signals sent during the transition are buffered and safe. The two cases behave oppositely.
+- Pending activities are cancelled if not awaited.
+- Trigger continue-as-new with headroom. Draining generates events, so recycling at the ceiling can terminate the workflow.
+- Under continuous load a workflow may never reach continue-as-new, and new signals are eventually rejected. Entity workflows need quiet moments; relentless streams need partitioning into children.
+- What crosses the boundary is the input, so continue-as-new forces the compaction decision Part III said to make in advance. Prefer a reference and a cursor over a summary, and a summary over the raw transcript.
+- State not carried forward is gone from the new run but still present in the old execution's history. Not addressable, still auditable.
+- Timers must be absolute. `sleep('7 days')` restarts on every transition; carry the deadline and sleep until it.
+- An entity workflow needs a defined end, or it runs until somebody notices it months later.
+- Long-lived executions run old code until they close or recycle. Continue-as-new is also when they adopt new code.

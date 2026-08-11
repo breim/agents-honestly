@@ -1,0 +1,12 @@
+{
+  "title": "Part V · Knowledge Graphs",
+  "pages": [
+    "when-relationships-are-the-query",
+    "modeling-entities",
+    "graph-storage-and-query-models",
+    "entity-resolution",
+    "graph-retrieval",
+    "evaluating-graph-quality",
+    "graphrag"
+  ]
+}

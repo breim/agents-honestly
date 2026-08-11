@@ -1,0 +1,192 @@
+---
+title: "Grounded Citations"
+description: "Make every claim traceable to a retrieved span, and detect when it is not."
+---
+
+## Problem
+
+The reply says:
+
+> *"Opened RB-400 relays can be returned within 30 days provided no unit has been installed, and expedited freight is covered under your contract tier. [c-8812]"*
+
+The first clause is supported by c-8812. The second is not: no retrieved chunk mentions freight, and the model produced it from parametric knowledge or from a plausible-sounding pattern. The citation sits at the end of the sentence and lends its authority to both halves.
+
+Three distinct failures hide behind one confident paragraph:
+
+| Failure | Detectable by |
+| --- | --- |
+| Citation points at a chunk that was never retrieved | **String matching.** Cheap and deterministic |
+| Citation resolves, but the chunk does not support the claim | Entailment checking. Expensive |
+| A claim carries no citation at all | Parsing. Cheap |
+
+The first and third are mechanical. The second is the one that matters and the one that gets skipped.
+
+## Forces
+
+- **A citation is an assertion by the model**, and the model is the component whose assertions are in question.
+- **Cheap checks catch a real share of failures.** Invented chunk IDs and uncited claims are common.
+- **Verifying support requires reading both** the claim and the source, which costs a model pass per claim.
+- **Faithfulness needs no ground truth**, only the answer and the retrieved context, which makes it the rare quality metric you can compute in production.
+- **Grounding checks add real latency**: atomic decomposition with verification runs on the order of seconds and cents per response.
+- **False positives have a cost.** A check that flags correct answers trains people to ignore it.
+
+## Solution
+
+Three layers, cheapest first, and only the last one is expensive.
+
+<Figure caption="Two mechanical checks that gate every response, and one semantic check that samples." frame={false}>
+
+```
+   ①  RESOLVE      does every cited ID exist in THIS run's
+       │           retrieved set?
+       │           string match · microseconds · gate everything
+       ▼
+   ②  COVER        does every factual claim carry a citation?
+       │           parse · milliseconds · gate everything
+       ▼
+   ③  ENTAIL       does the cited span actually support the claim?
+                   decompose into atomic claims, check each against
+                   its source · seconds and cents · SAMPLE
+```
+
+</Figure>
+
+Four rules:
+
+**Resolve against this run's retrieved set, not the corpus.** A citation naming a real chunk the run never retrieved is still fabricated. Check membership in `ctx.retrievedIds`, which the [trace already records](/book/observability/replay-debugging) for replay and incident scoping.
+
+**Require citations per claim, not per response.** A single marker at the end of a paragraph covers everything and nothing. Ask for markers at the clause level, which is what makes the freight sentence separable from the returns sentence.
+
+**Score faithfulness by decomposing into atomic claims.** Extract each factual assertion, check whether its cited span entails it, and report supported-over-total. This is the standard construction and its useful property is that it needs no reference answer: you have the response and the context, which is all it takes.
+
+**Report three numbers, not one.** *Citation precision* (cited spans that actually support their claim), *citation recall* (claims that should be cited and are), and *entailment accuracy*. They fail independently, and a single "grounding score" hides which one moved.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/grounding.ts"
+const CITE = /\[([a-z]-\d+)\]/g;
+
+// ① + ② — deterministic, microseconds, run on every response.
+export function checkCitationsMechanical(
+  answer: string, retrievedIds: Set<string>,
+): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+
+  for (const [, id] of answer.matchAll(CITE)) {
+    // A real chunk this run never retrieved is still fabricated.
+    if (!retrievedIds.has(id)) problems.push(`cites ${id}, not retrieved`);
+  }
+
+  for (const sentence of splitFactual(answer)) {
+    if (!CITE.test(sentence)) problems.push(`uncited claim: ${sentence.slice(0, 60)}`);
+  }
+
+  return { ok: problems.length === 0, problems };
+}
+
+// ③ — seconds and cents. Sample in production; run fully in CI.
+export async function scoreFaithfulness(
+  answer: string, chunks: Map<string, string>,
+): Promise<{ faithfulness: number; unsupported: string[] }> {
+  const claims = await decomposeIntoAtomicClaims(answer);
+
+  const verdicts = await Promise.all(
+    claims.map(c => entails({
+      premise: c.citedIds.map(id => chunks.get(id) ?? '').join('\n'),
+      hypothesis: c.text,
+    })),
+  );
+
+  const unsupported = claims.filter((_, i) => !verdicts[i]).map(c => c.text);
+  return {
+    faithfulness: (claims.length - unsupported.length) / Math.max(claims.length, 1),
+    unsupported,
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/grounding.py"
+import re
+
+CITE = re.compile(r"\[([a-z]-\d+)\]")
+
+
+def check_citations_mechanical(answer: str, retrieved_ids: set[str]) -> tuple[bool, list[str]]:
+    """① + ② — deterministic, microseconds, run on every response."""
+    problems = []
+
+    for cid in CITE.findall(answer):
+        # A real chunk this run never retrieved is still fabricated.
+        if cid not in retrieved_ids:
+            problems.append(f"cites {cid}, not retrieved")
+
+    for sentence in split_factual(answer):
+        if not CITE.search(sentence):
+            problems.append(f"uncited claim: {sentence[:60]}")
+
+    return not problems, problems
+
+
+async def score_faithfulness(answer: str, chunks: dict[str, str]) -> dict:
+    """③ — seconds and cents. Sample in production; run fully in CI."""
+    claims = await decompose_into_atomic_claims(answer)
+
+    verdicts = await asyncio.gather(*[
+        entails(premise="\n".join(chunks.get(i, "") for i in c.cited_ids),
+                hypothesis=c.text)
+        for c in claims
+    ])
+
+    unsupported = [c.text for c, ok in zip(claims, verdicts) if not ok]
+    return {
+        "faithfulness": (len(claims) - len(unsupported)) / max(len(claims), 1),
+        "unsupported": unsupported,
+    }
+```
+
+</Tab>
+</Tabs>
+
+The split between the two functions is the design. The mechanical check is a [guardrail](/book/evals/online-evals): it runs on every response, fails closed, and costs nothing. The faithfulness score is an *eval*: it samples, reports a distribution, and is never on the critical path.
+
+## Trade-offs
+
+**Latency and cost of the semantic layer.** Decomposition plus per-claim verification is on the order of seconds and cents per response. That is fine as a sampled measurement and unacceptable as a gate on an interactive path, which is exactly why the mechanical checks exist.
+
+**False positives on non-factual text.** *"Let me check that for you"* has no claim to cite. A naive per-sentence rule flags pleasantries, and a check that fires on correct output gets ignored within a week. Classify sentences before requiring citations, and tune toward under-flagging.
+
+**Citation markers cost tokens and leak into prose.** `[c-8812]` in customer-facing text is noise. Generate markers internally and render them as links, footnotes, or nothing depending on the surface: the check runs on the internal form.
+
+**Entailment judges are themselves models.** An LLM-as-judge or an NLI model has its own error rate and its own [drift](/book/observability/drift). Pin the judge version like any other model, and treat a moving faithfulness score with a stable system as a judge problem until proven otherwise.
+
+## When not to use it
+
+**When the answer is not supposed to be grounded.** Brainstorming, drafting, summarizing the user's own input. Requiring citations for content that has no source is a category error.
+
+**When there is no retrieval.** An agent answering from SQL results should ground against *those*: the mechanism generalizes, the chunk-ID form does not.
+
+**As a gate, when latency is tight.** Run the mechanical checks inline and the semantic one asynchronously on a sample. A four-second grounding check on a support reply is worse than the problem.
+
+**Before recall is fixed.** If the right chunk was never retrieved, grounding checks correctly report that the answer is unsupported, which is true, useless, and points at the wrong stage. [Fix retrieval first](/book/retrieval/retrieval-evals).
+
+<Aside type="note" title="Why this is the metric to run in production">
+Most quality metrics need a reference answer, which is why they live in CI on a labeled fixture set and cannot follow you into production.
+
+Faithfulness does not. It compares the response against the context that produced it, both of which you already have on every single request. That makes it the rare measurement that runs on real traffic, at real volume, on questions nobody wrote fixtures for, and it is the signal behind the [sustained-drop alert](/book/production/operating-manual) that catches a regression before anyone files a complaint.
+
+It is also, precisely, a detector for the [semantic failure class](/book/reliability/error-taxonomy): the one with no exception type and no error rate.
+</Aside>
+
+## Related
+
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): grounding fails when the right chunk is not in the prompt; fix that first
+- [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks): cite the child, send the parent
+- [Trajectory Evals](/book/evals/trajectory-evals): grounding claims against tool results, not just retrieved text
+- [Online Evals](/book/evals/online-evals): the sampling discipline the semantic layer needs
+- [Context Poisoning](/book/context/context-poisoning): the failure this detects when the bad value came from the agent itself

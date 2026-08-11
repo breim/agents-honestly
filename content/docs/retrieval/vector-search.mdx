@@ -1,0 +1,146 @@
+---
+title: "Vector Search and the Database Question"
+description: "Starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product."
+---
+
+
+"We need a vector database" is a sentence that arrives before anyone has established what the capability is. It sounds like infrastructure, a thing you procure, deploy, and then *have*.
+
+Vector search is not a product. It is an **index type**: a way of answering "which of these rows is nearest this point," in the same category as a B-tree answering "which rows fall in this range" or an inverted index answering "which documents contain this term." Nobody says "we need a B-tree database."
+
+Starting in Postgres makes that concrete, and it does something more useful than saving you a deployment: it puts the vectors next to the data they describe, which is where the hard part of retrieval actually lives.
+
+## The schema is the argument
+
+Here is Atlas's policy corpus, as a table:
+
+```sql
+CREATE TABLE policy_chunks (
+  id            bigserial PRIMARY KEY,
+  document_id   text        NOT NULL,   -- 'POL-114'
+  version       int         NOT NULL,   -- 7
+  superseded_at timestamptz,            -- NULL = current
+  tier          text        NOT NULL,   -- 'standard' | 'contract'
+  region        text        NOT NULL,
+  content       text        NOT NULL,   -- keep the source text. always.
+  embedding     vector(1536),
+  pipeline_ver  text        NOT NULL    -- 'e5-large/chunk-v3/1536'
+);
+
+CREATE INDEX ON policy_chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX ON policy_chunks (tier, region) WHERE superseded_at IS NULL;
+```
+
+Read what that says. The vector is **a column**, alongside the version, the tier, and the supersession timestamp. `pipeline_ver` is there because of the [last chapter](/book/retrieval/embeddings). And the query that uses it is a query:
+
+```sql
+SELECT id, document_id, version, content,
+       embedding <=> $1 AS distance
+FROM   policy_chunks
+WHERE  tier = $2
+  AND  region = $3
+  AND  superseded_at IS NULL
+ORDER  BY embedding <=> $1
+LIMIT  5;
+```
+
+That `WHERE` clause is the whole reason to start here. Recall the chain from the last chapter: *similar ≠ relevant ≠ correct*. Similarity gets you the ordering. **Correctness comes from the filter**: the current version, this customer's tier, this region. A system that ranks brilliantly and returns a superseded policy has failed completely, and no amount of embedding quality fixes it.
+
+In Postgres, that constraint is a `WHERE` clause, plus a join when the policy applies to a specific account. In a dedicated vector store it is "metadata filtering," a separate subsystem with its own semantics and its own limits.
+
+Which brings us to the actual architecture decision.
+
+## The filter problem
+
+Combining "nearest neighbours" with "matching this predicate" is genuinely hard, and how a system does it is the thing that should decide your choice. There are three strategies.
+
+<Figure caption="Three ways to combine similarity with a filter. Only the third stays accurate when the filter is selective." frame={false}>
+
+```
+   POST-FILTER            PRE-FILTER              IN-ALGORITHM
+   (pgvector's default)   (brute force)           (filtered HNSW)
+
+   ┌──────────────┐       ┌──────────────┐        ┌──────────────┐
+   │ ANN over ALL │       │ B-tree finds │        │ ANN traversal│
+   │ → top 100    │       │ matching set │        │ that skips   │
+   └──────┬───────┘       └──────┬───────┘        │ non-matching │
+          │                      │                │ nodes        │
+   ┌──────▼───────┐       ┌──────▼───────┐        └──────┬───────┘
+   │ drop non-    │       │ compute dist │               │
+   │ matching     │       │ to EVERY one │        exact + fast,
+   └──────┬───────┘       └──────┬───────┘        gets faster as
+          │                      │                the filter tightens
+    may return 3            full recall,
+    of the 5 you            no scalability
+    asked for
+```
+
+</Figure>
+
+**Post-filtering** searches the whole index, then discards what doesn't match. Fast, simple, and it degrades precisely when you need it most: if only 1% of your corpus matches the filter, a top-100 ANN scan yields about one usable result, and you asked for five. The mitigation is iterative, fetching more and filtering and repeating until you have enough, which turns a bounded query into an unbounded one.
+
+**Pre-filtering** finds the matching set with an ordinary index, then computes distance to every member. Exact recall, no approximation. But there is no ANN index over an arbitrary subset, so it is a scan: fine over ten thousand rows, hopeless over ten million.
+
+**In-algorithm filtering** makes the graph traversal itself filter-aware, so it walks only the matching subgraph. This is what specialized engines build, and it has a property the other two lack: **a selective filter makes it *faster*, because it prunes the search.** With post-filtering, a selective filter makes everything worse.
+
+<Aside type="note" title="The axis is selectivity, not scale">
+The usual framing is "you need a real vector database when you have enough vectors." That's mostly wrong, and it sends teams migrating for the wrong reason.
+
+The question that matters is: **how much of your corpus survives a typical filter?** Ten million vectors with no filtering is comfortable. Two million vectors where every query filters to a single tenant's 0.5% is where post-filtering falls apart, and where a per-tenant or filter-aware index is worth real money.
+
+If you are multi-tenant and every query is scoped to one tenant, you have the hard version of this problem at any scale.
+</Aside>
+
+## What actually breaks first
+
+When Postgres does stop being enough, it usually isn't for the reason people plan around.
+
+| Concern | Reality |
+| --- | --- |
+| Query latency | Rarely the first problem. ANN over a few million vectors is milliseconds. |
+| **Index build time** | Often the first real pain. Building an HNSW index over millions of rows takes hours and wants a lot of memory. |
+| **Memory** | The graph wants to be in RAM. Falling out of cache turns milliseconds into disk seeks. |
+| **Reindexing windows** | You will re-embed (last chapter). Now it's a hours-long rebuild on a database also serving your application. |
+| **Filtered recall** | The section above. Shows up as "search got worse" with no error and no slow query. |
+| Write throughput | Graph indexes are expensive to update. High-churn corpora suffer. |
+
+The pattern is that the failures are **operational rather than latency-shaped**, and the one that hurts most is the last one you'd instrument for: recall degradation under filtering is invisible to every dashboard you already have.
+
+There is also a real argument for separation that has nothing to do with vectors: an index rebuild is a heavy, bursty workload, and running it inside the database that serves your orders means one workload can starve the other. That is an ordinary operational argument, and it's a better reason to split than "we outgrew pgvector."
+
+## The decision, honestly
+
+**Start in Postgres when** the corpus is in the low millions of chunks or fewer, filters are not brutally selective, the data already lives in Postgres, and you want joins to the entities the chunks describe. This covers a large majority of enterprise agents, including Atlas.
+
+**Move to a specialized engine when** you need in-algorithm filtered search (multi-tenant at scale, heavily faceted queries), when the corpus is large enough that index builds and memory become their own operational programme, or when you need capabilities Postgres doesn't have: per-tenant index isolation, aggressive quantization, distributed sharding.
+
+**Do not move because** a benchmark showed lower latency on unfiltered search, or because a vector database is what the reference architecture had. Unfiltered latency is the number least correlated with your actual problem.
+
+And when you do move, the work is smaller than feared *if* you started here, because the schema above already names every field the new system needs, and you kept the source text.
+
+<Aside type="caution" title="Keep retrieval behind an interface">
+Whatever you choose, put it behind one function: `search(query, filters, k)`. Not because you'll definitely swap it, but because you will add a lexical retriever beside it, then a reranker after it, and then hybrid fusion between them.
+
+Retrieval that is called directly from agent code, in five places, with slightly different filters each time, is the single most common way tenancy bugs get shipped, and the filter is the part that makes results *correct*.
+</Aside>
+
+## Atlas, concretely
+
+Postgres, pgvector, HNSW, roughly 40,000 policy chunks. Filters: `superseded_at IS NULL` always, `tier` usually, `region` sometimes. Selectivity is mild, since the current-version filter removes maybe 30%, so post-filtering is fine, and `document_id` joins straight to the document metadata table that holds the citation the [acceptance spec](/book/first-agent/the-problem) requires.
+
+The part worth stealing: **the version filter is not optional and not a ranking signal.** It is a `WHERE` clause, enforced in the one function that does retrieval, exactly like tenancy. Meridian's corpus contains contradictory documents by design, which is why the [problem chapter](/book/first-agent/the-problem) flagged it, and the resolution is structural, not semantic. Never ask an embedding to prefer the current version. Ask the database.
+
+---
+
+Next: [Approximate Search, Honestly](/book/retrieval/ann-indexes), covering HNSW, IVF, quantization, and the recall / latency / memory / build-time quadrilemma you are actually choosing between.
+
+## Takeaways
+
+- Vector search is an index type, not a product. Starting in Postgres makes that visible and puts vectors next to the data they describe.
+- The filter is what makes results correct; similarity only makes them ordered. Version, tenant, and tier belong in a `WHERE` clause.
+- Three filtering strategies: post-filter (fast, degrades badly when selective), pre-filter (exact, doesn't scale), in-algorithm (what specialized engines build).
+- The axis for choosing an engine is filter selectivity, not corpus size. Multi-tenant scoping is the hard case at any scale.
+- Postgres usually breaks on index build time, memory, and reindexing windows, not query latency.
+- Filtered-recall degradation is invisible on normal dashboards. It looks like "search got worse."
+- A good reason to separate is workload isolation; a bad reason is an unfiltered latency benchmark.
+- Put retrieval behind one function. Filters scattered across call sites is how tenancy bugs ship.

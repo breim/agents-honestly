@@ -1,0 +1,244 @@
+---
+title: "Choosing and Adapting Models"
+description: "Choose by measured task fit, not leaderboard rank. Reasoning effort, provider boundaries, open weights, and the narrow cases where fine-tuning earns its cost."
+---
+
+
+The model is a dependency with an unusual contract. It has a version, a price, a latency distribution, a set of supported input types, and behavior that cannot be described by an API schema alone.
+
+Choosing one by leaderboard rank is like choosing a database by write throughput before learning whether the application mostly reads. The number can be real and still answer the wrong question.
+
+## Start with the calls your system makes
+
+Atlas does not have one model task. It has five:
+
+| Task | What matters | What barely matters |
+| --- | --- | --- |
+| Ticket classification | Closed-set accuracy, calibration, speed | Long prose |
+| Tool selection | Correct tool and arguments over the real catalogue | General knowledge |
+| Policy answer | Grounding, citation use, abstention | Creative range |
+| SQL planning | Schema use, identifier fidelity, correction after an error | Tone |
+| Customer reply | Factual preservation, style, latency | Planning depth |
+
+One model may win all five. Do not assume it. A benchmark average hides the exact failures that turn into your incidents: one model writes better prose and drops an order ID; another calls tools well and turns every customer reply into legal boilerplate.
+
+The evaluation unit is therefore **model plus task configuration**. Model name alone is not a deployable artifact. The effort setting, output schema, tool catalogue, prompt, and context policy travel with it.
+
+## The capability profile
+
+Before testing a candidate, write the contract you need it to satisfy.
+
+```text
+ModelProfile
+├── accepted inputs       text · image · audio · document
+├── output contract       text · JSON schema · tool calls
+├── control               effort · max output · stop conditions
+├── operational limits    context · rate · concurrency · regions
+├── behavior scores       task-specific eval results
+└── lifecycle             pinned version · deprecation date · fallback
+```
+
+The first four rows come from documentation and a probe suite. The behavior scores come from your data. Keep those sources separate. A provider saying that a model supports tool calling means the endpoint accepts a tool schema. It does not mean the model selects `issue_credit` correctly from your catalogue.
+
+<Aside type="caution" title="Context size is a limit, not a quality score">
+A larger advertised window says that the request may fit. It says nothing about whether the model will use a fact buried at token 180,000. Test the positions and document shapes you will send, using the dilution checks from [The Context Window](/book/foundations/context-window).
+</Aside>
+
+## Pick on completed-task economics
+
+Price per token is an input. The product pays per successful outcome.
+
+```text
+cost per resolved ticket
+
+    model spend
+  + retrieval and tool spend
+  + retries and fallbacks
+  + review time
+  + remediation after wrong actions
+  ─────────────────────────────────
+        tickets actually resolved
+```
+
+A small model that retries twice and escalates often may cost more than a larger model that finishes once. A large model used for a binary router may burn money without moving accuracy. [Cost and Latency as Scores](/book/evals/cost-and-latency-evals) turns this equation into an eval; the point here is to choose the denominator before choosing the model.
+
+## Reasoning effort belongs to the task
+
+Reasoning depth is another resource allocation. Spend it where another step of analysis changes the decision.
+
+| Task | Default posture |
+| --- | --- |
+| Route one of five ticket classes | Low effort, closed schema |
+| Copy a tool value into a reply | Low effort, deterministic validation |
+| Reconcile conflicting contract clauses | Higher effort, evidence required |
+| Plan a multi-system investigation | Higher effort, hard step and spend caps |
+| Decide whether an action is authorized | No model. Code owns the decision |
+
+That last row is the one to remember. More reasoning does not turn judgment into authority. A policy check stays in the dispatcher even if the model appears capable of applying it.
+
+## Put the provider behind a boundary
+
+Provider portability does not mean reducing every model to the lowest common denominator. It means keeping provider-specific details at one named boundary so the rest of the system knows what it is depending on.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/models/profile.ts"
+export type ModelTask = 'route' | 'tools' | 'answer' | 'compose';
+
+export interface ModelProfile {
+  id: string;                 // pinned provider version, never a floating alias
+  task: ModelTask;
+  effort: 'low' | 'medium' | 'high';
+  maxOutputTokens: number;
+  supports: ReadonlySet<'tools' | 'json_schema' | 'image' | 'audio'>;
+  evalBundle: string;         // the result that justified this assignment
+}
+
+export interface ModelGateway {
+  generate(profile: ModelProfile, request: CanonicalRequest): Promise<CanonicalResponse>;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/models/profile.py"
+from dataclasses import dataclass
+from typing import Literal, Protocol
+
+ModelTask = Literal["route", "tools", "answer", "compose"]
+
+@dataclass(frozen=True)
+class ModelProfile:
+    id: str                  # pinned provider version, never a floating alias
+    task: ModelTask
+    effort: Literal["low", "medium", "high"]
+    max_output_tokens: int
+    supports: frozenset[Literal["tools", "json_schema", "image", "audio"]]
+    eval_bundle: str         # the result that justified this assignment
+
+class ModelGateway(Protocol):
+    async def generate(
+        self, profile: ModelProfile, request: CanonicalRequest
+    ) -> CanonicalResponse: ...
+```
+
+</Tab>
+</Tabs>
+
+The canonical request should preserve capabilities, not erase them. It can represent reasoning blocks, images, tool calls, and structured outputs even when one provider lacks one of those. The adapter either maps the feature or rejects the profile at startup. Silent downgrades are how a fallback model receives an image it cannot see and answers anyway.
+
+<FrameworkCheck decision="Own the model profile and gateway in plain application code. Let each framework consume that boundary instead of making the framework's provider object your architecture.">
+<FrameworkOption name="plain">
+
+A small typed gateway normalizes requests, usage, stop reasons, errors, and pinned model identity. It remains usable by every runtime and every test.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+Model nodes receive a profile ID and call the gateway. Graph state stores the resolved profile, never a live provider client.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+The model call runs in an Activity. The Workflow records the profile ID and result, so replay never calls the provider again.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+Use provider adapters for streaming and content parts, but translate usage and stop reasons into the same run record used by the backend.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Hosted or self-hosted
+
+This decision has less to do with ideology than with which operational burden you want.
+
+| Hosted API | Self-hosted or dedicated inference |
+| --- | --- |
+| Provider owns kernels, scaling, and most upgrades | You own capacity, batching, rollout, and model serving |
+| Fast access to new capabilities | Control over weights, placement, and serving policy |
+| Rate limits and external availability become dependencies | GPU availability and queueing become dependencies |
+| Data crosses the endpoint boundary you selected | Data can remain inside your network boundary |
+| Reproducibility is limited by the service | You can pin more of the stack, at a throughput cost |
+
+Choose self-hosting when control, residency, volume, or a measured latency/cost case pays for operating inference. "We may need it later" is not a case. Start with the boundary above, because it makes changing the answer possible without rewriting the agent.
+
+## Fine-tuning changes behavior, not your source of truth
+
+Fine-tuning earns a place when a repeated behavior remains wrong after the task, context, and output contract are correct.
+
+<Figure caption="Move down only when the failure survived the cheaper, more reversible layer." frame={false}>
+
+```text
+Wrong result
+    │
+    ├── instruction unclear?       fix prompt
+    ├── fact missing or stale?     retrieval / API / SQL
+    ├── action too broad?          tool contract
+    ├── control flow known?        code / workflow
+    ├── output shape invalid?      constrained output
+    └── repeated behavior remains?
+             │
+             ▼
+         fine-tuning candidate
+```
+
+</Figure>
+
+Good candidates include a stable classification task, a house format that consumes large few-shot prompts, or a domain transformation with many high-quality labeled examples. Bad candidates include weekly policy changes, missing customer records, authorization rules, and facts that belong in a database.
+
+That sequence also matches current provider guidance: establish a prompt baseline, inspect the errors, and tune only when labeled data supports a persistent task-specific gap. See the [Vertex AI tuning overview](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/tune-models) for one official statement of that workflow. The product details will change. The dependency on labeled examples and a held-out eval will not.
+
+Three rules keep a tuning project honest:
+
+1. Freeze a held-out set before training. Evaluating on training examples measures memory.
+2. Compare against the best untuned baseline, including its full prompt and retrieval path.
+3. Version the tuned model with its dataset, base model, training configuration, and eval result. A model ID without those is not reproducible enough to ship.
+
+## Migration is a release, not a string edit
+
+Changing models may alter tool-call shape, tokenization, refusal behavior, latency, context use, and error classes. Treat the candidate as a new resolved bundle:
+
+```text
+probe capabilities
+      ↓
+offline task evals
+      ↓
+shadow execution on recorded inputs
+      ↓
+canary by tenant
+      ↓
+compare quality · trajectory · cost · latency
+      ↓
+promote or roll back the manifest
+```
+
+Do not let an in-flight durable run drift onto a new model. Pin the profile for ordinary behavior and re-evaluate live authorization at the moment of action, the same split [Rollout and In-Flight Migration](/book/production/rollout) applies to every other configuration change.
+
+## Atlas, concretely
+
+Atlas starts with two profiles, not two providers. A fast router profile handles classification. A tool profile handles the bounded action loop and policy synthesis. Both go through the same gateway, both pin a model version, and each carries the eval bundle that justified it.
+
+There is no tuned model in v1. The pilot's failures are missing or stale evidence, poor tool boundaries, and context poisoning. Training on those outputs would preserve the symptoms in weights and leave the causes untouched.
+
+## References
+
+- [Tuning models on Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/tune-models), the managed adaptation options and their data requirements.
+
+---
+
+Next: [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent). The cheapest agent is the one you replaced with three if-statements and a good prompt.
+
+## Takeaways
+
+- Choose per task on your own eval set. A global leaderboard cannot see your tool catalogue, documents, or error costs.
+- The deployable unit is model plus effort, prompt, tools, context policy, and output contract.
+- Compare cost per successful outcome, including retries and review, rather than price per token.
+- Spend reasoning on ambiguous analysis. Authorization and invariants remain code.
+- Keep one provider boundary that preserves capabilities and rejects unsupported profiles loudly.
+- Self-host when control, residency, scale, or measured economics pay for operating inference.
+- Fine-tune a stable behavior with labeled data. Do not fine-tune changing facts, missing context, or permissions.
+- A model migration is a release with evals, shadow traffic, a canary, and rollback.

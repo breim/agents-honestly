@@ -1,0 +1,15 @@
+{
+  "title": "Part XVII · Security & Authorization",
+  "pages": [
+    "threat-model",
+    "prompt-injection",
+    "untrusted-retrieval",
+    "least-privilege",
+    "identity",
+    "tenant-isolation",
+    "sandboxing",
+    "agentic-supply-chain",
+    "adversarial-evals",
+    "pii-and-compliance"
+  ]
+}

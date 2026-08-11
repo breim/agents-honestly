@@ -1,0 +1,195 @@
+---
+title: "Risk Tiers"
+description: "Classifying actions by reversibility and blast radius, so the approval policy writes itself."
+---
+
+The instinct when an agent can spend money is to put a human in front of everything. It is the wrong instinct, and the reason is arithmetic rather than philosophy.
+
+## The resource you are spending is attention
+
+Fifty agents making twenty tool calls an hour produce a thousand approval-eligible events per hour. Route even ten percent of them to a person and you have a hundred approval requests an hour, **more than three full-time people doing nothing but clicking Approve.**
+
+What happens instead is documented and unsurprising. One reported reviewer had approved ninety-four agent decisions by mid-morning, at an average of **eleven seconds each**. By the three-hundredth approval of a routine, benign action, a human is fatigued and primed to keep clicking.
+
+So the approval gate you built for safety has quietly become a rubber stamp, and the system is now *less* safe than one with no gate at all, because everyone believes there is oversight.
+
+<Aside type="caution" title="Approval fatigue is a documented attack, not just a UX problem">
+OWASP's agentic threat guidance classifies **"Overwhelming HITL"** as a deliberate attack vector: flood the reviewer with low-risk requests until rubber-stamping is the established habit, then place the action you actually want inside the stream. It carries a number in both of their agentic lists: **T10** in the threat taxonomy, and **ASI09, Human-Agent Trust Exploitation**, in [the Top 10 the threat-model chapter uses as a coverage check](/book/security/threat-model). Which is worth knowing when someone asks whether an approval queue is a security control or a UX detail.
+
+That reframes everything in this chapter. An approval request is not free and not neutral. It is a **withdrawal from a finite account that an adversary can also draw against.** Asking for approval too often does not merely annoy people; it disables the control.
+</Aside>
+
+> **Every approval you ask for spends attention you will not have for the next one.**
+
+The tiers exist to ration that. They are a budget allocation, not a taxonomy.
+
+## Two axes, because one is not enough
+
+[Part VIII classified tools by reversibility](/book/tools/read-and-write-tools): pure read, observed read, reversible write, irreversible write, external write. That classification is correct and insufficient here, because it is a property of the **tool** and risk is a property of the **call**.
+
+`issue_credit` is one tool. Refunding $5 and refunding $500,000 are not one risk.
+
+<Figure caption="Reversibility is a property of the tool. Blast radius is a property of the arguments. Risk is the cell." frame={false}>
+
+```
+                    BLAST RADIUS ──────────────────────▶
+                    one entity      many          everyone
+                    small amount    moderate      large / public
+   R  ┌───────────┬──────────────┬──────────────┬──────────────┐
+   E  │ reversible│   TIER 0     │   TIER 1     │   TIER 2     │
+   V  │           │ autonomous   │ + notify     │ inline       │
+   E  ├───────────┼──────────────┼──────────────┼──────────────┤
+   R  │ costly to │   TIER 1     │   TIER 2     │   TIER 3     │
+   S  │ reverse   │ + notify     │ inline       │ two people   │
+   I  ├───────────┼──────────────┼──────────────┼──────────────┤
+   B  │ irrever-  │   TIER 2     │   TIER 3     │   TIER 3     │
+   L  │ sible     │ inline       │ two people   │ two people   │
+   E  └───────────┴──────────────┴──────────────┴──────────────┘
+```
+
+</Figure>
+
+**Blast radius** is the scope of the damage if this specific call is wrong: how many entities it touches, how much money moves, and how many people see the result. It is computed from the arguments, at call time. That is why it cannot live in the tool catalogue with the schema.
+
+## Four postures, not two
+
+The other half of the mistake is treating approval as a boolean. There are four useful settings, and the middle two do most of the work:
+
+| Posture | What happens | Costs the reviewer |
+| --- | --- | --- |
+| **Autonomous** | Runs. Recorded in the trace. | Nothing |
+| **Autonomous + notify** | Runs, and a person is told after | A glance, asynchronously |
+| **Inline approval** | Blocks until one person decides | A decision, synchronously |
+| **Multi-party** | Blocks until two people decide | Two decisions, and coordination |
+
+Most systems only implement the first and third, which forces every judgement into "trust it completely" or "stop and wait." **Asynchronous notification is the pressure valve.** It gives a human the ability to notice and intervene without making the agent wait, and it is where a large share of moderate-risk actions belong.
+
+The fourth is [dual control](/book/patterns/security/dual-control), and it exists for the same reason it exists in banking: some actions should not be within one person's power, including the power of one person who has been socially engineered.
+
+## The policy writes itself
+
+Once you declare both axes, the posture is derived rather than argued about in a meeting:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/policy/tiers.ts"
+type Reversibility = 'reversible' | 'costly' | 'irreversible';
+type Posture = 'auto' | 'notify' | 'approve' | 'dual';
+
+const POSTURE: Record<Reversibility, [Posture, Posture, Posture]> = {
+  //              small      moderate    large
+  reversible:   ['auto',    'notify',   'approve'],
+  costly:       ['notify',  'approve',  'dual'],
+  irreversible: ['approve', 'dual',     'dual'],
+};
+
+export function postureFor(tool: ToolSpec, args: ToolArgs): Posture {
+  // Both axes take the arguments. Blast radius obviously does. So does
+  // reversibility, once you redesign an action to have two shapes — a
+  // templated send_reply is reversible in effect, a free-text one is not.
+  // A tool whose reversibility is a constant cannot express that move.
+  const radius = tool.blastRadius(args);          // 0 = small, 1 = moderate, 2 = large
+  return POSTURE[tool.reversibility(args)][radius];
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/policy/tiers.py"
+POSTURE = {
+    #                 small       moderate    large
+    "reversible":   ["auto",     "notify",   "approve"],
+    "costly":       ["notify",   "approve",  "dual"],
+    "irreversible": ["approve",  "dual",     "dual"],
+}
+
+
+def posture_for(tool: ToolSpec, args: dict) -> str:
+    # Both axes take the arguments. Blast radius obviously does. So does
+    # reversibility, once you redesign an action to have two shapes — a
+    # templated send_reply is reversible in effect, a free-text one is not.
+    # A tool whose reversibility is a constant cannot express that move.
+    radius = tool.blast_radius(args)      # 0 = small, 1 = moderate, 2 = large
+    return POSTURE[tool.reversibility(args)][radius]
+```
+
+</Tab>
+</Tabs>
+
+Two properties of that code matter more than its brevity.
+
+**It is not a prompt.** The model does not decide whether something needs approval, and cannot be persuaded that this particular refund is fine. This is [the invariant/request distinction](/book/first-agent/the-problem) at the policy layer.
+
+**`blastRadius` lives next to the tool, and takes the arguments.** For `issue_credit` it is a function of the amount. For `send_reply` it is a function of the recipient count. For `query_warehouse` it is always zero. Making it a method rather than a constant is what lets one tool span three tiers.
+
+`reversibility` takes them for the same reason, and this is the half that gets declared as a constant because it *feels* like a property of the tool. It is a property of the **action**. The `send_reply` row below turns on exactly that, where the same tool is reversible in effect when it sends an approved template and irreversible when it sends model-authored prose. A constant cannot express the redesign this chapter ends by recommending.
+
+## Setting the thresholds by working backwards
+
+Where do the numbers come from? The honest answer is that *what counts as a large refund* is a business decision, not an engineering one. But there is an engineering constraint that bounds it, and almost nobody applies it:
+
+> **Start from how many meaningful approvals your reviewers can actually give, and set thresholds so the volume fits.**
+
+A reviewer who is also doing other work can give perhaps forty genuine, considered approvals a day, not ninety-four at eleven seconds each. For an agent handling two thousand tickets a day, the thresholds must place **under two percent** of actions above the line.
+
+That is a startling constraint the first time you compute it, and it is the correct one. A policy that generates more approvals than your reviewers can consider does not produce more safety; it produces the eleven-second average, and then it produces the attack in the aside above.
+
+Run the arithmetic before you pick the dollar figure. If the number that feels safe generates three hundred approvals a day, either the threshold moves or you are hiring.
+
+At Meridian's own volume the same computation comes out loose. [Nine hundred tickets a week](/book/first-agent/the-problem) is about a hundred and eighty a day, so forty considered approvals would stretch to gating more than a fifth of them. The $1,000 threshold sits far inside that ceiling and produces [twenty-odd decisions a week](/book/human-in-the-loop/approval-gates), which means it was chosen by what the business treats as consequential, not by what the reviewers can absorb. Scale decides which of the two binds first, and the capacity ceiling is the one nobody writes down.
+
+## Three ways to get it wrong
+
+**Too many approvals.** Rubber-stamping, fatigue, and an exploitable pattern. Covered above, and it is the common failure.
+
+**Too few.** The incident. Less common than people fear, and much easier to detect afterwards, which is precisely why it gets over-corrected into the first failure.
+
+**Uniform tiers.** Every action treated the same. This manages to combine both failures: the trivial actions consume the attention budget, and the dangerous ones get the same eleven seconds as the trivial ones. **A flat policy is worse than either extreme**, because it destroys the signal that would let a reviewer allocate care.
+
+The mitigations follow from the framing: batch similar low-risk actions into one notification, define safe automatic ranges rather than approving each instance, and escalate exceptions instead of instances.
+
+## Atlas, concretely
+
+| Tool | Reversibility | Blast radius | Posture | Share of calls |
+| --- | --- | --- | --- | --- |
+| `get_order` | reversible | 0 always | **auto** | ~40% |
+| `crm_account_risk_profile` | reversible | 0 always | **auto** | ~15% |
+| `query_warehouse` | reversible | 0 always | **auto** | ~10% |
+| `search_policies` | reversible | 0 always | **auto** | ~25% |
+| `escalate_to_human` | reversible | 0 | **auto** | ~5% |
+| `send_reply` | irreversible | 0 (one customer) | **approve** → see below | ~4% |
+| `issue_credit` < $1,000 | irreversible | 0 | **approve** | ~1% |
+| `issue_credit` ≥ $1,000 | irreversible | 1 | **dual** | ~0.1% |
+
+The last column is a share of tool calls, not a count. Postures are set from the share; whether a posture is *affordable* is set by volume, and the two do not answer each other, which is what makes the sixth row the interesting one.
+
+`send_reply` fires about once per ticket resolved. Atlas covers [the first two of Meridian's three categories](/book/first-agent/the-problem), most of a hundred-and-eighty-ticket day, so approving every outgoing message is **well over a hundred approvals a day against the forty a reviewer can actually consider**, several times the budget computed two sections ago. That is the answer to *why not simply gate replies*: not that it makes Atlas useless as an autonomous support agent, though it does, but that the arithmetic was never available in the first place.
+
+The resolution is not to lower the tier. It is to **change the action's reversibility**: replies assembled from approved templates with no model-authored free text are *reversible in effect*. A wrong template send is embarrassing, a wrong free-text send is unbounded. Templated replies drop to `notify`; free-text replies stay at `approve`.
+
+That is the move worth taking from this chapter. When an action lands in a tier you cannot afford, the productive response is usually to **redesign the action** rather than to lower the bar for approving it.
+
+## References
+
+- [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), including human-agent trust exploitation and overwhelming the reviewer as named threats rather than UX complaints.
+
+---
+
+Next: [Approval Gates](/book/human-in-the-loop/approval-gates), blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
+
+## Takeaways
+
+- Fifty agents at twenty calls an hour produce a thousand approval-eligible events; routing ten percent needs three full-time reviewers. One reported reviewer averaged eleven seconds per approval.
+- OWASP classifies overwhelming the human reviewer as a deliberate attack: flood with benign requests, establish rubber-stamping, then insert the real action.
+- An approval request is a withdrawal from a finite, attackable account. Tiers ration it; they are a budget, not a taxonomy.
+- Reversibility is a property of the tool; blast radius is a property of the arguments. Risk is the cell where they meet, which is why one tool can span three tiers.
+- Four postures, not two. Asynchronous notification is the pressure valve most systems skip, and it is where moderate-risk actions belong.
+- Multi-party approval exists because some actions should be outside one person's power, including one person who has been socially engineered.
+- The policy is derived from the two axes in code, not decided by the model and not negotiated per incident.
+- Set thresholds by working backwards from reviewer capacity. Forty considered approvals a day against two thousand tickets means under two percent can cross the line.
+- A policy generating more approvals than reviewers can consider produces the eleven-second average, not more safety.
+- Uniform tiers are worse than either extreme: trivial actions consume the budget and dangerous ones get the same glance.
+- Batch low-risk notifications, define safe automatic ranges, and escalate exceptions rather than instances.
+- When an action lands in a tier you cannot afford, redesign the action rather than lowering the bar. Templated replies are a different risk from free-text ones.

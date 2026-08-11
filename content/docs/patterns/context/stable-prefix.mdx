@@ -1,0 +1,167 @@
+---
+title: "Stable Prefix"
+description: "Order the prompt so the cacheable part never moves."
+---
+
+## Problem
+
+An agent run makes forty model calls, each re-sending a context that starts with 9,000 tokens of tool schemas and system prompt. Those 9,000 tokens are byte-identical every time, so they should be read from cache at a fraction of the input price.
+
+They are not, and the response tells you why: `cache_read_input_tokens` is zero on every call. Somewhere in that prefix is a timestamp, or a tool list built per user, or a JSON serialization whose key order varies. The request succeeds, the answer is fine, and you pay full price forever.
+
+The mechanism, from [the caching chapter](/book/foundations/prompt-caching): **the cache key is the exact bytes of the prompt up to the marked point, and any change anywhere in that prefix invalidates everything after it.** Providers render in a fixed order: tools, then system, then messages, so a change at position zero discards the whole request.
+
+## Forces
+
+- **Caching is prefix-matched, not content-addressed.** There is no per-block caching and no reordering.
+- **Tool definitions render first**, so anything varying about them is maximally expensive.
+- **Agents re-read the prefix once per model call**, not once per user turn, so a four-call turn reads it four times.
+- **Some content genuinely varies per request**: the question, retrieved chunks, the current time.
+- **Breakpoints are a limited resource** (commonly up to four per request), so you cannot mark every boundary.
+- **The failure is silent.** Nothing errors; the bill is the only symptom.
+
+## Solution
+
+Assemble the prompt in **descending order of stability**, and place the cache breakpoint at the last position that is identical across requests.
+
+<Figure caption="Sort by how often it changes, not by what it is. Everything above the breakpoint must be byte-identical across requests." frame={false}>
+
+```
+   position 0 ─────────────────────────────────────────▶ N
+
+   ┌──────────────────────────────────────────┐
+   │ TOOL SCHEMAS        never varies         │  ← same for every
+   │                     sorted keys          │    user, every run
+   ├──────────────────────────────────────────┤
+   │ SYSTEM PROMPT       versioned artifact   │
+   │                     no interpolation     │
+   ├──────────────────────────────────────────┤
+   │ STABLE REFERENCE    policy summary,      │
+   │                     glossary, examples   │
+   ╞══════════════════════════════════════════╡ ◀── BREAKPOINT
+   │ SCRATCHPAD          changes per turn     │
+   ├──────────────────────────────────────────┤
+   │ RETRIEVED CHUNKS    changes per request  │
+   ├──────────────────────────────────────────┤
+   │ HISTORY             appends only         │
+   ├──────────────────────────────────────────┤
+   │ CURRENT QUESTION    + timestamp, ids     │
+   └──────────────────────────────────────────┘
+```
+
+</Figure>
+
+Four rules:
+
+**Nothing per-user above the breakpoint.** A name, an account ID, or a tenant interpolated into the system prompt gives every user a private prefix, so nothing is shared and the cache does almost no work. Per-user facts belong in the message stream.
+
+**Nothing time-varying above the breakpoint.** `datetime.now()` in a system prompt makes every request unique by construction. A timestamp the agent genuinely needs goes in the current user turn, where it invalidates nothing before it.
+
+**Serialize deterministically.** Sorted keys, stable field order, no `Set` or `dict` iteration order leaking into output. This is [the same canonicalization requirement as an idempotency key](/book/tools/idempotency), for the same reason: an unstable serialization is an unstable key.
+
+**Append, never substitute.** Adding a tool mid-conversation is cheap if it lands after the cached prefix; swapping the tool list rewrites position zero and discards everything. The general form: **an addition at the end is cheap; a substitution at the front is not.**
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/context/assemble.ts"
+// Ordered by stability, most stable first. The order is the pattern.
+export function assemble(ctx: RunContext): Request {
+  return {
+    // Position 0. Sorted keys, identical bytes for every caller.
+    // Built once at startup from the pinned catalogue — never per user.
+    tools: ctx.bundle.toolSchemas,          // canonicalized at build time
+
+    system: [
+      { type: 'text', text: ctx.bundle.systemPrompt },   // versioned artifact
+      { type: 'text', text: ctx.bundle.stableReference,
+        cache_control: { type: 'ephemeral' } },          // ◀── breakpoint
+    ],
+
+    // Everything below varies. None of it may appear above.
+    messages: [
+      { role: 'user', content: renderScratchpad(ctx.scratchpad) },
+      ...renderRetrieved(ctx.chunks),
+      ...ctx.history,
+      { role: 'user', content: `[${ctx.nowIso}] ${ctx.question}` },
+      //                         ▲ the clock lives HERE, not in system
+    ],
+  };
+}
+
+// Guard the invariant rather than trusting review to catch it.
+export function assertPrefixStable(a: Request, b: Request) {
+  if (hashPrefix(a) !== hashPrefix(b)) throw new UnstablePrefix();
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/context/assemble.py"
+def assemble(ctx: RunContext) -> dict:
+    # Ordered by stability, most stable first. The order is the pattern.
+    return {
+        # Position 0. Sorted keys, identical bytes for every caller.
+        # Built once at startup from the pinned catalogue — never per user.
+        "tools": ctx.bundle.tool_schemas,        # canonicalized at build time
+        "system": [
+            {"type": "text", "text": ctx.bundle.system_prompt},   # versioned
+            {"type": "text", "text": ctx.bundle.stable_reference,
+             "cache_control": {"type": "ephemeral"}},             # ◀ breakpoint
+        ],
+        # Everything below varies. None of it may appear above.
+        "messages": [
+            {"role": "user", "content": render_scratchpad(ctx.scratchpad)},
+            *render_retrieved(ctx.chunks),
+            *ctx.history,
+            {"role": "user", "content": f"[{ctx.now_iso}] {ctx.question}"},
+            #                             ▲ the clock lives HERE
+        ],
+    }
+
+
+def assert_prefix_stable(a: dict, b: dict) -> None:
+    # Guard the invariant rather than trusting review to catch it.
+    if hash_prefix(a) != hash_prefix(b):
+        raise UnstablePrefix()
+```
+
+</Tab>
+</Tabs>
+
+`assertPrefixStable` is the part worth copying. Because the failure is silent, the only reliable defense is a test that assembles two requests with different questions and asserts the prefixes hash identically. That test catches the interpolated user ID on the day it is written rather than on the day someone reads the invoice.
+
+## Trade-offs
+
+**Rigidity in prompt design.** Anything you might want to vary, such as a per-tenant instruction, a persona, or a dynamically selected tool set, now has a cost, and the design has to route it below the breakpoint or accept the miss.
+
+**It fights [dynamic tool selection](/book/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. The trade is almost always bad. Select per *conversation* rather than per request, or use append-style surfacing.
+
+**Breakpoints are scarce.** With roughly four available per request, you cannot mark every boundary. So mark the one that matters, at the end of the genuinely invariant region, rather than sprinkling them.
+
+**Minimum lengths and TTLs vary.** Caching does not engage below a per-model minimum, and entries expire on a short default TTL with a longer option at a higher write premium. A prefix of a few hundred tokens may not cache at all. [The chapter](/book/foundations/prompt-caching) has the economics; the point here is that the layout is necessary and not sufficient.
+
+## When not to use it
+
+**Single-shot calls.** Caching a prompt used once is strictly worse than not caching it. You pay the write premium and never read. A one-off classification does not want this.
+
+**When the prefix is small.** If tools and system total under the model's minimum cacheable length, there is nothing to cache and the layout constraint buys nothing.
+
+**When per-request variation is genuinely load-bearing.** A system that must swap models per step, or truly needs a different tool universe per tenant, has chosen something incompatible with caching. That can be the right choice: make it knowingly, and [measure what it costs](/book/observability/cost-accounting) rather than discovering it later.
+
+<Aside type="caution" title="Verify, because an unverified cache is an assumed cache">
+Every response reports `cache_creation_input_tokens`, `cache_read_input_tokens`, and `input_tokens`, where the last is *only the uncached remainder*, not the size of your prompt.
+
+Put cache hit rate on the [cost dashboard](/book/observability/cost-accounting) and alert when it drops. The drop is the leading indicator of a prefix change, and it will come from somewhere innocuous: a tool description edited for clarity, a feature flag appended to the system prompt, a model swap for one node. All three are one-line changes that a reviewer will approve without noticing.
+</Aside>
+
+## Related
+
+- [Prompt Caching](/book/foundations/prompt-caching): the mechanism, the economics, and the full list of silent invalidators
+- [Cache-First Prefix](/book/patterns/cost/cache-first-prefix): the same idea framed as a cost pattern
+- [Dynamic Selection](/book/context/dynamic-selection): the trade this pattern is usually in tension with
+- [Rolling Summary](/book/patterns/context/rolling-summary): why the summary sits below the breakpoint
+- [Versioning](/book/production/versioning): the tool-catalogue hash, and why a description edit is a prompt change

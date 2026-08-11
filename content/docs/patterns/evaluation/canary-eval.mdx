@@ -1,0 +1,184 @@
+---
+title: "Canary Eval"
+description: "Roll a change to a slice and score it before it reaches everyone."
+---
+
+## Problem
+
+The change passed the [golden set](/book/patterns/evaluation/golden-set) and the [shadow run](/book/patterns/evaluation/shadow-run) showed nineteen decision differences that all looked like improvements.
+
+Now it has to serve real customers, and the metric you actually care about, resolution rate, is the one you cannot use to decide. It moves slowly, it is noisy, and detecting a three-point change at meaningful confidence needs more runs than a small canary sees in a day. Waiting for it means either a canary that runs for a week or a promotion decided on a number that has not converged.
+
+The ordinary web answer, an A/B test, does not transfer cleanly either. You cannot serve the same ticket under both versions, so there is no paired comparison, only two populations, and [one tenant's burst](/book/patterns/scale/tenant-fairness) can swamp a 5% slice.
+
+## Forces
+
+- **Real outcomes are only available in production**, and this is the first rung where you get them.
+- **The metric that matters is slow and noisy**; the metrics that move fast are proxies.
+- **Real customers are exposed**, so the blast radius is real.
+- **Assignment must be stable**: a customer flipping between versions gets inconsistent behaviour.
+- **There is no counterfactual per run.** You cannot know what the other version would have done with this ticket.
+- **Traffic mix varies by day**, so a short canary measures the day it ran.
+
+## Solution
+
+**Serve a stable slice, gate on fast proxies, confirm on the slow metric**, with a permanent holdout as the baseline.
+
+<Figure caption="Fast proxies decide whether to continue; the slow metric confirms afterwards. The holdout is what makes either interpretable." frame={false}>
+
+```
+   assignment: STICKY BY TENANT, hashed — not per run
+   ┌────────────────────────────────────────────────────────────────┐
+   │  holdout 5%   never canaried · the stable baseline             │
+   │  canary  5%   the candidate bundle                             │
+   │  stable  90%                                                   │
+   └────────────────────────────────────────────────────────────────┘
+
+   GATE ON (minutes)                    CONFIRM WITH (hours–days)
+   · format compliance                  · sampled quality score
+   · tool-call distribution             · resolution rate
+   · turn count p50/p99                 · cost per resolved outcome
+   · input tokens per turn              · escalation recall
+   · escalation rate (~1h)
+
+   ── any fast proxy breaching → roll back, do not wait for the slow one
+   ── run across a FULL traffic cycle before promoting
+   ── tier 1+ actions approval-gated for the canary's duration
+```
+
+</Figure>
+
+Four rules:
+
+**Assign stickily, by tenant.** A customer whose first ticket is handled by version A and second by version B gets inconsistent behaviour, and a tenant split across arms cannot be analyzed as a unit. Tenant is also one of the largest sources of outcome variance, so holding it constant per arm makes the comparison cleaner.
+
+**Keep a permanent holdout.** Without a slice that never receives canaries, a slow global drift and a bad canary look identical, [which is the drift-diagnosis problem](/book/observability/drift) arriving in the middle of a rollout, at the worst time to have to untangle it.
+
+**Gate on proxies that move in minutes.** Format compliance, tool-call mix, turn count, input tokens per turn. These are cheap, low-variance, and they break before the quality score has enough samples to notice. The slow metric confirms; it does not gate.
+
+**Run across a full traffic cycle.** Weekday and weekend differ, and a canary promoted after four clean hours on a Tuesday morning has measured Tuesday morning.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/canary.ts"
+export function armFor(rollout: Rollout, tenantId: string): Arm {
+  // Sticky by TENANT: consistent behaviour per customer, and a cleaner
+  // comparison because tenant is a large source of outcome variance.
+  if (rollout.holdout.includes(tenantId)) return 'holdout';
+  const bucket = hashToUnitInterval(`${rollout.id}:${tenantId}`);
+  return bucket < rollout.canaryFraction ? 'canary' : 'stable';
+}
+
+// Fast proxies gate. They move in minutes and break before the quality
+// score has enough samples to notice.
+const GATES = [
+  { metric: 'format_compliance',   direction: 'below', threshold: 0.98 },
+  { metric: 'turn_count_p99',      direction: 'above', relative: 1.25 },
+  { metric: 'input_tokens_per_turn', direction: 'above', relative: 1.10 },
+  { metric: 'escalation_rate',     direction: 'above', relative: 1.30 },
+] as const;
+
+export function evaluateCanary(w: Window): Decision {
+  for (const g of GATES) {
+    // Compared against the HOLDOUT, not against last week: a global drift
+    // and a bad canary are otherwise indistinguishable.
+    if (breaches(w.canary[g.metric], w.holdout[g.metric], g)) {
+      return { action: 'rollback', reason: g.metric };
+    }
+  }
+
+  if (w.elapsedHours < FULL_TRAFFIC_CYCLE_HOURS) return { action: 'hold' };
+
+  // The slow metric CONFIRMS. It never gates on its own.
+  const quality = w.canary.sampled_quality;
+  if (quality.samples < MIN_SAMPLES) return { action: 'hold' };
+  if (quality.mean < w.holdout.sampled_quality.mean - QUALITY_TOLERANCE) {
+    return { action: 'rollback', reason: 'quality' };
+  }
+  return { action: 'promote' };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/canary.py"
+def arm_for(rollout, tenant_id: str) -> str:
+    # Sticky by TENANT: consistent behaviour per customer, cleaner comparison.
+    if tenant_id in rollout.holdout:
+        return "holdout"
+    bucket = hash_to_unit_interval(f"{rollout.id}:{tenant_id}")
+    return "canary" if bucket < rollout.canary_fraction else "stable"
+
+
+# Fast proxies gate. They break before the quality score has samples.
+GATES = [
+    Gate("format_compliance", "below", threshold=0.98),
+    Gate("turn_count_p99", "above", relative=1.25),
+    Gate("input_tokens_per_turn", "above", relative=1.10),
+    Gate("escalation_rate", "above", relative=1.30),
+]
+
+
+def evaluate_canary(w) -> tuple[str, str | None]:
+    for g in GATES:
+        # Compared against the HOLDOUT, not last week: a global drift and a
+        # bad canary are otherwise indistinguishable.
+        if breaches(w.canary[g.metric], w.holdout[g.metric], g):
+            return "rollback", g.metric
+
+    if w.elapsed_hours < FULL_TRAFFIC_CYCLE_HOURS:
+        return "hold", None
+
+    # The slow metric CONFIRMS. It never gates on its own.
+    q = w.canary["sampled_quality"]
+    if q.samples < MIN_SAMPLES:
+        return "hold", None
+    if q.mean < w.holdout["sampled_quality"].mean - QUALITY_TOLERANCE:
+        return "rollback", "quality"
+    return "promote", None
+```
+
+</Tab>
+</Tabs>
+
+Comparing against the **holdout** rather than against a historical baseline is the detail that makes the whole thing interpretable. Both arms are running today, on today's traffic mix, with today's provider behaviour, so a difference between them is attributable to the change and nothing else.
+
+## Trade-offs
+
+**Real customers are exposed.** That is the point and the cost. [Gate by blast radius, not by percentage](/book/production/rollout): a candidate can serve tier-0 traffic freely while any tier-1 action it proposes goes to a human for the canary's duration. The escalation machinery already exists and the volume is small.
+
+**Sample size is the binding constraint.** A 5% slice of moderate traffic may take days to make the quality metric significant. Widening the slice speeds it up and increases exposure; there is no way around the trade except accepting a longer canary.
+
+**Sticky-by-tenant reduces effective sample size.** Eleven tenants means eleven units, not nine hundred tickets, and one large tenant landing in the canary arm can dominate it. Stratify the assignment when the tenant population is small and uneven.
+
+**Rolling back does not abort in-flight runs.** New runs pick up the stable bundle immediately; runs already executing finish on the candidate. "We rolled back at 14:40" and "it stopped affecting customers at 14:40" differ by [your longest in-flight run](/book/production/rollout).
+
+## When not to use it
+
+**When shadow execution answered the question.** If the change is low-risk and the shadow diff showed nothing, a canary adds exposure for a signal you already have.
+
+**When traffic is too low.** Below the volume where a slice produces a significant number, a canary is exposure with no measurement. Use a longer shadow phase instead.
+
+**For irreversible-action changes without gating.** A change affecting how credits are issued should canary with every tier-1 action approval-gated, or not at all: [rollback does not un-send](/book/production/versioning).
+
+**When you have no holdout and cannot make one.** Without a stable comparison arm, a moved metric is uninterpretable, and you will spend the rollout arguing about whether the world changed or the version did.
+
+<Aside type="caution" title="Never change two things at once, and this is where it costs the most">
+Moving the prompt and the model in one canary means a shifted metric cannot be attributed. That is annoying in a fixture run and genuinely expensive here, because you [cannot roll back a model](/book/production/versioning), so half the change may not be unwindable.
+
+The same applies to shipping a prompt change alongside a corpus re-index, which is easy to do accidentally when both are on the same release train.
+
+Sequence them. It doubles the calendar time and it is the difference between a result you can act on and two weeks of production exposure that taught you nothing. A canary that produces an uninterpretable number has spent real customer risk to buy an argument.
+</Aside>
+
+## Related
+
+- [Shadow Run](/book/patterns/evaluation/shadow-run): the rung below, with real traffic and zero exposure
+- [Rollout and In-Flight Migration](/book/production/rollout): the full ladder, sticky assignment, and blast-radius gating
+- [Golden Set](/book/patterns/evaluation/golden-set): what should already be green before a canary starts
+- [Online Guardrail](/book/patterns/evaluation/online-guardrail): the per-response check running underneath the canary
+- [Detecting Drift](/book/observability/drift): why the holdout is what keeps a moved metric interpretable

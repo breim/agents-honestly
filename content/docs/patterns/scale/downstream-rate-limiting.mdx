@@ -1,0 +1,186 @@
+---
+title: "Downstream Rate Limiting"
+description: "Respect a provider quota you do not control."
+---
+
+## Problem
+
+The shipping carrier's API allows 60 requests per minute. It was provisioned years ago for a nightly sync that made four hundred calls between 2am and 3am, and nobody has thought about it since.
+
+Then a [fan-out](/book/patterns/scale/fan-out) over eight hundred tickets calls `get_delivery_status` on each. Eight hundred requests in ninety seconds against a limit of sixty per minute.
+
+What comes back is not a clean refusal. Some calls succeed, some return `429`, the [retry policy](/book/reliability/timeouts-and-retries) turns each `429` into three more requests, and the carrier's edge starts returning `503` to everything, including the nightly sync, which now fails, and the interactive agent, whose customer is waiting.
+
+You have taken down a dependency that was working fine, using a quota you do not own, on behalf of a job nobody was waiting for.
+
+## Forces
+
+- **The limit belongs to someone else** and may not be documented, discoverable, or stable.
+- **Different tools have wildly different limits**, from thousands per second to a few per minute.
+- **The quota is shared** with other consumers you may not know about: batch jobs, other services, other teams.
+- **`429` is the expensive way to learn**: you paid the round trip and triggered retries.
+- **Agents burst by construction.** A fan-out produces a shape no human-driven system ever produced.
+- **Some limits are enforced by degradation**, not rejection. The API just gets slower.
+
+## Solution
+
+**Limit yourself, per downstream, at the dispatcher**: sized below the real quota, with `Retry-After` treated as authoritative when it appears.
+
+<Figure caption="One limiter per downstream, in the one place every tool call passes. The provider's 429 becomes an alert, not a control." frame={false}>
+
+```
+   agent ──▶ DISPATCHER ──┬──▶ [limiter: carrier   50/min]  ──▶ carrier API
+                          │     ▲ real limit 60 · we use 50
+                          │
+                          ├──▶ [limiter: warehouse 200/s ]  ──▶ Postgres
+                          │
+                          ├──▶ [limiter: mail      10/s  ]  ──▶ mail service
+                          │
+                          └──▶ [limiter: model  TPM-based]  ──▶ provider
+
+   waiting here is CHEAP        a 429 is EXPENSIVE:
+   ── no round trip             round trip + retries + a degraded
+   ── no retry storm               dependency for everyone else
+   ── the caller can be told
+
+   429 observed ──▶ alert: "our model of their quota is wrong"
+```
+
+</Figure>
+
+Four rules:
+
+**One limiter per downstream, in the dispatcher.** Every tool call already passes through [one choke point](/book/production/reference-architecture); the limiter belongs there, keyed by the downstream rather than by the tool, because three tools hitting the same carrier share one quota.
+
+**Size below the real limit and leave headroom for other consumers.** Eighty percent is a reasonable default. You are not the only caller, and the nightly sync does not know you exist.
+
+**Honour `Retry-After` over your own arithmetic.** When the provider tells you when it will be ready, that is better information than any backoff curve. A large value is [backpressure](/book/reliability/backpressure): stop admitting new work rather than politely waiting.
+
+**Treat a `429` as an alert, not a routine event.** With a correctly sized limiter you should never see one. When you do, your model of their quota is wrong: the limit changed, another consumer appeared, or the fan-out window is mis-sized, and that is worth a person knowing.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/dispatch/downstream-limits.ts"
+// Keyed by DOWNSTREAM, not by tool: three tools hitting the same carrier
+// share one quota, and a per-tool limiter would triple the real rate.
+const LIMITS: Record<string, LimiterConfig> = {
+  carrier:   { permitsPerMin: 50,   burst: 10 },   // their limit is 60
+  warehouse: { permitsPerSec: 200,  burst: 50 },
+  mail:      { permitsPerSec: 10,   burst: 5 },
+};
+
+const limiters = new Map<string, TokenBucket>();
+
+export async function callDownstream<T>(
+  downstream: string, fn: () => Promise<T>, ctx: RunContext,
+): Promise<T> {
+  const limiter = limiters.get(downstream)!;
+
+  // Waiting here costs nothing. A 429 costs a round trip, a retry storm,
+  // and a dependency degraded for every other consumer.
+  const waited = await limiter.acquire(ctx.deadline);
+  if (waited === 'deadline') throw new DeadlineExceeded(downstream);
+  ctx.trace.observe('downstream.wait_ms', waited, { downstream });
+
+  try {
+    return await fn();
+  } catch (err) {
+    if (isRateLimited(err)) {
+      // Should never happen with a correctly sized limiter. It means our
+      // model of their quota is wrong — that is an alert, not a retry.
+      alerts.quotaModelWrong(downstream, ctx);
+      const retryAfter = retryAfterMs(err);
+      // Their header beats our curve. A large value is backpressure:
+      // stop admitting, do not politely wait.
+      if (retryAfter > STOP_ADMITTING_MS) limiter.pause(retryAfter);
+      else await sleep(retryAfter);
+    }
+    throw err;
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/dispatch/downstream_limits.py"
+# Keyed by DOWNSTREAM, not by tool: three tools hitting the same carrier
+# share one quota, and a per-tool limiter would triple the real rate.
+LIMITS = {
+    "carrier":   LimiterConfig(permits_per_min=50, burst=10),   # theirs is 60
+    "warehouse": LimiterConfig(permits_per_sec=200, burst=50),
+    "mail":      LimiterConfig(permits_per_sec=10, burst=5),
+}
+
+_limiters: dict[str, TokenBucket] = {}
+
+
+async def call_downstream(downstream: str, fn, ctx):
+    limiter = _limiters[downstream]
+
+    # Waiting here costs nothing. A 429 costs a round trip, a retry storm,
+    # and a dependency degraded for every other consumer.
+    waited = await limiter.acquire(deadline=ctx.deadline)
+    if waited is None:
+        raise DeadlineExceeded(downstream)
+    ctx.trace_observe("downstream.wait_ms", waited, downstream=downstream)
+
+    try:
+        return await fn()
+    except Exception as err:
+        if is_rate_limited(err):
+            # Should never happen with a correctly sized limiter. It means
+            # our model of their quota is wrong — an alert, not a retry.
+            alerts.quota_model_wrong(downstream, ctx)
+            retry_after = retry_after_ms(err)
+            # Their header beats our curve. A large value is backpressure.
+            if retry_after > STOP_ADMITTING_MS:
+                limiter.pause(retry_after)
+            else:
+                await asyncio.sleep(retry_after / 1000)
+        raise
+```
+
+</Tab>
+</Tabs>
+
+`downstream.wait_ms` is the metric that makes this operable. Rising wait times mean a downstream is becoming the bottleneck, visible before it becomes a latency complaint, and it tells you which one, which a p99 on the whole run does not.
+
+## Trade-offs
+
+**Latency under load, by design.** Requests queue at the limiter instead of failing at the provider. That is the trade, and it needs the [deadline](/book/reliability/timeouts-and-retries) passed in so a request waits only as long as its run can afford: a limiter with no deadline awareness produces a queue of runs that expire while waiting.
+
+**Distributed limiting is harder than it looks.** With N workers, a per-process limiter allows N times the rate. Either divide the budget by worker count, simple, wasteful when workers are idle, or use a shared counter, which is correct and adds a hop to every call.
+
+**Limits are often unknown or undocumented.** Many internal services have no published limit and a real one that appears under load. Start conservative, watch `429`s and latency, and raise deliberately.
+
+**It cannot fix an over-wide fan-out.** A limiter turns a burst into a long queue; it does not make the job faster or cheaper. The fix for a job that overwhelms a downstream is [a smaller concurrency window](/book/patterns/scale/fan-out), and the limiter is the safety net.
+
+## When not to use it
+
+**When the downstream is yours and elastic.** Your own service that scales with load does not need you throttling on its behalf. Give it [backpressure](/book/reliability/backpressure) instead and let it shed.
+
+**When the call volume is inherently low.** One tool call per run at ten runs a minute is nowhere near any limit. Adding a limiter is a component to maintain and a place to misconfigure.
+
+**When the provider's own client already does it.** Some SDKs implement client-side limiting. Two limiters stacked produce a rate neither one intended: pick one, and know which.
+
+**Instead of a batch endpoint.** If the work is latency-tolerant, [batch it](/book/patterns/cost/batch-api-offload): separately metered, cheaper, and it removes the contention rather than scheduling it.
+
+<Aside type="caution" title="Agents produce a traffic shape their downstreams have never seen">
+The carrier API was fine for a decade. It was fine because every caller was a human clicking a button or a nightly job with a fixed loop, and both produce smooth, predictable traffic.
+
+An agent fan-out produces eight hundred requests in ninety seconds from a system that made four hundred a night. Nothing about the downstream changed; the *caller* changed, and it changed by more than an order of magnitude in burstiness.
+
+Which makes this a compatibility problem as much as a scaling one. Before pointing an agent at an internal service, find out what its actual limit is and who else is using it: the answer is frequently *nobody knows*, and finding out during an incident is the expensive version. [The threat model's advice applies to capacity too](/book/security/threat-model): enumerate what you are attached to before something else does it for you.
+</Aside>
+
+## Related
+
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): the same discipline applied to the model provider's quota
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): the burst source, and where the window should be sized
+- [Priority Task Queues](/book/patterns/scale/priority-queues): deciding whose requests wait when the limiter is saturated
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): why a 429 must not become three requests
+- [Batch API Offload](/book/patterns/cost/batch-api-offload): removing the contention instead of scheduling it

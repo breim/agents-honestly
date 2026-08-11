@@ -1,0 +1,241 @@
+---
+title: "The Go-Live Readiness Review"
+description: "One evidence-backed gate for authority, recovery, quality, cost, security, ownership, and rollback before users depend on the system."
+---
+
+A launch checklist can be completed by optimism. A readiness review requires evidence and a person willing to own each exception.
+
+The unit of approval is not "Atlas." It is a route at an autonomy tier:
+
+```text
+policy answers       tier 0       may be ready
+order status         tier 0       may be ready
+credit under €50     tier 0       separate decision
+credit above €50     tier 2       approval path
+outbound email       tier 1       separate decision
+```
+
+Approving the chat experience does not approve moving money. A system can launch safely with one route and keep the rest in shadow mode.
+
+## The review packet
+
+Send artifacts before the meeting. If the evidence is first seen on the call, the meeting is a demo.
+
+| Area | Required artifact |
+| --- | --- |
+| Scope | In-scope routes, exclusions, autonomy tier, expected volume |
+| Success | Acceptance spec, dataset version, current eval report |
+| Authority | Tool catalogue, scopes, risk policy, approval matrix |
+| Data | Source-of-truth table, freshness bounds, deletion registry |
+| Reliability | Failure-injection report, recovery time, idempotency proof |
+| Security | Threat model, adversarial report, open findings |
+| Observability | Example trace, dashboards, alerts, audit record |
+| Rollout | Manifest, canary plan, holdout, rollback procedure |
+| Cost | Per-outcome distribution, caps, quota and degradation policy |
+| Operations | Named owner, on-call, runbooks, support and escalation paths |
+
+Every artifact names a version and a date. "We tested it" is not evidence. "Failure suite `fault-v12` passed against bundle `7f2a91` on 2026-08-07" is.
+
+## Seven gates
+
+### 1. The task is bounded
+
+The route has an explicit input population, terminal outcomes, exclusions, and maximum autonomy. The team can name what the agent will never do.
+
+Pass evidence:
+
+- acceptance cases include unsupported and ambiguous inputs;
+- every run terminates as resolved, safely refused, or handed to a named owner;
+- step, token, cost, and wall-time bounds are enforced outside the model;
+- the tool list is the smallest one the route needs.
+
+Fail if the route's fallback is "the model will decide" or if an escalation creates an unowned queue.
+
+### 2. Authority is structural
+
+Prompts do not enforce permissions. The dispatcher, source systems, and credentials do.
+
+Pass evidence:
+
+- user identity reaches every read and effect;
+- tenant isolation is tested below application code;
+- argument scope and risk tier are computed in code;
+- approvals expire and bind to exact action bytes;
+- credentials are downscoped and minted after refusal checks;
+- authorization is re-evaluated at the point of effect.
+
+Run one live demonstration with a forbidden principal. The correct result is a structured refusal and trace, not a cooperative model answer.
+
+### 3. Quality is measured honestly
+
+The eval report states which claims its sample size supports. It includes the target population, slices, confidence intervals, judge calibration, and known blind spots.
+
+Pass evidence:
+
+- deterministic invariants all pass;
+- route-level quality clears the acceptance threshold;
+- retrieval and trajectory scores localize failures;
+- cost and latency are scored per successful outcome;
+- fallback models and degraded modes have their own results;
+- human override and escalation rates are included.
+
+Do not waive a small dataset by calling the launch a beta if real money or private data is in scope. Reduce autonomy instead.
+
+### 4. Failure is contained and recoverable
+
+The team has observed the system fail at the exact boundaries it depends on.
+
+Pass evidence:
+
+- worker death, provider timeout, `429`, malformed tool result, duplicate callback, and approval timeout were injected;
+- ambiguous effects reconcile through a paired read;
+- retries are bounded by a run-wide budget;
+- compensation was executed, not merely reviewed;
+- cancellation reaches downstream work;
+- in-flight runs survive or migrate across the proposed deploy.
+
+One game day should happen before launch. Screenshots of code paths do not prove recovery behavior.
+
+### 5. The system can be investigated
+
+Take a random completed run and answer the eight trace questions from [What a Trace Must Answer](/book/observability/what-a-trace-must-answer). Then take an escalated run and reconstruct what the human saw.
+
+Pass evidence:
+
+- run, trace, workflow, audit, feedback, and business record share stable IDs;
+- model, prompt, tools, data versions, tokens, cost, and latency are recorded;
+- sensitive content has controlled storage and sampling;
+- every external action identifies user, agent, authority, arguments, and outcome;
+- dashboards distinguish availability, completion, and correctness;
+- alerts have an owner and a tested runbook.
+
+If the answer to "which policy version did it cite" requires searching raw logs, the route is not ready.
+
+### 6. The attack paths were exercised
+
+Pass evidence:
+
+- direct and indirect injection suites ran against the real dispatcher;
+- cross-tenant canaries never entered context or graph state;
+- malicious tool results and MCP descriptions were tested;
+- egress and sandbox denials were observed;
+- durable signal, approval replay, memory, and cost-exhaustion cases ran;
+- every high-severity finding is fixed or removes the affected capability from launch.
+
+An open critical finding cannot be accepted by a product owner. It changes the launch scope. Risk acceptance is not permission to leave a known path to unauthorized effects reachable.
+
+### 7. Rollout and rollback are boring
+
+Pass evidence:
+
+- the resolved bundle is immutable and repointable;
+- assignment is sticky by tenant or user;
+- a permanent holdout exists where comparison needs one;
+- fast proxy metrics gate the canary;
+- the slow outcome metric confirms it;
+- rollback takes one reviewed manifest change;
+- paused durable runs have an explicit version policy;
+- the rollback path was rehearsed.
+
+The launch begins at the smallest slice that can produce useful evidence. Five percent is not automatically safe. One high-value tenant at 5% can have more blast radius than fifty low-risk tenants at 100%.
+
+## Exceptions have owners and expiry
+
+Some gaps will remain. Record them as decisions:
+
+```yaml title="readiness-exception.yaml"
+id: RDY-017
+route: policy_answer
+gap: no Portuguese eval slice
+impact: Portuguese input must not receive an automated answer
+control: route language=pt to human
+owner: support-platform
+expires: 2026-10-01
+removal_evidence: eval bundle with 300 adjudicated Portuguese cases
+```
+
+An exception without an enforcing control is a wish. An exception without expiry becomes architecture. The readiness manifest should fail if an expired exception is still active.
+
+## Decision states
+
+Use four outcomes:
+
+| Decision | Meaning |
+| --- | --- |
+| Approved | Route may enter the stated rollout at the stated tier |
+| Approved with controls | Enforced restrictions close named gaps until expiry |
+| Shadow only | May run and be measured, but no user sees output and no effect occurs |
+| Blocked | Evidence is missing or a reachable risk exceeds policy |
+
+"Conditional approval" should name the condition in code. If the review says "launch, but monitor closely," nothing was decided.
+
+## The meeting
+
+Keep the attendee list small and the authority clear:
+
+- engineering owner explains architecture and recovery;
+- product owner owns the task, thresholds, and human workflow;
+- security owner owns threat findings and exposure;
+- data owner owns source meaning, access, freshness, and deletion;
+- operations owner accepts alerts and runbooks;
+- business authority accepts residual financial or customer risk within policy.
+
+No one role can approve all six areas on behalf of the others. The goal is not consensus. It is named ownership of evidence and remaining exposure.
+
+Run three drills in the meeting:
+
+1. reconstruct one random run;
+2. deny one unauthorized request;
+3. roll the candidate manifest back in the staging or canary environment.
+
+If those take the whole meeting, the packet did not prove readiness. That is useful to learn before launch.
+
+<FrameworkCheck decision="Keep one application-level readiness manifest by route and tier. Attach runtime-specific evidence rather than letting any framework's deployment status stand in for readiness.">
+<FrameworkOption name="plain">
+
+The manifest joins scope, bundle, evals, controls, exceptions, owners, and rollout. CI verifies references and expiry dates.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+Attach topology, recursion bounds, checkpoint policy, interrupt tests, and trajectory results. A compiled graph is not a quality or safety claim.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Attach replay tests, failure injection, signal and update authorization, in-flight version policy, and namespace operations. A healthy cluster is not proof that a Workflow is safe.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+Attach stream-resume, cancellation, approval-card, accessibility, and unsafe-rendering tests. A polished interface is not proof that the backend action was authorized.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas launches policy answers and order status first. Low-value credits remain shadow-only until the paired read, compensation drill, and approval replay suite pass. Outbound email remains approval-gated until the rendered card and recipient binding are verified.
+
+The packet pins one bundle, one index build, one ontology version, one policy version, and one set of source freshness bounds. The team reconstructs ticket 8823, attempts a cross-account credit, kills the worker after the fake ERP accepts an effect, and rolls the manifest back. The route launches only after all four outcomes are explainable.
+
+## Where the readiness review leaves you
+
+Production architecture is no longer a diagram. It is a set of claims with artifacts, owners, expiry dates, and a rollback path.
+
+One production question remains. The review proves that the software may launch. It does not prove that reviewers have time, incentives, training, and independent judgment to operate it. The final chapter in this part tests the organization around the release.
+
+---
+
+Next: [Rolling Out the Work, Not Just the Software](/book/production/organizational-rollout), training, incentives, staffing, escalation quality, and measuring the organization around the release.
+
+## Takeaways
+
+- Approve routes at an autonomy tier, not an application as one undifferentiated object.
+- Send versioned evidence before the meeting. A readiness review is not a demo.
+- Gate bounded scope, structural authority, measured quality, recovery, investigation, security, and rollout.
+- Reduce autonomy when evidence is weak. Calling the release a beta does not reduce the effect.
+- Exceptions need an enforced control, owner, expiry, and removal evidence.
+- Use approved, approved with controls, shadow only, or blocked. Avoid vague conditional approval.
+- Reconstruct a run, deny an unauthorized request, and rehearse rollback before launch.
+- A healthy framework runtime proves availability of the runtime, not readiness of the agentic route.

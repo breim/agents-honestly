@@ -1,0 +1,176 @@
+---
+title: "Priority Task Queues"
+description: "Keep interactive requests fast while a backfill runs."
+---
+
+## Problem
+
+At 02:00 the nightly eval suite starts: four thousand fixtures, concurrency of fifty, configured that way because it made the job finish before breakfast.
+
+At 02:04 the on-call is paged. Interactive tickets are timing out. Nothing is down: the eval job is consuming the account's token quota, so live requests get `429`, retry, and blow their deadlines.
+
+A job with no deadline at all has taken the capacity from the one workload that has customers waiting. And the version that happens during business hours is worse: a backfill kicked off at 14:00 by someone who did not know it would compete.
+
+The quota was never the problem. **Nothing decided who gets it.**
+
+## Forces
+
+- **Workloads have wildly different urgency** and share one finite pool.
+- **Batch work has no deadline** and will happily consume everything available.
+- **First-in-first-out is the wrong default** when the queue mixes classes.
+- **Strict priority starves the bottom class**: a batch job that never runs is not a working system.
+- **The unit is not requests.** Agent work is metered in [tokens](/book/reliability/backpressure), and a "small" batch item can cost more than a live one.
+- **Classification must be structural**, not a guess made per request.
+
+## Solution
+
+**Separate queues per class, each with a reserved share of capacity and its own worker pool**: reserved, not strict, so nothing starves.
+
+<Figure caption="Shares, not strict priority. Interactive keeps a floor it always gets; batch keeps a floor it can always make progress on." frame={false}>
+
+```
+   ┌─────────────┬────────┬──────────────┬───────────────────────┐
+   │ CLASS       │ SHARE  │ QUEUE        │ ADMISSION             │
+   ├─────────────┼────────┼──────────────┼───────────────────────┤
+   │ interactive │  70%   │ live tickets │ reject fast if full   │
+   │ background  │  20%   │ enrichment   │ defer, retry later    │
+   │ batch       │  10%   │ evals, backfill │ defer indefinitely │
+   └─────────────┴────────┴──────────────┴───────────────────────┘
+
+   IDLE BORROWING
+   interactive at 30% ──▶ batch may use up to 80% …
+   interactive arrives ──▶ batch yields back to 10% within one window
+                           (yield = stop admitting, never kill in flight)
+
+   ✗ STRICT PRIORITY: batch runs only when interactive is empty
+                      → the backfill never finishes, and someone
+                        disables the priority system to ship it
+```
+
+</Figure>
+
+Four rules:
+
+**Reserve shares; do not use strict priority.** A floor per class means interactive always has capacity and batch always makes progress. Strict priority starves the bottom, and a starved class is one someone will route around, usually by running the job on an unmetered path.
+
+**Let idle capacity be borrowed, and yield by admission.** Batch may exceed its share when interactive is quiet, and must fall back within one scheduling window when it is not. Yielding means *stop admitting new work*, never killing runs in flight: [a half-finished run has spent money and produced nothing](/book/reliability/backpressure).
+
+**Classify at the source, structurally.** The class comes from where the work entered, a live API call, a scheduler, an eval harness, not from a heuristic about size or a field the caller sets. A caller who can choose their own priority will choose the highest one.
+
+**Meter shares in tokens, not requests.** A batch item summarizing a long document can cost fifty times a live status lookup. A request-count share hands most of the actual capacity to whichever class has bigger items.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/scale/priority.ts"
+export type Class = 'interactive' | 'background' | 'batch';
+
+const SHARE: Record<Class, number> = { interactive: 0.70, background: 0.20, batch: 0.10 };
+const FLOOR: Record<Class, number> = { interactive: 0.70, background: 0.10, batch: 0.05 };
+
+export function admit(
+  cls: Class,
+  estTokens: number,
+  used: Record<Class, number>,      // tokens used this window, per class
+  quotaTpm: number,
+): { admit: true } | { admit: false; retryAfterMs: number } {
+  const mine = used[cls] + estTokens;
+
+  // Own share: always available.
+  if (mine <= quotaTpm * SHARE[cls]) return { admit: true };
+
+  // Idle borrowing: lower classes may exceed their share while the classes
+  // above them are quiet, as long as every floor is preserved.
+  const reservedAbove = (Object.keys(SHARE) as Class[])
+    .filter(c => SHARE[c] > SHARE[cls])
+    .reduce((sum, c) => sum + Math.max(FLOOR[c] * quotaTpm - used[c], 0), 0);
+
+  const spare = quotaTpm - Object.values(used).reduce((a, b) => a + b, 0) - reservedAbove;
+  if (estTokens <= spare) return { admit: true };
+
+  // Defer, with an honest signal. Batch waits longer than background.
+  return { admit: false, retryAfterMs: backoffFor(cls) };
+}
+
+// Class comes from the ENTRY POINT, never from the caller. A caller who
+// can pick their own priority will pick the highest one.
+export const classFor = (source: Source): Class =>
+  source === 'api' ? 'interactive' : source === 'scheduler' ? 'background' : 'batch';
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/scale/priority.py"
+SHARE = {"interactive": 0.70, "background": 0.20, "batch": 0.10}
+FLOOR = {"interactive": 0.70, "background": 0.10, "batch": 0.05}
+
+
+def admit(cls: str, est_tokens: int, used: dict[str, int], quota_tpm: int):
+    mine = used[cls] + est_tokens
+
+    # Own share: always available.
+    if mine <= quota_tpm * SHARE[cls]:
+        return True, 0
+
+    # Idle borrowing: lower classes may exceed their share while higher
+    # classes are quiet, as long as every floor is preserved.
+    reserved_above = sum(
+        max(FLOOR[c] * quota_tpm - used[c], 0)
+        for c in SHARE if SHARE[c] > SHARE[cls]
+    )
+    spare = quota_tpm - sum(used.values()) - reserved_above
+    if est_tokens <= spare:
+        return True, 0
+
+    # Defer, with an honest signal. Batch waits longer than background.
+    return False, backoff_for(cls)
+
+
+def class_for(source: str) -> str:
+    # Class comes from the ENTRY POINT, never from the caller.
+    return {"api": "interactive", "scheduler": "background"}.get(source, "batch")
+```
+
+</Tab>
+</Tabs>
+
+The `reservedAbove` term is what makes borrowing safe. Batch can use spare capacity, and it can never eat into the floor a higher class is guaranteed, so a burst of interactive traffic finds room immediately instead of queueing behind a backfill that grabbed everything while things were quiet.
+
+## Trade-offs
+
+**Shares need tuning and they drift.** The right numbers depend on traffic mix, which changes. Watch per-class utilization and rejection rate; a class rejecting constantly at 40% overall utilization means the shares are wrong, not that capacity is short.
+
+**Borrowing adds latency at the transition.** Batch that grabbed spare capacity does not vanish when interactive arrives: it stops admitting, and in-flight work drains. That drain is a real latency spike for the first interactive requests, and shortening it means smaller batch units, not preemption.
+
+**Separate worker pools cost utilization.** Physically separate pools per class waste capacity when one is idle; shared workers with logical shares are more efficient and let a badly-behaved class consume threads even when it cannot consume quota. Most teams want shared workers plus token-metered shares, which is what the code above assumes.
+
+**Three classes is usually enough.** Each additional class is another share to tune and another thing to explain. Interactive, background, batch covers nearly everything.
+
+## When not to use it
+
+**When there is one workload.** No mix, no contention, no reason.
+
+**When batch can be moved off the shared quota entirely.** This is the better fix when available: put evals and backfills on the [batch endpoint](/book/patterns/cost/batch-api-offload), which is separately metered and cheaper. Scheduling contention is worse than not having it.
+
+**When capacity is genuinely elastic.** If you can provision more quota on demand and the cost is acceptable, buying capacity beats rationing it.
+
+**When the classes cannot be distinguished at entry.** If every request arrives through one endpoint with no reliable signal, you cannot classify structurally, and classifying by a caller-supplied field is not classification.
+
+<Aside type="note" title="This is admission control, and admission control has to happen at the door">
+The instinct when capacity is short is to queue everything and let a scheduler sort it out. For agents that is subtly wrong, and the reason is [the property no ordinary request has](/book/reliability/backpressure): **a run that starts and does not finish has spent real money and produced nothing.**
+
+So the priority decision belongs at admission, before the first token, where rejecting is free and the answer *not now, retry in ninety seconds* is honest and actionable. Once a batch run has spent fourteen steps, every option is bad: killing it wastes the spend, and letting it continue means it is still competing.
+
+Which gives the rule that makes the whole pattern work: **estimate the whole run's cost and only start runs you can afford to finish, in the class you admitted them under.** A run does not change class mid-flight, and it does not get to renegotiate its share.
+</Aside>
+
+## Related
+
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): the chapter, including why admission beats queueing
+- [Tenant Fairness](/book/patterns/scale/tenant-fairness): the same problem within a class, across customers
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): the same shares applied to a quota you do not own
+- [Batch API Offload](/book/patterns/cost/batch-api-offload): removing the contention instead of scheduling it
+- [Worker-Specific Queues](/book/patterns/scale/worker-specific-queues): routing by capability rather than by urgency

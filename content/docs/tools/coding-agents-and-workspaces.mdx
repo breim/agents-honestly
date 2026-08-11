@@ -1,0 +1,240 @@
+---
+title: "Coding Agents and Workspaces"
+description: "Repository instructions, isolated worktrees, command policy, minimal patches, verification, provenance, and the boundary between producing code and shipping it."
+---
+
+Atlas can call tools, browse portals, and recover from failures. Now Meridian asks it to fix a failing carrier adapter. The request sounds like one more tool: give the model a shell and a repository.
+
+That tool can read secrets, execute build scripts, install packages, rewrite tests, publish artifacts, push branches, and alter the software that defines its own authority. A coding agent is not a text generator attached to Git. It is an untrusted maintainer operating inside a software supply chain.
+
+The safe unit is a bounded task in a disposable workspace that produces evidence and a patch. Shipping remains a separate decision.
+
+## The repository is input, not policy
+
+A repository contains README files, comments, issue text, test fixtures, generated files, package scripts, and dependency metadata. Any of them can contain stale, mistaken, or hostile instructions.
+
+Define the instruction order outside the workspace:
+
+```text
+organization policy
+        |
+        v
+task contract and user authority
+        |
+        v
+approved repository instructions
+        |
+        v
+source, comments, issues, fixtures, build output
+        |
+        v
+untrusted evidence
+```
+
+A comment can explain code. It cannot grant network access. A package script can describe how the project builds. It cannot authorize reading credentials. A test asking the agent to weaken an authorization check is evidence about the repository, not permission to change the security model.
+
+Repository instructions need provenance and scope. Record which file supplied them, which directory they govern, and which higher-level rule can override them. Unknown instructions create a question or an escalation, not silent authority.
+
+## Freeze the input and isolate the workspace
+
+Every run starts from an immutable base revision and a clean workspace. Never let an agent work directly in a developer's current tree, where uncommitted changes, credentials, editor state, and another process can alter the task underneath it.
+
+```yaml
+task_id: code-1842
+repository: carrier-adapters
+base_revision: 8d77c4e1
+workspace_id: ws-9921
+allowed_paths:
+  - src/carriers/iberia/**
+  - tests/carriers/iberia/**
+forbidden:
+  - change authorization policy
+  - modify CI or release configuration
+  - publish, push, merge, or deploy
+acceptance:
+  - reproduce issue 481
+  - preserve the public adapter contract
+  - pass the focused suite and repository checks
+dependency_policy: no changes
+command_profile: node-read-test
+max_changed_lines: 220
+```
+
+Git worktrees are useful for parallel tasks because each linked tree has its own `HEAD` and index while sharing repository objects. The official [Git worktree documentation](https://git-scm.com/docs/git-worktree) also makes the limitation visible. Linked worktrees share parts of the repository and its configuration. A worktree isolates concurrent state. It is not a security sandbox for hostile code.
+
+For trusted internal code, a disposable worktree inside a restricted runner may be sufficient. For unknown repositories, generated code, or package scripts, use the [execution and credential boundary](/book/security/sandboxing): disposable VM or equivalent isolation, no ambient secrets, restricted egress, bounded compute, and a broker for authorized operations.
+
+## Separate exploration from mutation
+
+Start read-only. The agent should locate ownership, reproduce the failure, trace the data flow, and state a testable hypothesis before it edits.
+
+<Figure caption="A coding run narrows uncertainty before it spends mutation authority." frame={false}>
+
+```text
+scope and snapshot
+       |
+       v
+search -> inspect -> reproduce
+       |
+       v
+state hypothesis and affected contract
+       |
+       v
+make the smallest coherent patch
+       |
+       v
+format -> analyze -> test -> inspect diff
+       |
+       +---- failed evidence ----> revise or stop
+       |
+       v
+patch plus verification record
+       |
+       v
+human or release system decides whether to ship
+```
+
+</Figure>
+
+The mutation phase receives a narrower capability set:
+
+| Capability | Exploration | Mutation |
+| --- | --- | --- |
+| Search and read files | Allow in repository scope | Allow |
+| Write files | Deny | Allow only matched paths |
+| Run parser, compiler, or focused tests | Allow with bounded output | Allow |
+| Run arbitrary project script | Policy decision | Policy decision |
+| Install or update dependencies | Deny by default | Separate approval |
+| Read network | Deny or allowlisted docs | Deny by default |
+| Commit | Optional local artifact | Optional local artifact |
+| Push, merge, publish, deploy | Deny | Deny |
+
+The model can propose a command. A dispatcher resolves it against an argument-aware policy before execution. String prefix matching is not enough. Working directory, environment, redirects, shell expansion, config files, and subprocesses can change what a command reaches.
+
+## Optimize for the smallest coherent diff
+
+Small does not mean few characters at any cost. It means every changed line contributes to one explained outcome.
+
+Before accepting the patch, ask:
+
+- Did it change files outside the stated ownership boundary?
+- Did it alter public contracts, migrations, permissions, or dependencies?
+- Did it delete or weaken a test rather than fix the behavior?
+- Did formatting or generation rewrite unrelated files?
+- Did it duplicate an abstraction already present?
+- Can a reviewer connect each hunk to the hypothesis?
+
+Set a soft diff budget that triggers review, not an incentive to hide necessary work. Some correct migrations are large. The budget catches accidental scope expansion and prompts task decomposition.
+
+## Tests are evidence, not authority
+
+A green suite can be incomplete, stale, or modified by the same agent. Keep acceptance criteria outside the writable workspace and combine several independent signals:
+
+1. reproduce the original failure before the edit;
+2. run a focused regression after the edit;
+3. run type, lint, and static checks appropriate to the changed surface;
+4. run broader tests selected by the dependency graph or ownership map;
+5. inspect the final diff and changed test semantics;
+6. use hidden or externally owned tests for consequential tasks;
+7. review security, dependency, and policy findings separately.
+
+Language servers provide structured definitions, references, symbols, and diagnostics instead of forcing the agent to infer everything from text search. The [Language Server Protocol 3.17 specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/) defines that common interface. Static tools can return findings in [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html), which gives the runtime a typed artifact rather than a screenful of prose to reinterpret.
+
+<Aside type="caution" title="Do not let the author define the exam">
+If the agent may edit the implementation, tests, task definition, and release gate, it can make itself correct without making the system correct. Put at least one acceptance signal outside its write authority.
+</Aside>
+
+## Parallel work needs ownership, not more agents
+
+Two agents in the same tree can overwrite files, invalidate each other's assumptions, and both pass tests against different intermediate states.
+
+Parallelize read-only investigation freely. Parallelize mutation only when ownership is disjoint and each task names the same base revision. Integrate patches serially, rebase or reapply against the chosen head, and rerun the affected checks after composition.
+
+If tasks touch the same contract, prefer one owner. A merge conflict is the visible case. Two clean patches that encode incompatible assumptions are more dangerous.
+
+## The handoff artifact is more than a diff
+
+Store a machine-readable record with:
+
+```json
+{
+  "task_id": "code-1842",
+  "base_revision": "8d77c4e1",
+  "patch_sha256": "a21e...",
+  "changed_paths": ["src/carriers/iberia/parse.ts"],
+  "commands": ["pnpm test --filter iberia", "pnpm typecheck"],
+  "checks": { "focused": "pass", "types": "pass" },
+  "network_access": [],
+  "dependency_changes": [],
+  "unresolved": ["live carrier payload not available in CI"]
+}
+```
+
+Keep command exit status, bounded output, tool versions, workspace image, and policy denials. If the run creates a build artifact, link it to source and build inputs. The [SLSA provenance specification](https://slsa.dev/spec/v1.2/provenance) defines provenance as verifiable information about where, when, and how an artifact was produced. The same idea makes an agent-produced patch reviewable and reproducible.
+
+A local commit is useful packaging. It is not approval. A signature proves which identity created an artifact, not that the change is correct or authorized for production.
+
+## Evaluate the engineering trajectory
+
+Pass rate alone rewards agents that overfit visible tests. Score:
+
+- reproduction of the original defect;
+- functional correctness on visible and hidden cases;
+- regression rate outside the target;
+- unauthorized path, command, network, and dependency attempts;
+- test weakening or deletion;
+- diff size and unrelated churn;
+- introduced security and static-analysis findings;
+- maintainability under human review;
+- time, commands, tokens, and compute;
+- correct abstention when requirements or evidence are missing.
+
+Include repositories with misleading comments, failing pre-existing tests, dirty generated files, flaky commands, malicious fixtures, dependency-confusion bait, and two plausible owners. A clean benchmark measures code completion. A production benchmark measures repository work.
+
+<FrameworkCheck decision="Atlas uses a plain, policy-controlled edit loop inside a disposable workspace. LangGraph is reserved for explicit investigation branches; Temporal owns long-running jobs, approval, and reconciliation, never the patch semantics.">
+<FrameworkOption name="plain">
+
+**Plain edit loop.** Preferred for one bounded task. Search, inspect, patch, verify, and emit an evidence bundle.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+**LangGraph.** Useful when diagnosis has several explicit hypotheses or specialist analyses whose state and termination need to be visible.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal.** Useful when builds wait on scarce infrastructure, review takes days, callbacks arrive later, or retries must survive workers. It does not decide whether code is correct.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Meridian lets the coding agent repair one carrier adapter at a pinned revision. The workspace can write only that adapter and its tests. It has no Git host credential, cloud credential, package-registry access, or deployment tool.
+
+The agent reproduces the parsing defect from a stored payload, proposes one patch, and produces a verification record. A repository-owned hidden contract test and security scan run outside the workspace. A human reviews any changed production code. The normal CI and release system, under its own identity, decide whether the patch moves forward.
+
+## References
+
+- [Git worktree documentation](https://git-scm.com/docs/git-worktree), linked-worktree behavior, shared and per-worktree state, and lifecycle.
+- [Language Server Protocol 3.17](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/), structured source navigation and diagnostics across languages.
+- [Static Analysis Results Interchange Format 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html), the standard interchange model for static-analysis findings.
+- [SLSA provenance 1.2](https://slsa.dev/spec/v1.2/provenance), verifiable information about where, when, and how an artifact was produced.
+
+---
+
+Part VIII ends here. Next: [What MCP Is and Is Not](/book/mcp/what-mcp-is), when the integration belongs to another owner and becomes a shared protocol boundary.
+
+## Takeaways
+
+- Treat repository content as evidence, not authority. Instruction scope and precedence come from outside the workspace.
+- Pin the base revision and use one disposable workspace per task. A worktree isolates concurrent state, not hostile code.
+- Separate read-only exploration from mutation and give each phase only the capabilities it needs.
+- Deny dependency changes, network access, push, merge, publish, and deploy unless separately authorized.
+- Prefer the smallest coherent diff and investigate changes outside the task's ownership boundary.
+- Keep at least one acceptance signal outside the agent's write authority.
+- Parallelize mutation only across disjoint ownership and integrate against a known revision.
+- Hand off the patch with commands, results, policy denials, tool versions, dependency changes, and unresolved uncertainty.
+- A commit or signature records provenance. It does not approve correctness or release.
+- Evaluate the whole repository trajectory, including abstention and unauthorized attempts, not only whether visible tests passed.

@@ -1,0 +1,13 @@
+{
+  "title": "Part XI · Agentic Systems on Temporal",
+  "pages": [
+    "not-a-background-job",
+    "agent-as-workflow",
+    "langgraph-on-temporal",
+    "long-lived-agents",
+    "compensation",
+    "scale-and-qos",
+    "latency",
+    "temporal-pattern-map"
+  ]
+}

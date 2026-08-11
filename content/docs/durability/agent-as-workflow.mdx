@@ -1,0 +1,305 @@
+---
+title: "The Agent as a Workflow"
+description: "Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity."
+---
+
+[Atlas v0](/book/first-agent/the-loop-by-hand) was about eighty lines: a `for` loop, three bounds, a union of outcomes. This chapter is the same program on durable execution, and the interesting part is not the port. It is the five things the port forces you to change, each of which was a latent bug in the original.
+
+## One rule decides the whole layout
+
+> **A model call cannot be replayed. It is an activity.**
+
+Everything else follows mechanically. Replay requires the same sequence of decisions from the same history; a model call is the least reproducible thing in the system. Put it in the workflow and the first replay diverges. Put it in an activity and its result is journalled: recorded once, returned identically forever.
+
+That gives the split without further argument:
+
+| Atlas v0 | Where it lands |
+| --- | --- |
+| The `for` loop, the counters, the `if`s | **Workflow**, pure control flow |
+| `client.messages.create(...)` | **Activity** |
+| `runTool(name, input, requester)` | **Activity**, one per call |
+| `Date.now()` deadline check | **Neither**, see below |
+| `truncate(...)` | **Inside the activity**, see below |
+| The `Outcome` union | The workflow's return value |
+
+## The port
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/atlas-workflow.ts"
+const { callModel, runTool } = proxyActivities<typeof activities>({
+  startToCloseTimeout: '2 minutes',      // model calls are slow
+  heartbeatTimeout: '20 seconds',        // and we heartbeat inside them
+  retry: {
+    maximumAttempts: 4,
+    nonRetryableErrorTypes: ['InvalidRequest', 'CreditLimitExceeded'],
+  },
+});
+
+const MAX_STEPS = 12;
+const MAX_COST_USD = 0.5;
+
+export async function atlasWorkflow(ticket: Ticket): Promise<Outcome> {
+  const messages: Message[] = [{ role: 'user', content: ticket.body }];
+  let cost = 0;
+
+  for (let step = 1; step <= MAX_STEPS; step++) {
+    if (cost > MAX_COST_USD) return { status: 'halted', bound: 'cost', step, cost };
+
+    // Journalled. On replay this returns the recorded response, not a new one.
+    const response = await callModel({ messages, tools: TOOLS });
+    cost += response.costUsd;                       // from the recorded result
+    messages.push({ role: 'assistant', content: response.content });
+
+    if (response.stopReason !== 'tool_use') {
+      return { status: 'answered', reply: response.text, step, cost };
+    }
+
+    const calls = response.content.filter((b) => b.type === 'tool_use');
+
+    const handoff = calls.find((c) => c.name === 'escalate_to_human');
+    if (handoff) {
+      return { status: 'escalated', reason: handoff.input.reason, step, cost };
+    }
+
+    // Reads concurrently; writes are serialized inside runTool's dispatcher.
+    const results = await Promise.all(
+      calls.map((call) =>
+        runTool({
+          name: call.name,
+          input: call.input,
+          toolUseId: call.id,
+          requester: ticket.customerId,
+          // Deterministic across replays — the workflow ID is stable.
+          idempotencyKey: `${workflowInfo().workflowId}:${step}:${call.id}`,
+        }),
+      ),
+    );
+
+    messages.push({ role: 'user', content: results });
+  }
+
+  return { status: 'halted', bound: 'steps', step: MAX_STEPS, cost };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/atlas_workflow.py"
+MAX_STEPS = 12
+MAX_COST_USD = 0.5
+
+OPTS = dict(
+    start_to_close_timeout=timedelta(minutes=2),   # model calls are slow
+    heartbeat_timeout=timedelta(seconds=20),       # and we heartbeat inside them
+    retry_policy=RetryPolicy(
+        maximum_attempts=4,
+        non_retryable_error_types=["InvalidRequest", "CreditLimitExceeded"],
+    ),
+)
+
+
+@workflow.defn
+class AtlasWorkflow:
+    @workflow.run
+    async def run(self, ticket: Ticket) -> Outcome:
+        messages = [{"role": "user", "content": ticket.body}]
+        cost = 0.0
+
+        for step in range(1, MAX_STEPS + 1):
+            if cost > MAX_COST_USD:
+                return Outcome("halted", bound="cost", step=step, cost=cost)
+
+            # Journalled. On replay this returns the recorded response.
+            response = await workflow.execute_activity(
+                call_model, {"messages": messages, "tools": TOOLS}, **OPTS
+            )
+            cost += response.cost_usd                    # from the recorded result
+            messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason != "tool_use":
+                return Outcome("answered", reply=response.text, step=step, cost=cost)
+
+            calls = [b for b in response.content if b.type == "tool_use"]
+
+            handoff = next((c for c in calls if c.name == "escalate_to_human"), None)
+            if handoff:
+                return Outcome("escalated", reason=handoff.input["reason"],
+                               step=step, cost=cost)
+
+            # Reads concurrently; writes are serialized inside run_tool's dispatcher.
+            results = await asyncio.gather(*[
+                workflow.execute_activity(
+                    run_tool,
+                    {
+                        "name": c.name,
+                        "input": c.input,
+                        "tool_use_id": c.id,
+                        "requester": ticket.customer_id,
+                        # Deterministic across replays — workflow ID is stable.
+                        "idempotency_key":
+                            f"{workflow.info().workflow_id}:{step}:{c.id}",
+                    },
+                    **OPTS,
+                )
+                for c in calls
+            ])
+
+            messages.append({"role": "user", "content": results})
+
+        return Outcome("halted", bound="steps", step=MAX_STEPS, cost=cost)
+```
+
+</Tab>
+</Tabs>
+
+Read it beside v0 and the shape is identical. That is the point. The loop did not become a state machine, and there is no resume handler. What changed is five details.
+
+## 1 · The deadline lost its clock
+
+v0 checked `Date.now() - startedAt > DEADLINE_MS`. That line cannot survive replay: the clock reads later every time, so the branch flips and the execution diverges from its own history.
+
+The SDK's replay-stable clock makes it *legal*. But the better answer is to delete the check entirely and set a **workflow run timeout**, because the server enforces it. It still fires when the worker is wedged, deadlocked, or gone, which is exactly the situation a self-check cannot detect. The bound moved from a line of code to a property of the execution, and got stronger doing it.
+
+## 2 · Truncation moved into the activity, for a new reason
+
+v0 truncated tool results to protect the context window. That reason still holds, and durable execution adds a second one that is sharper:
+
+> **An activity's return value is written to the event history.**
+
+A 40 KB tool result is 40 KB in history, permanently, re-read on every cold replay, counted against the run's ceiling. And these are not soft ceilings. The payload limit for a single request is **2 MB**, applying to activity arguments and return values alike, while an event history transaction caps at **4 MB** and the whole run at 50 MB or 51,200 events.
+
+So a tool returning a large result does not merely cost context. It can fail the activity outright.
+
+[Result design](/book/tools/result-design) said to shape at the source rather than cut at the boundary. Here that advice becomes structural: the truncation, the field projection, the row cap all happen **inside the activity, before it returns**, so the oversized payload never enters the journal at all.
+
+## 3 · The transcript is now the expensive part
+
+`messages` lives in workflow state, and workflow state is reconstructed from history, so every message, every tool result, every model response is in the journal.
+
+A ten-turn conversation carrying real context can approach **40 KB of raw message content per run**, before Temporal's own per-event metadata. Twelve steps of Atlas with four tools is comfortably inside the limits. A support thread that stays open for three weeks is not.
+
+The recommended shape at that point is to stop keeping the transcript in the workflow: **the workflow holds a reference and a cursor; the messages live in an external store.** That trades away some of the "history is the complete record" property for the transcript specifically, which is a real loss and a necessary one.
+
+Atlas keeps the transcript inline for now, because one ticket is bounded. [Long-Lived Agents](/book/durability/long-lived-agents) is where it stops being bounded and where continue-as-new enters.
+
+## 4 · Model calls stream and heartbeat, or you pay twice
+
+A model call can legitimately take minutes. An activity that does not heartbeat within its heartbeat timeout is declared timed out and **retried on another worker**, while the original call is still running. You now have two in flight and will pay for both.
+
+So the activity streams the response and heartbeats per chunk:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/activities.ts"
+export async function callModel(req: ModelRequest): Promise<ModelResult> {
+  const stream = client.messages.stream({ model: 'claude-opus-5', ...req });
+
+  for await (const event of stream) {
+    Context.current().heartbeat();   // proves liveness, and receives cancellation
+    publishToken(event);             // side channel to the UI — see Part XIII
+  }
+
+  const msg = await stream.finalMessage();
+  return { content: msg.content, stopReason: msg.stop_reason,
+           text: textOf(msg), costUsd: priceOf(msg.usage) };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/activities.py"
+@activity.defn
+async def call_model(req: dict) -> ModelResult:
+    async with client.messages.stream(model="claude-opus-5", **req) as stream:
+        async for event in stream:
+            activity.heartbeat()      # proves liveness, and receives cancellation
+            publish_token(event)      # side channel to the UI — see Part XIII
+
+        msg = await stream.get_final_message()
+
+    return ModelResult(
+        content=msg.content, stop_reason=msg.stop_reason,
+        text=text_of(msg), cost_usd=price_of(msg.usage),
+    )
+```
+
+</Tab>
+</Tabs>
+
+Heartbeating buys a second thing that matters more than liveness: **cancellation propagation.** When the workflow is cancelled, a heartbeating activity is told on its next heartbeat and can abort the in-flight request, instead of running to completion, generating tokens nobody will read, and billing you for them.
+
+Note also that the tokens leave through a side channel rather than the return value. An activity returns once, at the end; live output needs a separate path, which is [Part XIII's subject](/book/interface/ui-to-durable-backend).
+
+## 5 · Everything else stayed the same, deliberately
+
+Parallel tool calls remain parallel. Awaiting several activities concurrently is deterministic, because the results come back from history in a recorded order rather than a raced one. The [read/write split](/book/tools/read-and-write-tools) still applies inside the dispatcher: reads fan out, writes serialize.
+
+The idempotency key is now trivially correct. v0 had to be careful to derive it deterministically; here `workflowInfo().workflowId` is stable by construction, and the step and tool-use ID make it unique per call.
+
+<Aside type="caution" title="Whatever you pass to an activity is written down">
+`requester: ticket.customerId` is an activity argument, so it lands in the event history, as does every tool input, every model response, and every result.
+
+Event histories are durable, exported, and retained. If a tool argument or a tool result carries personal data, that data now lives in an operational log with its own retention policy, which is a compliance question rather than an engineering one. The mitigations are the usual ones: pass identifiers rather than records, fetch the sensitive parts inside the activity, and configure a data converter that encrypts payloads. [Part XVII](/book/security/pii-and-compliance) is where they are argued properly.
+
+The point to carry now: **the audit trail this part sells you is also a copy of everything you passed through it.**
+</Aside>
+
+## The seven decisions, revisited
+
+[Part II ended with a table](/book/first-agent/the-loop-by-hand) of seven decisions a framework would have made silently. Here is what owns each one now:
+
+| Decision | v0 | On durable execution |
+| --- | --- | --- |
+| History policy | Keep everything | **Still yours**, and now it costs history as well as context |
+| Result truncation | Cut at 4,000 chars | **Moved into the activity**, for a second reason |
+| Parallel execution | All at once | Same, deterministically; writes serialize |
+| Tool errors | Text back to the model | Same, **plus** retryable-vs-terminal as policy |
+| Authorization | `customerId` into `runTool` | Same, and now journalled, see above |
+| Termination | Steps, cost, deadline | **The platform owns the deadline** |
+| Observability | The `Outcome` return value | **The event history** |
+
+Two moved to the platform. One got a new cost. Four are exactly as much your problem as they were in Part II. That is the honest accounting, and the reason Part VIII exists.
+
+## What this did not fix
+
+Atlas now survives crashes, deploys, provider outages, and a worker being reclaimed mid-refund. It picks the wrong tool exactly as often as it did before.
+
+Durable execution made the **machine** reliable. The [six failure clusters](/book/durable-execution/everything-that-breaks) that belong to the model are untouched, and a system with a perfect event history and a bad tool catalogue fails every ticket identically, forever, with an immaculate record of having done so.
+
+## Atlas, scored
+
+| | v2 (the hand-written loop) | v3 (as a workflow) |
+| --- | --- | --- |
+| Fully resolved | 14 / 20 | 14 / 20 |
+| Correctly escalated | 4 / 20 | 4 / 20 |
+| Survives a mid-run deploy | **No** | **Yes** |
+| Survives worker loss | No | Yes |
+| Duplicate refunds under retry | Possible | **No** |
+| Run is addressable while executing | No | Yes |
+| Record of what happened | `console.log` | Event history |
+
+Resolution quality did not move, and should not have. Nothing about the model's decisions changed. What moved is every row below it, and those are the rows that decide whether the fourteen are trustworthy.
+
+---
+
+Next: [LangGraph on Temporal](/book/durability/langgraph-on-temporal). The official plugin: choosing `execute_in` per node, what may run inside a workflow, and what must not.
+
+## Takeaways
+
+- A model call cannot be replayed, so it is an activity. Every other placement decision follows from that one.
+- The ported loop looks like the original: no state machine, no resume handler. Five details change.
+- The deadline cannot read the clock. Replace the self-check with a workflow run timeout, which the server enforces even when the worker is wedged.
+- An activity's return value is written to history. Truncate and project **inside** the activity, or the oversized payload is journalled forever. Payloads cap at 2 MB, history transactions at 4 MB.
+- The transcript in workflow state is the expensive part. Ten substantial turns approach 40 KB per run before metadata; past that, hold a reference and a cursor and keep messages in an external store.
+- Model activities must heartbeat, or a slow call is declared timed out and retried while still running. You pay twice.
+- Heartbeating also propagates cancellation, letting a cancelled run abort an in-flight model call instead of buying tokens nobody reads.
+- Live token output leaves through a side channel; an activity returns once, at the end.
+- Idempotency keys become trivially correct, because the workflow ID is stable by construction.
+- Everything passed to an activity is written to the event history. The audit trail is also a copy of your payloads, which is a retention and compliance question.
+- Of Part II's seven decisions, two moved to the platform, one gained a cost, and four remain entirely yours.
+- Durability changed no resolution rates. It changed whether the resolutions can be trusted.

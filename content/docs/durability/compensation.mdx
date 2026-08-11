@@ -1,0 +1,219 @@
+---
+title: "When Tools Have Side Effects"
+description: "The saga pattern for refunds, emails, and inventory, plus the \"we already sent it\" problem."
+---
+
+The credit was issued. The confirmation email failed. Ticket #8823 is now in a state where Meridian is four thousand dollars lighter and the customer has no idea.
+
+[Atlas v0 listed this exact failure](/book/first-agent/the-loop-by-hand) as one of the six things it could not survive. Durable execution fixed everything around it: the crash, the retry, the duplicate. It left this one untouched, because it is not a durability problem. **Both steps succeeded at what they were asked to do.** The sequence is what failed.
+
+## Compensation is not rollback
+
+The distinction that makes the rest of the chapter make sense:
+
+> A transaction **rolls back** to a state where nothing happened.
+> A saga reaches a state where something happened, **and then something else happened to offset it.**
+
+A refund does not delete the original charge. It creates a second transaction that restores the customer's balance while both entries remain in the ledger forever. The business effect is reversed; the history is not.
+
+That is not a shortcoming of the pattern. It is the correct model of a world where you cannot un-move money, only move it back. Once you accept it, the design questions become tractable, because you stop looking for an undo button that was never going to exist.
+
+## The mechanism: a stack you push as you go
+
+Each forward step, on success, pushes its compensation. On failure, unwind in reverse:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/refund-saga.ts"
+export async function refundSaga(ticket: Ticket): Promise<Outcome> {
+  const compensations: Array<() => Promise<void>> = [];
+
+  try {
+    const hold = await placeHold(ticket.orderId);
+    compensations.push(() => releaseHold(hold.id));
+
+    const restock = await returnToInventory(ticket.orderId);
+    compensations.push(() => removeFromInventory(restock.id));
+
+    // ── the pivot: past here we go forward, not back ──
+    const credit = await issueCredit(ticket.orderId, ticket.amountCents, key);
+
+    await sendReply(ticket.orderId, credit.id);
+    return { status: 'refunded', creditId: credit.id };
+  } catch (err) {
+    // LIFO. Each compensation is independent; one failing does not stop the rest.
+    for (const undo of compensations.reverse()) {
+      try {
+        await undo();
+      } catch (compErr) {
+        await alertHuman({ ticket: ticket.id, failure: compErr });  // incident
+      }
+    }
+    throw err;
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/refund_saga.py"
+@workflow.defn
+class RefundSaga:
+    @workflow.run
+    async def run(self, ticket: Ticket) -> Outcome:
+        compensations: list[Callable[[], Awaitable[None]]] = []
+
+        try:
+            hold = await workflow.execute_activity(place_hold, ticket.order_id, **OPTS)
+            compensations.append(lambda: release_hold(hold.id))
+
+            restock = await workflow.execute_activity(
+                return_to_inventory, ticket.order_id, **OPTS
+            )
+            compensations.append(lambda: remove_from_inventory(restock.id))
+
+            # ── the pivot: past here we go forward, not back ──
+            credit = await workflow.execute_activity(
+                issue_credit, args=[ticket.order_id, ticket.amount_cents, key], **OPTS
+            )
+
+            await workflow.execute_activity(
+                send_reply, args=[ticket.order_id, credit.id], **OPTS
+            )
+            return Outcome("refunded", credit_id=credit.id)
+
+        except Exception:
+            # LIFO. Each compensation is independent; one failing does not stop the rest.
+            for undo in reversed(compensations):
+                try:
+                    await undo()
+                except Exception as comp_err:
+                    await alert_human(ticket=ticket.id, failure=comp_err)  # incident
+            raise
+```
+
+</Tab>
+</Tabs>
+
+Three rules are already visible in that code, and each is load-bearing:
+
+**Push the compensation only after the step succeeds.** A compensation registered before its step can try to undo something that never happened.
+
+**Unwind in reverse.** Releasing a hold before un-restocking the inventory it was holding leaves the two systems disagreeing.
+
+**One failed compensation does not stop the others.** It raises an incident and the loop keeps going, because a partially unwound saga is worse than a fully unwound one with a single flagged problem.
+
+## The agent twist: you don't know the steps in advance
+
+Everything above is the classic pattern, and it assumes something an agent breaks. In a normal saga the sequence is designed: five steps, five compensations, written together. In an agent, **the model chose the sequence at runtime**, and it may not be the same sequence twice.
+
+You cannot attach compensations to a static list of steps that does not exist. So the rule moves down a level, into the tool catalogue:
+
+> **Every write tool declares its compensation next to its schema.**
+
+Not in the workflow. In the catalogue, as part of what it means to be a [class ③ or above tool](/book/tools/read-and-write-tools). A tool without a declared compensation is a tool that cannot participate in a saga, and that should be a property you can check rather than something discovered during an incident.
+
+Then the stack builds itself from what actually ran:
+
+```ts
+const result = await runTool(call, requester, key);
+if (result.ok && catalogue[call.name].compensate) {
+  compensations.push(() => catalogue[call.name].compensate!(result));
+}
+```
+
+Which is why the [event history](/book/durability/agent-as-workflow) matters more here than anywhere else in Part XI. It is the authoritative record of *which* effects actually occurred in *this* run, and that record is precisely what has to be unwound.
+
+## Order by reversibility, and name the pivot
+
+The design rule that makes sagas mostly work is not about compensation at all. It is about sequencing:
+
+<Figure caption="Everything that can fail goes before the pivot. Everything irreversible goes after it." frame={false}>
+
+```
+   REVERSIBLE ZONE                 │  PIVOT  │   IRREVERSIBLE ZONE
+   ─────────────────────────────── │ ─────── │ ────────────────────
+   place hold        ↺ release     │ issue   │   email customer
+   restock inventory ↺ un-restock  │ credit  │   close ticket
+   reserve slot      ↺ free slot   │         │   notify accounting
+                                   │         │
+   failure here → unwind cleanly   │         │  failure here → go
+                                   │         │  forward, don't undo
+```
+
+</Figure>
+
+The **pivot** is the step after which you commit. Past it, the correct response to a failure is to complete the remaining work, not to reverse what is done. Everything that might fail belongs before it. Everything irreversible belongs after.
+
+Applied to Atlas: validate the policy, place the hold, and restock the inventory *first*. All reversible, all fallible. Issue the credit as the pivot. Send the email last, because once the money has moved, a failed email is a retry rather than a reason to claw back a refund the customer is owed.
+
+Get that ordering right and most sagas never compensate at all, which is the point. **A compensation you never run is better than one that works.**
+
+## The "we already sent it" problem
+
+Some steps have no compensation, and pretending otherwise is the anti-pattern this chapter exists to name. You cannot un-send an email. The [class ⑤ writes](/book/tools/read-and-write-tools) are mail, webhooks, messages, anything already in someone else's system. They are irreversible not because the API lacks a delete but because **a human has already read it.**
+
+Three honest responses, in order of preference:
+
+**Move it after the pivot.** Most of the time this is available and sufficient. Sequencing solves what compensation cannot.
+
+**Compensate with a communication rather than an undo.** The compensation for "sent the wrong confirmation" is "send a correction," which is a different action with a different effect. It restores the customer's understanding, not the system's state.
+
+**Make it contingent.** Confirm everything else succeeded before the irreversible step runs, which is just the pivot rule stated as a precondition.
+
+<Aside type="caution" title="The second option is a product decision wearing an engineering costume">
+"Send a correction" means somebody has to write the correction, decide its tone, decide whether it apologises, and decide who is copied. That is not something the workflow author gets to specify in a lambda.
+
+Every irreversible step in your system implies a piece of customer communication that does not exist yet, and the honest thing to do is surface that during design rather than discover it at 2am. [Escalation and audit](/book/human-in-the-loop/escalation-and-audit) is where the queue for those decisions lives.
+</Aside>
+
+## Compensations fail too
+
+They are activities, so everything from [Part X](/book/durable-execution/determinism-and-retries) applies, with three adjustments:
+
+**Generous retry policies.** A compensation is the last line of defence, and giving up on it early leaves the system inconsistent. Retry harder than you would for the forward path.
+
+**Idempotent, always.** A compensation may be retried by policy, and the whole workflow may replay. Releasing the same hold twice must be a no-op, the same [derived-key discipline](/book/tools/idempotency) as the forward steps, because compensations are writes.
+
+**Failure is an incident, not a retry loop.** When retries are exhausted, a failed compensation escalates to a person with the specific inconsistency named. It does not silently give up, and it does not stop the remaining compensations from running.
+
+One more, from the retry chapter and easy to miss: **mark business rejections non-retryable.** A step failing because "credit limit exceeded" will fail identically forever, and burning the retry budget before compensating just delays the unwind while holding resources. Non-retryable errors let the saga start compensating immediately.
+
+## Atlas, concretely
+
+| Step | Compensation | Zone |
+| --- | --- | --- |
+| `check_policy` | — (pure read) | Reversible |
+| `place_hold` | `release_hold` | Reversible |
+| `return_to_inventory` | `remove_from_inventory` | Reversible |
+| **`issue_credit`** | **— (the pivot)** | **Commit point** |
+| `send_reply` | Send a correction, by hand | Irreversible |
+| `close_ticket` | `reopen_ticket` | After pivot, but reversible |
+
+Two things worth reading off that table.
+
+**`issue_credit` has no compensation and does not need one.** It is the pivot. If it fails, the reversible steps before it unwind and the customer is told nothing happened. If it succeeds, everything after it is a forward obligation. Meridian owes the email regardless of how hard it is to send.
+
+**`close_ticket` is reversible and still sits after the pivot.** Reversibility and ordering are different axes. The pivot is about where commitment happens, not about where undo stops being possible.
+
+---
+
+Next: [Scale and Quality of Service](/book/durability/scale-and-qos), fan-out across thousands of cases, provider quotas, priority queues, and fairness across tenants.
+
+## Takeaways
+
+- Durable execution fixed the crash, the retry, and the duplicate. It does not fix a sequence where every step succeeded and the outcome is still wrong.
+- Compensation is not rollback. A refund creates a second ledger entry rather than deleting the first. The business effect reverses, the history stays.
+- Push a compensation only after its step succeeds, unwind in reverse, and let one failed compensation raise an incident without stopping the others.
+- In a normal saga the sequence is designed; in an agent the model chose it. So compensations attach to **tools in the catalogue**, not to steps in a workflow.
+- A write tool without a declared compensation cannot participate in a saga, and that should be checkable rather than discovered during an incident.
+- The event history is the authoritative record of which effects actually ran, which is exactly what has to be unwound.
+- Order steps by reversibility and name the pivot. Everything fallible before it; everything irreversible after it.
+- Past the pivot, the correct response to failure is to finish, not to reverse.
+- A compensation you never run is better than one that works. Sequencing prevents more incidents than compensation repairs.
+- You cannot un-send an email, because a human already read it. Move it after the pivot, or compensate with a correction, which is a product decision, not a lambda.
+- Every irreversible step implies customer communication that does not exist yet. Surface it during design.
+- Compensations are writes: idempotent, generously retried, and escalated to a human by name when they finally fail.
+- Mark business rejections non-retryable so the saga starts unwinding immediately instead of burning its retry budget first.

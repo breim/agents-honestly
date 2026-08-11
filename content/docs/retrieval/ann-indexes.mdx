@@ -1,0 +1,169 @@
+---
+title: "Approximate Search, Honestly"
+description: "HNSW, IVF, quantization, and the recall / latency / memory / build-time quadrilemma you are actually choosing between."
+---
+
+
+Exact nearest-neighbour search is a full scan: compute the distance from the query to every vector, sort, take the top five. Correct, trivially simple, and linear in corpus size, which at a few million vectors and a thousand-plus dimensions is more arithmetic per query than a support ticket can afford.
+
+So everyone uses an approximate index. And the word *approximate* is carrying a load that almost no team quantifies.
+
+## What you actually agreed to
+
+`CREATE INDEX ... USING hnsw` is a decision to **sometimes not return the right answer**. Not to return it more slowly, not to return it with a caveat, but to silently return the second-best set and report success.
+
+That is a completely reasonable trade. It is unreasonable to make it without knowing the rate, and the rate is controlled by parameters that are, in most deployments, whatever the library shipped with.
+
+The metric is **recall@k**: of the *k* items exact search would have returned, how many did the approximate index actually find? A recall of 0.95 at k=5 means one in twenty queries is missing a result it should have had. Whether that matters is a product question, but you cannot answer it without the number, and the number is not on any dashboard by default.
+
+<Aside type="note" title="Recall is corpus-specific">
+Published benchmark recall figures do not transfer to your data. Recall depends on the geometry of *your* embeddings: how clustered they are, how many near-duplicates exist, how high-dimensional the effective manifold is.
+
+The only recall number worth acting on is one measured on your own corpus, which takes about thirty lines of code and is the last section of this chapter.
+</Aside>
+
+## The quadrilemma
+
+Every index choice trades among four things, and you cannot maximize all of them.
+
+<Figure caption="Pick three. Every knob in every ANN index moves at least two of these in opposite directions." frame={false}>
+
+```
+                        RECALL
+                    (how often right)
+                          ▲
+                          │
+                          │
+     BUILD & UPDATE ◀─────┼─────▶ LATENCY
+     (time to index,      │       (per query)
+      cost to change)     │
+                          ▼
+                       MEMORY
+                   (RAM to hold it)
+```
+
+</Figure>
+
+Concretely, in the pairs you'll actually feel:
+
+- Raise search effort → recall up, latency up.
+- Raise graph connectivity → recall up, memory up, build time up.
+- Compress the vectors → memory down, recall down.
+- Partition instead of graph → build time down, memory down, recall-at-a-given-latency down.
+
+There is no configuration that wins all four, and any vendor comparison that shows one is holding at least one of them fixed off-screen.
+
+## HNSW: the default, and why
+
+A navigable graph in layers. Each vector is a node connected to some number of near neighbours; upper layers are sparse for long jumps, lower layers dense for local refinement. A query enters at the top, greedily walks toward the target, and descends.
+
+Three parameters matter:
+
+| Parameter | Raises | Costs |
+| --- | --- | --- |
+| `m`, connections per node | Recall | Memory, build time (permanent, set at build) |
+| `ef_construction`, candidates considered while building | Recall | Build time only |
+| `ef_search`, candidates considered per query | Recall | Query latency (tunable at run time) |
+
+The last row is the useful one: **`ef_search` is a dial you can turn per query, after the index exists.** Recall too low? Raise it and pay latency. That makes it the right knob to tune first, and the one to expose in a config rather than a rebuild.
+
+**Know where the dial starts, because the default has a trap in it.** In pgvector `hnsw.ef_search` defaults to **40**, and it has to be at least as large as your `LIMIT`. Ask for a hundred rows against a default index and you get forty: no error, no warning, just a short result set that looks like the corpus had nothing more to offer. That collides directly with the rescoring move two sections down, where *over-fetch a hundred candidates and re-rank* is the whole technique and quietly fetches forty instead. IVF has the same shape and a worse default: `ivfflat.probes` starts at **1**, so one cell is searched and recall is about as bad as the structure permits.
+
+HNSW is the sensible default for most production corpora. It reaches high recall without heroics, absorbs inserts without a rebuild, and at a million vectors returns in low tens of milliseconds. Its bill is memory, commonly a few times what a partition-based index needs, and build time, which runs from minutes to hours as you scale up.
+
+## IVF: partitions, and the drift nobody mentions
+
+Cluster the corpus into cells (k-means), assign each vector to one, and at query time probe only the cells nearest the query. `nlist` sets how many cells; `nprobe` sets how many you search.
+
+It builds in seconds to minutes rather than hours, inserts are trivial, and it uses substantially less memory. In exchange, recall at a given latency is lower, and it has a maintenance property that HNSW doesn't:
+
+> **IVF's recall drifts as your data changes**, because the centroids were fit on the corpus as it was at build time. Add a new product line, a new region, a new document type, and the partitions no longer match the distribution, quietly, with no error.
+
+That is [drift](/book/observability/drift) in a place people don't look for it, and it means IVF wants periodic retraining as a scheduled job rather than a one-time build. It suits large, mostly-static corpora where memory or build cost dominates; it suits a fast-changing corpus badly.
+
+## Quantization is a separate axis
+
+Orthogonal to the index structure: how precisely do you store each number?
+
+| Scheme | Size | Recall impact |
+| --- | --- | --- |
+| Full precision | 1× | None |
+| Scalar (8-bit) | ~4× smaller | Small |
+| Product quantization | 10–30× smaller | Moderate |
+| Binary (1 bit/dim) | ~32× smaller | Large, on its own |
+
+Compression is how billion-scale search fits in RAM at all, and each step down costs recall. Which sounds like a pure loss until you notice that the losses are *recoverable*, because of the pattern that quietly resolves most of this chapter.
+
+## The two-stage escape hatch
+
+You do not have to accept the approximate result as final.
+
+```
+   stage 1: search WIDE and CHEAP          stage 2: rescore EXACT
+   ┌────────────────────────────┐          ┌──────────────────────┐
+   │ quantized index            │          │ full-precision       │
+   │ fetch top 100 candidates   │  ──────▶ │ distance on those    │
+   │ fast, small, lossy         │          │ 100 → return top 5   │
+   └────────────────────────────┘          └──────────────────────┘
+     approximate & compressed                exact on a tiny set
+```
+
+Over-fetch with the cheap index, then recompute exact distances on the small candidate set and re-sort. The expensive operation now runs on a hundred vectors instead of ten million, and the recall you get back is most of what quantization cost you.
+
+This is why aggressive compression is viable in production: **you are not choosing between compressed and accurate, you are choosing compressed-then-corrected.** Whenever you quantize, plan the rescoring step in the same breath. A compressed index without rescoring is the configuration that produces "search got worse" tickets six weeks later.
+
+And note the shape: search wide and cheap, then cut precisely. That is the same two-stage structure as [selection versus reranking](/book/context/dynamic-selection), and as [hybrid retrieval](/book/retrieval/hybrid-and-reranking) in the next chapters. It keeps recurring because it is the general answer to "recall and precision want opposite things."
+
+## The number nobody measures
+
+Combine this chapter with the last one and you get the metric that actually predicts your agent's behaviour: **recall under your real filters.**
+
+Every published recall figure is unfiltered. Your queries are not. And post-filtering makes it worse in exactly the way described last chapter: the ANN returns its approximate top-100 from the whole corpus, then the filter removes most of them, so your effective recall against *the set you were entitled to* can be far below the number in the benchmark.
+
+Measure recall the way you query: with the filters on.
+
+And hold it at the value it has, which is a ceiling rather than a score. Recall says the right chunk reached the window; it says nothing about whether the model could use it, and [the two move independently often enough to be worth watching separately](/book/retrieval/retrieval-evals). Tune the index on recall, because that is what an index controls, then check that the answers moved.
+
+## Building the harness
+
+Thirty lines, once, and it converts every question in this chapter from an argument into a measurement.
+
+```sql
+-- ground truth: exact search, no index. Slow, correct, run offline.
+SET LOCAL enable_indexscan = off;
+SELECT id FROM policy_chunks
+WHERE tier = $2 AND superseded_at IS NULL
+ORDER BY embedding <=> $1 LIMIT 10;
+```
+
+Take a few hundred representative queries from real traffic, not invented ones, run both the exact and the indexed version with your filters applied, and compute the overlap. That's recall@10. Then sweep `ef_search` and plot recall against p95 latency.
+
+You will get a curve with a knee. Pick the point past the knee, set the parameter, and write the number down somewhere durable, because the next person to ask "why is search slow" needs to know that the answer is "because we chose 0.97 recall on purpose."
+
+Re-run it after every corpus change, embedding model change, or parameter change. It's the retrieval equivalent of a load test, and roughly as neglected.
+
+## Atlas, concretely
+
+Forty thousand policy chunks. At that size **exact search is genuinely viable**, since a full scan over 40,000 vectors is single-digit milliseconds, and the correct engineering decision is to skip the ANN index entirely until measurements say otherwise.
+
+That is worth stating plainly, because it is the least glamorous conclusion in Part IV: most enterprise corpora are small enough that approximate search is solving a problem they don't have. HNSW at 40,000 vectors buys you a few milliseconds and costs you a tunable recall failure, a memory footprint, and a build step in your ingestion pipeline.
+
+Add the index when the scan shows up in your latency budget. Not before, and not because the tutorial had one.
+
+---
+
+Next: [Chunking](/book/retrieval/chunking), covering fixed, recursive, semantic, document-aware, and parent/child splitting, and why a policy split mid-sentence is a bug you will never see in a metric.
+
+## Takeaways
+
+- An approximate index is a decision to sometimes return the wrong answer. Reasonable, but not without knowing the rate.
+- Recall@k is the metric, and it's corpus-specific. Benchmark numbers do not transfer to your embeddings.
+- The quadrilemma is recall, latency, memory, and build/update cost. Every knob trades at least two; nothing wins all four.
+- HNSW is the sensible default: high recall, insert-friendly, expensive in memory and build time. Tune `ef_search` first, because it's a runtime dial.
+- Check the defaults before trusting a result count. `hnsw.ef_search` is 40 and must be ≥ your `LIMIT`, so over-fetching a hundred candidates silently returns forty; `ivfflat.probes` is 1, which searches one cell.
+- IVF builds fast and fits in less memory, but its centroids go stale as the corpus shifts. Schedule retraining or accept silent decay.
+- Quantization is orthogonal to index structure and its recall cost is largely recoverable.
+- Over-fetch cheap, rescore exact. Never ship a compressed index without the rescoring stage.
+- Measure recall with your filters applied. Unfiltered recall is not the number your agent experiences.
+- Build the recall harness. It turns every choice here into a curve with a knee.
+- At tens of thousands of vectors, exact search is fine. Add the index when a measurement asks for it.

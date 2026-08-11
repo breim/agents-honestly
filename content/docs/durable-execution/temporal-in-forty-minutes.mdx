@@ -1,0 +1,304 @@
+---
+title: "Temporal in Forty Minutes"
+description: "Workflows, activities, workers, task queues, event history, replay: the whole mental model, quickly."
+---
+
+Six nouns. Learn them in order, because each one exists because of the one before it, and there is no seventh you need today.
+
+Still no AI in this chapter. [The previous one explained why](/book/durable-execution/why-durable-execution), and the example is a refund with nobody thinking about it.
+
+## The six nouns
+
+<Figure caption="A client starts a workflow on a task queue. Workers poll that queue. The server records everything in a history it can replay." frame={false}>
+
+```
+   CLIENT                    TEMPORAL SERVER                  WORKER
+   ──────                    ───────────────                  ──────
+   start(refund,       ──▶   ┌──────────────────┐      ┌──▶  workflow code
+     taskQueue:              │  EVENT HISTORY   │      │     activity code
+     'refunds')              │  ① started       │      │
+                             │  ② activity …    │◀─────┘     polls
+                             │  ③ result …      │  ────────▶ 'refunds'
+   result()      ◀───────    └──────────────────┘             queue
+```
+
+</Figure>
+
+| Noun | What it is |
+| --- | --- |
+| **Workflow** | Your orchestration function. Deterministic, and freely replayable. |
+| **Activity** | Anything that touches the world. Never replayed. Its *result* is recorded. |
+| **Worker** | A process **you** run that hosts both kinds of code and polls for work. |
+| **Task Queue** | A name. The routing between whoever starts work and whoever does it. |
+| **Event History** | The durable, ordered log of everything that happened to one execution. |
+| **Replay** | Re-running the workflow function against that history to rebuild its in-memory state. |
+
+The one genuinely surprising item is the worker: **Temporal never runs your code.** The server stores history and hands out tasks; your code runs in your process, on your infrastructure, reaching your database. That is why the server can be a managed service without your data going anywhere.
+
+## The split everything depends on
+
+Workflow or activity is the only modelling decision you make repeatedly, and it has a one-sentence test:
+
+> **If it could return a different answer on a second call, it is an activity.**
+
+| Workflow code | Activity code |
+| --- | --- |
+| `if`, `for`, `try`, `await` | HTTP calls |
+| Deciding what happens next | Database reads **and** writes |
+| Waiting for time, for a signal | Reading files, sending mail |
+| Calling activities and reading their results | Anything using the clock or randomness |
+
+The mistake to expect is putting a database *read* in the workflow because reads feel harmless. Reads are not deterministic. The row can change between the original run and the replay, and a replay that reads a different value diverges from its own history. Reads are activities.
+
+## The whole thing, in code
+
+Three files. This is the entire programming model.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/activities.ts — touches the world"
+export async function getOrder(orderId: string): Promise<Order> {
+  return db.orders.byId(orderId);
+}
+
+export async function issueCredit(
+  orderId: string,
+  cents: number,
+  idempotencyKey: string,
+): Promise<string> {
+  const res = await payments.credits.create(
+    { orderId, cents },
+    { idempotencyKey },
+  );
+  return res.id;
+}
+
+export async function sendReply(orderId: string, creditId: string) {
+  await mailer.send(/* … */);
+}
+```
+
+```ts title="ts/src/temporal/workflow.ts — deterministic, replayable"
+import { proxyActivities, workflowInfo } from '@temporalio/workflow';
+import type * as activities from './activities';
+
+const { getOrder, issueCredit, sendReply } =
+  proxyActivities<typeof activities>({
+    startToCloseTimeout: '30 seconds',
+    retry: {
+      initialInterval: '1 second',
+      backoffCoefficient: 2,
+      maximumAttempts: 5,
+    },
+  });
+
+export async function refundWorkflow(orderId: string): Promise<string> {
+  const order = await getOrder(orderId);
+
+  // Deterministic on replay: the workflow ID is stable for this execution.
+  const key = `${workflowInfo().workflowId}:issue_credit`;
+
+  const creditId = await issueCredit(orderId, order.totalCents, key);
+  await sendReply(orderId, creditId);
+  return creditId;
+}
+```
+
+```ts title="ts/src/temporal/worker.ts — the process you run"
+const worker = await Worker.create({
+  workflowsPath: require.resolve('./workflow'),
+  activities,
+  taskQueue: 'refunds',
+});
+await worker.run();
+
+// …and, from anywhere, to start one:
+const handle = await client.workflow.start(refundWorkflow, {
+  taskQueue: 'refunds',
+  workflowId: `refund-${orderId}`, // dedupes: one refund per order
+  args: [orderId],
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/activities.py — touches the world"
+@activity.defn
+async def get_order(order_id: str) -> Order:
+    return await db.orders.by_id(order_id)
+
+
+@activity.defn
+async def issue_credit(order_id: str, cents: int, idempotency_key: str) -> str:
+    res = await payments.credits.create(
+        order_id=order_id, cents=cents, idempotency_key=idempotency_key
+    )
+    return res.id
+
+
+@activity.defn
+async def send_reply(order_id: str, credit_id: str) -> None:
+    await mailer.send(...)
+```
+
+```python title="py/atlas/temporal/workflow.py — deterministic, replayable"
+@workflow.defn
+class RefundWorkflow:
+    @workflow.run
+    async def run(self, order_id: str) -> str:
+        opts = dict(
+            start_to_close_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(
+                initial_interval=timedelta(seconds=1),
+                backoff_coefficient=2.0,
+                maximum_attempts=5,
+            ),
+        )
+        order = await workflow.execute_activity(get_order, order_id, **opts)
+
+        # Deterministic on replay: the workflow ID is stable for this execution.
+        key = f"{workflow.info().workflow_id}:issue_credit"
+
+        credit_id = await workflow.execute_activity(
+            issue_credit, args=[order_id, order.total_cents, key], **opts
+        )
+        await workflow.execute_activity(
+            send_reply, args=[order_id, credit_id], **opts
+        )
+        return credit_id
+```
+
+```python title="py/atlas/temporal/worker.py — the process you run"
+client = await Client.connect("localhost:7233")
+worker = Worker(
+    client,
+    task_queue="refunds",
+    workflows=[RefundWorkflow],
+    activities=[get_order, issue_credit, send_reply],
+)
+await worker.run()
+
+# …and, from anywhere, to start one:
+handle = await client.start_workflow(
+    RefundWorkflow.run,
+    order_id,
+    id=f"refund-{order_id}",  # dedupes: one refund per order
+    task_queue="refunds",
+)
+```
+
+</Tab>
+</Tabs>
+
+Four things in there are doing more than they look like.
+
+**The workflow reads like ordinary code.** Three awaits in a row. No state machine, no resume handler, no persistence calls. That is the entire pitch, and it is why the mental model is worth forty minutes.
+
+**`proxyActivities` / `execute_activity` is the boundary.** It looks like a function call and is a durable request: schedule the activity, record the result, hand it back. Every effect crossing that line is journalled.
+
+**The retry policy is configuration.** You attach it to the activity call rather than writing it as a loop, and it applies to every attempt, including ones that happen on a different worker after a crash.
+
+**`workflowId` is a deduplication key.** Starting `refund-4921` twice does not start two refunds. The second call finds the existing execution. That is [idempotency](/book/tools/idempotency) arriving one level up, and it is free.
+
+## What happens when it crashes
+
+The worker dies between `issueCredit` and `sendReply`. Nothing is lost, and nothing about the recovery is your code:
+
+1. The worker stops heartbeating. The server notices.
+2. The server redelivers the workflow task to **another worker on the same task queue**.
+3. That worker re-executes `refundWorkflow` from the first line.
+4. `getOrder` returns from history, not called. `issueCredit` returns `cr_…` from history, **not called**. No second refund.
+5. Execution reaches `sendReply`, which is not in history, so it runs for real.
+6. The workflow completes.
+
+The crash did not repeat the refund, because the effect's *result* was journalled, not because anyone wrote recovery logic. That is [the distinction Part VII drew](/book/langgraph/persistence) between resuming a graph and not re-running a completed effect, arriving as a mechanism you can point at.
+
+Note the scope, because it is the half people over-read: this defeats *replay* duplication. An activity that timed out with no response is a different problem. The platform cannot know whether it landed, so it retries, and only [an idempotency key](/book/tools/idempotency) stops that from becoming a second refund.
+
+## Event history, concretely
+
+The history for that execution is a list you can read:
+
+```
+   1  WorkflowExecutionStarted        refundWorkflow("4921")
+   2  ActivityTaskScheduled           getOrder
+   3  ActivityTaskCompleted           {"totalCents": 420000, …}
+   4  ActivityTaskScheduled           issueCredit
+   5  ActivityTaskCompleted           "cr_8823_1"
+   6  ActivityTaskScheduled           sendReply
+   …
+```
+
+Inputs, results, retries, timers, in order, durable. It is the audit log you were going to build from application logs, and it exists because replay needs it: [the by-product that keeps paying](/book/observability/replay-debugging).
+
+<Aside type="note" title="You do not replay the whole history on every step">
+The obvious worry: a workflow with ten thousand events re-runs from the top on every task, forever?
+
+No. After a worker handles a workflow task it keeps that execution's state in memory, and the server routes subsequent tasks for it back to the same worker through a **sticky task queue**, bypassing replay entirely. Full replay is the **cold path**: a crash, a restart, a worker that has never seen this execution.
+
+Worth knowing before you size anything, because the naive reading makes long workflows look quadratic and they are not.
+</Aside>
+
+## Task queues are routing, and also a deploy unit
+
+A task queue is just a name, agreed between whoever starts work and whoever performs it. Workers poll the queues they were configured for and nothing else. Three consequences follow immediately:
+
+- **Scaling** is adding workers polling the same queue.
+- **Isolation** is giving slow or noisy work its own queue, so it cannot starve everything else.
+- **Deployment** is per queue. The workers on `refunds` can ship independently of the workers on `reports`.
+
+Two 2026 additions matter here, both now generally available: **task-queue priority**, so the server dispatches urgent work first, and **fairness**, which distributes compute proportionally across tenants or workload types so one heavy customer cannot starve the rest. That is the multi-tenant knob, and it belongs to [Part XI's scaling chapter](/book/durability/scale-and-qos). But it is worth knowing it exists at the queue level rather than being something you build.
+
+## Waiting is a line of code
+
+```ts
+await sleep('3 days');
+```
+
+That is a durable timer recorded in history. No process is held, no thread blocks, no row in a table with a cron polling it. The workflow is not running at all. It is a row in the server's storage with a timer against it, and in three days a worker picks it up and continues on the next line.
+
+This is the mechanism that makes [an approval that waits for a person](/book/human-in-the-loop/approval-gates) cost nothing while it waits, and it is the single feature most often reimplemented badly by hand.
+
+## Deploying while workflows are running
+
+The obvious question, and the one the previous chapter listed as a real cost: what happens to an execution that started on last week's code when you deploy?
+
+**Worker Versioning is now generally available**, and it answers this directly. Temporal pins a running workflow to the worker version that started it, so a deploy cannot break executions already in flight, and rollouts can move across versions progressively. It replaces the older discipline of writing branching statements into workflow code to keep old and new paths compatible.
+
+That materially reduces the cost this book flagged one chapter ago, which is worth saying plainly rather than leaving the earlier warning to stand unqualified.
+
+## What you now know, and what you do not
+
+**You know:** the six nouns, the workflow/activity split and the test for it, how a crash recovers, what is in a history, how routing and scaling work, and how to wait for three days.
+
+**You do not yet know:** the determinism rules in detail and how to configure retries and timeouts properly, which is [the next chapter](/book/durable-execution/determinism-and-retries); how to get data into a running execution and answers out of it, and how to decompose a large one, which is [the chapter after](/book/durable-execution/signals-and-children).
+
+That is enough to read the rest of Part X, and enough to run [the dev server from Setup](/book/setup) and watch a refund survive you killing the worker mid-run. That is the exercise, and it takes about four minutes.
+
+## Atlas, still waiting
+
+Nothing above mentioned a model, and that was the point. The refund workflow is a plain program that happens to be crash-proof.
+
+Atlas's version has one difference: a step in the middle whose output is not a function of its input. That difference is the entire subject of [Part XI](/book/durability/agent-as-workflow). The nouns will not change.
+
+---
+
+Next: [Determinism, Retries, and Timers](/book/durable-execution/determinism-and-retries). The rules that make replay work, and the retry policies you will actually configure.
+
+## Takeaways
+
+- Six nouns: workflow, activity, worker, task queue, event history, replay. Each exists because of the one before it.
+- Temporal never runs your code. The server stores history and dispatches tasks; workers are processes you run, reaching your data.
+- The only modelling decision you make repeatedly: if it could return a different answer on a second call, it is an activity. Database reads included.
+- The workflow reads as ordinary sequential code. No state machine, no resume handler, no persistence calls.
+- `proxyActivities` / `execute_activity` is the durable boundary: the call is scheduled, the result is journalled, the value comes back.
+- Retry policy is configuration on the activity call and survives crashes, because it is enforced by the server rather than by a loop in your process.
+- `workflowId` deduplicates: starting the same ID twice does not start a second execution.
+- On recovery a different worker re-runs the function from line one; journalled activities return their recorded results and never re-execute. The effect happened once without any recovery code.
+- The event history is inputs, results, retries, and timers in order: the audit log you were going to build, produced as a by-product of replay.
+- Full replay is the cold path. Sticky task queues keep hot executions in memory, so long workflows do not re-run their history on every step.
+- Task queues are routing, scaling, isolation, and the deploy unit. Priority and fairness are now available at the queue level.
+- `sleep('3 days')` is a durable timer. Nothing is held open, and this is what makes long human waits cheap.
+- Worker Versioning is GA and pins in-flight executions to the version that started them, which removes most of the deploy-mid-run problem flagged in the previous chapter.

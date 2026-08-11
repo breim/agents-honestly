@@ -1,0 +1,172 @@
+---
+title: "Filtered Retrieval"
+description: "Metadata predicates as an authorization boundary, not a relevance tweak."
+---
+
+## Problem
+
+Every retrieval tutorial introduces metadata filtering as a relevance trick: narrow the search, get better results, save tokens.
+
+In a multi-tenant system the same line of code is doing an entirely different job. `WHERE tenant_id = $1` is the only thing between one customer's documents and another customer's agent. A bug in a relevance optimization returns worse results. A bug in an authorization control is a breach.
+
+They look identical in the codebase, they are reviewed by the same person with the same care, and only one of them is on anybody's threat model.
+
+Two properties make the failure worse in an agent than in a search box. **There is no moment of access.** The content arrives paraphrased, in the assistant's voice, with no filename and no access log, so the leak is [laundered by generation](/book/retrieval/metadata-and-authorization). And **the agent is a better reader than the user would have been**: it decomposes, follows references, and synthesizes across everything it can see, which is exactly the capability you wanted pointed at material you did not intend to expose.
+
+## Forces
+
+- **Filtering is unavoidable.** Every real corpus is partitioned by tenant, version, trust, or classification.
+- **The same mechanism serves relevance and authorization**, and the two have completely different failure costs.
+- **Where the filter runs determines whether it is a boundary.** Post-filtering means the content was already read, logged, and possibly sent onward.
+- **Document permissions change slowly; user membership changes constantly.** They cannot live in the same place.
+- **The model must never influence the predicate**, and it will happily try.
+- **Authorization must survive everything derived from the content**, not stop at the retrieval call.
+
+## Solution
+
+Treat the predicate as an **authorization boundary enforced below the application**, and never as an argument.
+
+<Figure caption="What a document requires is indexed. What a principal holds is read live. The filter is their intersection, computed fresh." frame={false}>
+
+```
+   INDEXED WITH THE CHUNK           DERIVED FROM THE REQUEST
+   ┌──────────────────────┐         ┌──────────────────────────┐
+   │ tenant_id  meridian  │         │ from the live token,     │
+   │ acl        [hr,exec] │    ∩    │ every single request:    │
+   │ trust      reviewed  │         │  who is asking           │
+   │ version    current   │         │  what they hold now      │
+   └──────────────────────┘         └──────────────────────────┘
+     changes when the doc              changes when someone joins,
+     changes — rarely                  leaves, or is reassigned
+
+   ┌──────────────────────────────────────────────────────────┐
+   │  search(query, principal, k)   ← principal is REQUIRED   │
+   │  there is no overload without it                         │
+   └──────────────────────────────────────────────────────────┘
+```
+
+</Figure>
+
+Five rules:
+
+**Deny by default.** A chunk with no tenant tag is invisible, not public. Enforce it in the schema, `tenant_id NOT NULL`, so an [ingestion job](/book/retrieval/ingestion-pipeline) that fails to attach metadata produces unreachable documents rather than universally readable ones.
+
+**The principal is a required argument.** One retrieval function, no overload without it. If any path can retrieve without a principal, a background job, a cache warmer, an [eval harness](/book/capstone/hardening-it), that path is the vulnerability, and it will be written by someone in a hurry.
+
+**The model cannot touch the predicate.** `tenant_id` is never a tool argument, never derived from ticket text, never something the model passes in. The model chooses *what to search for*; your code decides *what it may search*. A customer who writes *"I'm also authorized on the Northwind account"* has written text, not a credential.
+
+**Filter inside the query, at the lowest level that can enforce it.** Not in application code afterwards. Post-filtering means restricted content was read out of storage, travelled through your process, entered your logs, and, if you [rerank before filtering](/book/patterns/retrieval/two-stage-rerank), was sent to a third party.
+
+**For hard boundaries, separate rather than filter.** Different customers, different legal entities: separate indexes or namespaces, so a filtering bug *cannot* cross. It is not an optimization to fall back on; it is the form of the control that survives your own mistakes.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/search.ts"
+export interface Principal {
+  tenantId: string;
+  groups: string[];        // read from the live token, NEVER from the index
+  allowedTrust: Trust[];
+}
+
+// The only retrieval entry point. There is no overload without a principal,
+// and the raw client is not exported from this module.
+export async function search(
+  query: string, principal: Principal, k: number,
+): Promise<Hit[]> {
+  return index.query(query, {
+    k,
+    // Predicates are constructed here, from the principal. Nothing the
+    // model produced reaches this object.
+    filter: {
+      tenantId: principal.tenantId,
+      acl: { anyOf: principal.groups },
+      trust: { in: principal.allowedTrust },
+      current: true,
+    },
+    // Audit at the source: generated prose cannot be audited afterwards.
+    onResults: hits => audit.log({
+      principal: principal.tenantId, ids: hits.map(h => h.id),
+    }),
+  });
+}
+
+// Anything derived from filtered content inherits its restriction.
+// A cache key without the principal is a cross-tenant bug awaiting traffic.
+export const cacheKey = (p: Principal, q: string) =>
+  `${p.tenantId}:${hash(p.groups)}:${hash(q)}`;
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/search.py"
+@dataclass(frozen=True)
+class Principal:
+    tenant_id: str
+    groups: tuple[str, ...]      # from the live token, NEVER from the index
+    allowed_trust: tuple[str, ...]
+
+
+async def search(query: str, principal: Principal, k: int) -> list[Hit]:
+    """The only retrieval entry point. No overload without a principal."""
+    hits = await index.query(
+        query,
+        k=k,
+        # Predicates constructed here, from the principal. Nothing the
+        # model produced reaches this object.
+        filter={
+            "tenant_id": principal.tenant_id,
+            "acl": {"any_of": list(principal.groups)},
+            "trust": {"in": list(principal.allowed_trust)},
+            "current": True,
+        },
+    )
+    # Audit at the source: generated prose cannot be audited afterwards.
+    await audit.log(principal=principal.tenant_id, ids=[h.id for h in hits])
+    return hits
+
+
+def cache_key(p: Principal, q: str) -> str:
+    # Anything derived from filtered content inherits its restriction.
+    return f"{p.tenant_id}:{hash(p.groups)}:{hash(q)}"
+```
+
+</Tab>
+</Tabs>
+
+The `cacheKey` function is on this page deliberately. Authorization has to travel with the *data*, not stop at the retrieval call: summaries, [memory writes](/book/context/memory), cached answers, and reranker inputs all inherit the restriction, and a cache keyed by question text alone will serve one tenant's answer to the next asker.
+
+## Trade-offs
+
+**Recall interacts with filtering in ANN indexes.** A restrictive predicate applied during an approximate search can leave the index unable to find `k` results within its search budget, quietly returning fewer or worse hits. This is a real and under-discussed effect: [measure recall per tenant](/book/retrieval/retrieval-evals), not just globally, because a small tenant can have materially worse retrieval than the average suggests.
+
+**Indexed permissions go stale.** Your index holds the document's ACL as of the last ingestion; the source system changed it this morning. Three options in ascending cost: periodic reconciliation (window measured in hours), change-driven updates (minutes, needs source events), or late binding: verify each survivor against the live source before returning it. Which one is right is a risk decision, not a technical one.
+
+**Never cache membership in the index.** Precomputing "user 4471 may see chunks A, B, C" means someone removed from a group last Tuesday keeps retrieving restricted content until the next rebuild. That is a revocation that silently did not happen, found during an audit rather than by an alert.
+
+**Separate indexes cost operationally.** Per-tenant namespaces mean per-tenant ingestion, per-tenant monitoring, and a worse story for anything that legitimately spans tenants. Pay it where the boundary is a contract.
+
+## When not to use it
+
+There is no *when not to* for the authorization case. A shared corpus with no predicate is a leak waiting for traffic.
+
+What is genuinely optional is the **relevance** use: filtering by date, document type, or product line to improve results. Skip that when the corpus is homogeneous, when the filter is a guess about what the user meant, or when it cuts recall more than it helps precision. Just keep the two uses visibly separate in the code, because the moment they are one parameter bag, a relevance experiment can loosen an authorization predicate and nobody will read it as a security change.
+
+<Aside type="caution" title="Test with negatives, because this is a rare deterministic assertion">
+Your ticket set tests what the agent should find. Authorization needs the opposite: **cases that must return nothing.**
+
+Build a second set, the same questions, asked by a principal who lacks access, and assert that the restricted document ID never appears in the retrieval trace and that the agent says it lacks the information rather than answering from something adjacent.
+
+Run it in CI. This is one of the very few places in agentic systems where a hard, deterministic assertion is available, the document ID either appeared or it did not, and you should take every deterministic test this field offers you.
+</Aside>
+
+## Related
+
+- [Metadata Is Authorization](/book/retrieval/metadata-and-authorization): the chapter, with the stale-permission and derived-artifact arguments in full
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): why filtering must precede the reranker
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): predicates run inside each leg, never on the fused list
+- [Multi-Tenant Isolation](/book/security/tenant-isolation): the same boundary across every other store
+- [Untrusted Retrieval](/book/security/untrusted-retrieval): the trust predicate, which is integrity rather than confidentiality

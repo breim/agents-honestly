@@ -1,0 +1,190 @@
+---
+title: "Plan Then Execute"
+description: "Separate the deciding step from the doing steps so you can inspect the plan."
+---
+
+## Problem
+
+In an interleaved loop, the agent decides its next step *after* reading the last tool result. That is the whole point of [ReAct](/book/patterns/control/react-loop), and it is also three problems.
+
+**Nobody can see what it is about to do.** There is no moment where the intended sequence exists as an object. A reviewer can approve one call at a time, which means approving `issue_credit` without knowing that `send_reply` is coming next.
+
+**The plan is hostage to what it reads.** A retrieved chunk saying *"for this category, also issue a goodwill credit"* arrives as an observation, and the next decision is made by a model that has just read it. [The control flow is attacker-influenced](/book/security/prompt-injection).
+
+**Every step costs a full round trip.** Six sequential decisions is six model calls carrying a growing transcript, even when the six steps had no dependency on each other.
+
+## Forces
+
+- **Some tasks decompose in advance**, the steps are knowable from the request alone.
+- **A plan is inspectable; a loop is not.** An object can be shown, approved, diffed, and stored.
+- **Fixing the plan before reading untrusted data removes control-flow hijacking** as a category.
+- **Rigid plans fail on tasks that genuinely need to adapt** to what they find.
+- **Planning is one more model call** whose output can be wrong in a way that dooms everything after it.
+- **A wrong plan is worse than a wrong step**, because the steps execute faithfully.
+
+## Solution
+
+**One planning call produces a validated plan object; a deterministic executor runs it.** Data flows into the steps; nothing that arrives during execution changes which steps run.
+
+<Figure caption="The plan is an artifact: inspectable, approvable, storable. Observations fill arguments; they never add steps." frame={false}>
+
+```
+   request
+      │
+      ▼
+   ┌─────────────────────────────────────────────────┐
+   │  PLAN  (one model call, structured output)      │
+   │   1. get_order(4921)                            │
+   │   2. search_policies("damaged pallet freight")  │
+   │   3. compute_credit(from: 1, policy: 2)         │
+   │   4. issue_credit(order: 1, amount: 3)          │
+   │   5. send_reply(ticket, draft)                  │
+   └──────────────────┬──────────────────────────────┘
+                      │
+        ┌─────────────┼─────────────┐
+        ▼             ▼             ▼
+   validate        show to      store with
+   (schema,        a human      the run
+   tools exist,    (tier ≥ 1)   (audit)
+   scope ok)
+                      │
+                      ▼
+   ┌───────────────────────────────────────────────┐
+   │  EXECUTE  (deterministic — code, not a model) │
+   │   results feed later steps' ARGUMENTS         │
+   │   nothing read here can add or reorder steps  │
+   └───────────────────────────────────────────────┘
+```
+
+</Figure>
+
+Four rules:
+
+**The plan is a validated object, not prose.** A [schema](/book/foundations/structured-output) with a fixed step vocabulary, checked before anything runs: every named tool exists, every reference points at an earlier step, and every argument is within [run scope](/book/patterns/security/tool-permission-boundary). A plan that fails validation is rejected and replanned, at zero cost.
+
+**Observations fill arguments; they never change the sequence.** Step 3 may compute an amount from step 1's result. Step 3 may not decide that step 4 should be skipped, or that a sixth step is needed. That restriction is what makes the plan meaningful.
+
+**Approve the plan, not the steps.** A reviewer seeing all five steps can judge the *shape* of what is about to happen, which is a decision a person can actually make, unlike five sequential yes/no prompts with no visibility of what follows.
+
+**Replan explicitly, with a budget.** Real tasks hit surprises. Allow a bounded number of replans, each producing a new validated plan that is shown and recorded, rather than letting the executor improvise. Two replans is a lot; unlimited is an interleaved loop with extra ceremony.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/plan.ts"
+const Step = z.object({
+  id: z.number(),
+  tool: z.enum(TOOL_NAMES),                     // closed vocabulary
+  args: z.record(z.unknown()),
+  dependsOn: z.array(z.number()).default([]),   // references to earlier ids
+});
+const Plan = z.object({ steps: z.array(Step).max(10), rationale: z.string() });
+
+export async function makePlan(req: Request, ctx: RunContext) {
+  const plan = await model.structured({ schema: Plan, system: PLAN_PROMPT, input: req });
+
+  // Validated BEFORE anything runs. A bad plan costs one model call.
+  for (const s of plan.steps) {
+    if (s.dependsOn.some(d => d >= s.id)) throw new InvalidPlan('forward reference');
+    const verdict = authorize({ tool: s.tool, args: s.args }, ctx.scope);
+    if (!verdict.ok) throw new InvalidPlan(verdict.reason);
+  }
+  return plan;
+}
+
+export async function execute(plan: Plan, ctx: RunContext) {
+  const results = new Map<number, unknown>();
+
+  // Deterministic. This function contains no model call, which is what
+  // makes the executed sequence equal to the approved one.
+  for (const step of plan.steps) {
+    const args = resolveRefs(step.args, results);   // observations fill ARGS
+    results.set(step.id, await dispatch({ tool: step.tool, args }, ctx));
+    // …and nothing here may append to plan.steps.
+  }
+  return results;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/plan.py"
+class Step(BaseModel):
+    id: int
+    tool: Literal[*TOOL_NAMES]              # closed vocabulary
+    args: dict
+    depends_on: list[int] = []              # references to earlier ids
+
+
+class Plan(BaseModel):
+    steps: list[Step] = Field(max_length=10)
+    rationale: str
+
+
+async def make_plan(req: Request, ctx) -> Plan:
+    plan = await model.structured(schema=Plan, system=PLAN_PROMPT, input=req)
+
+    # Validated BEFORE anything runs. A bad plan costs one model call.
+    for s in plan.steps:
+        if any(d >= s.id for d in s.depends_on):
+            raise InvalidPlan("forward reference")
+        ok, reason = authorize(s.tool, s.args, ctx.scope)
+        if not ok:
+            raise InvalidPlan(reason)
+    return plan
+
+
+async def execute(plan: Plan, ctx) -> dict[int, object]:
+    results: dict[int, object] = {}
+    # Deterministic. No model call here — which is what makes the executed
+    # sequence equal to the approved one.
+    for step in plan.steps:
+        args = resolve_refs(step.args, results)     # observations fill ARGS
+        results[step.id] = await dispatch(step.tool, args, ctx)
+        # …and nothing here may append to plan.steps.
+    return results
+```
+
+</Tab>
+</Tabs>
+
+`execute` containing no model call is the load-bearing property. The moment a model is consulted inside the loop, the executed sequence can diverge from the approved one, and the plan stops being a description of what happened.
+
+## Trade-offs
+
+**Rigidity is the cost, and it is real.** A plan that assumed the order exists breaks when it does not. Replanning recovers, and each replan is a full planning call plus the discarded work, so a task that replans three times is slower and more expensive than an interleaved loop would have been.
+
+**Planning quality is a single point of failure.** One bad decomposition produces five faithful steps answering the wrong question, [the largest family in the multi-agent failure taxonomy](/book/multi-agent/when-not-to), and it applies here for the same reason: the plan is fixed at the moment of maximum ignorance.
+
+**It suits some tasks and not others.** Well-specified requests with knowable steps plan well. Open-ended investigation does not, because the second question depends on the first answer.
+
+**Parallelism is a genuine bonus.** With `dependsOn` recorded, independent steps run concurrently, which an interleaved loop cannot do, since it does not know step 4 exists until step 3 returns.
+
+## When not to use it
+
+**When the next step genuinely depends on the last result.** Debugging, investigation, anything where the finding determines the follow-up. Forcing a plan produces a plan full of guesses.
+
+**When the plan is always the same.** If every run produces the same five steps, that is [a workflow](/book/workflows/the-determinism-test): write it as code and skip the planning call entirely.
+
+**When replanning would be constant.** If most runs replan, you have paid for planning and got a loop. Measure the replan rate; above roughly a third, the pattern is the wrong shape for the task.
+
+**As the sole injection defense on a high-authority path.** It removes *control-flow* hijacking and not data manipulation. A document that lies still produces a wrong answer through a legitimate plan.
+
+<Aside type="note" title="This is also a security pattern, and that is not a coincidence">
+Plan-then-execute is one of the six [published design patterns for resisting prompt injection](/book/security/prompt-injection), and the reason is structural: if the plan is fixed before untrusted data is read, no retrieved text can add a step, remove a step, or reorder them.
+
+That converts the attack surface from *what can this text make the agent do* to the much narrower *what can this text make the arguments be*, which [argument scoping](/book/patterns/security/tool-permission-boundary) already bounds.
+
+The honest limit, stated in the same work: **data manipulation survives.** An attacker who cannot add `send_reply` to the plan may still influence what the reply says. Fixing the control flow is a real gain and it is not the whole defense, which is why the [taint ceiling](/book/security/prompt-injection) still applies to a planned run exactly as it does to a loop.
+</Aside>
+
+## Related
+
+- [ReAct Loop](/book/patterns/control/react-loop): the interleaved alternative, and when adaptivity is worth its cost
+- [Router](/book/patterns/control/router): deciding the path before deciding the steps
+- [Deterministic Rails](/book/patterns/control/deterministic-rails): the general principle this is an instance of
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the replan budget, and every other cap
+- [Prompt Injection](/book/security/prompt-injection): why fixing the plan early is a security property

@@ -1,0 +1,12 @@
+{
+  "title": "Failure Patterns",
+  "pages": [
+    "non-retryable-model-errors",
+    "fast-slow-retries",
+    "delayed-retry-jitter",
+    "fallback-model-ladder",
+    "tool-circuit-breaker",
+    "poison-input-quarantine",
+    "partial-result-return"
+  ]
+}

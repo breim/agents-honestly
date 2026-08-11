@@ -1,0 +1,187 @@
+---
+title: "Token Budget Enforcement"
+description: "A hard ceiling per request, per user, and per tenant."
+---
+
+## Problem
+
+Cost controls that live on a dashboard are reports. The invoice arrives thirty days late, aggregated, with no way to ask which change caused it, and by then the run that spent forty dollars on an eight-dollar ticket happened four hundred times.
+
+Three failures need three different ceilings, and a single global monthly cap catches none of them.
+
+**One pathological run.** A loop that searches, rephrases, and searches again until something stops it. A per-run cap is the only thing that bounds it, and a monthly ceiling will not notice one run.
+
+**One user or script.** A misconfigured integration retrying in a tight loop, or an internal tool nobody metered. Visible in a daily total, by which point it has run all day.
+
+**One tenant consuming everyone's capacity.** Which is [a fairness problem](/book/patterns/scale/tenant-fairness) *and* a margin problem: a customer whose agent usage exceeds their subscription is unprofitable, and nothing in a global number says which one.
+
+## Forces
+
+- **The invoice is a lagging indicator** by a month, and aggregated past usefulness.
+- **The three scopes fail independently**: bounding one says nothing about the others.
+- **A hard stop mid-run wastes everything spent**, which argues for degrading first.
+- **Caps sized for the average break the tail**, and the rare hard request is the one that needed the headroom.
+- **Enforcement must be in the call path**, not in a nightly job.
+- **The cap has to be derived from value**, or it is an arbitrary number someone will raise under pressure.
+
+## Solution
+
+**Three nested ceilings, checked before every call, each with a degrade rung before its hard stop.**
+
+<Figure caption="Three scopes, three time horizons, three owners. Each has a soft rung, because a hard stop wastes what was already spent." frame={false}>
+
+```
+   SCOPE     WINDOW       SIZED FROM              AT 70%        AT 100%
+   ──────────────────────────────────────────────────────────────────────
+   RUN       one run      the value of THIS run   degrade       partial
+                          (ticket margin × 15%)   cheap model   result +
+                                                  tight retrieval escalate
+   ──────────────────────────────────────────────────────────────────────
+   PRINCIPAL rolling 24h  expected daily usage    warn owner    reject new
+             (user/key)   × a burst factor                      runs, 429
+   ──────────────────────────────────────────────────────────────────────
+   TENANT    billing      plan entitlement        notify        reject +
+             period                               account team  escalate to
+                                                                 sales, not
+                                                                 to on-call
+   ──────────────────────────────────────────────────────────────────────
+
+   checked BEFORE the call — rejecting at the door is free;
+   a run that starts and cannot finish spent money for nothing
+```
+
+</Figure>
+
+Four rules:
+
+**Derive the run cap from what the run is worth.** [Cost per resolved outcome against margin on one](/book/production/cost-engineering) is the frame: a ticket worth eight dollars gets a cap derived from eight dollars. A number picked because it felt safe is a number that gets raised the first time it fires.
+
+**Degrade before you stop.** At the soft threshold, switch to a cheaper model, narrow retrieval, and drop speculative calls. A hard stop produces a truncated run at the worst possible moment; a degrade produces a cheaper completion: [the same shape as a fallback](/book/patterns/failure/fallback-model-ladder), applied to money.
+
+**Count everything the run spends.** Retries, [reflection passes](/book/patterns/control/reflection), critic calls, abandoned branches, and [cascade escalations](/book/patterns/cost/model-cascade) all bill at full price. A budget that counts only productive turns is not a budget.
+
+**Route each ceiling to its right owner.** A run cap fires at the [escalation ladder](/book/patterns/control/escalation-ladder). A principal cap alerts whoever owns that key. A tenant cap is a commercial conversation, and paging on-call for a customer exceeding their plan trains people to ignore the pager.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/cost/budgets.ts"
+export interface Budgets {
+  run:       { capMicros: number; spent: number; softRatio: number };
+  principal: { capMicros: number; spent: number };   // rolling 24h
+  tenant:    { capMicros: number; spent: number };   // billing period
+}
+
+export type Verdict =
+  | { action: 'proceed' }
+  | { action: 'degrade'; scope: string }
+  | { action: 'stop'; scope: string; route: 'escalate' | 'reject' | 'commercial' };
+
+export function checkBudgets(b: Budgets, estimateMicros: number): Verdict {
+  // Widest scope first: a tenant over their plan should not consume more,
+  // whichever run happens to be next.
+  if (b.tenant.spent + estimateMicros > b.tenant.capMicros)
+    return { action: 'stop', scope: 'tenant', route: 'commercial' };
+
+  if (b.principal.spent + estimateMicros > b.principal.capMicros)
+    return { action: 'stop', scope: 'principal', route: 'reject' };
+
+  if (b.run.spent + estimateMicros > b.run.capMicros)
+    return { action: 'stop', scope: 'run', route: 'escalate' };
+
+  // Degrade before the wall. A truncated run wastes everything spent.
+  if (b.run.spent > b.run.capMicros * b.run.softRatio)
+    return { action: 'degrade', scope: 'run' };
+
+  return { action: 'proceed' };
+}
+
+// Derived per run from what the run is worth — not a global constant.
+export const runCapFor = (ticket: Ticket) =>
+  Math.floor(ticket.marginCents * 10_000 * 0.15);   // 15% of margin
+
+// Counts EVERYTHING: retries, reflection, critics, abandoned branches.
+export function charge(b: Budgets, micros: number, productive: boolean) {
+  b.run.spent += micros; b.principal.spent += micros; b.tenant.spent += micros;
+  metrics.inc('cost.micros', micros, { productive });   // unproductive share
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/cost/budgets.py"
+def check_budgets(b: Budgets, estimate_micros: int) -> tuple[str, str, str | None]:
+    # Widest scope first: a tenant over plan should not consume more,
+    # whichever run happens to be next.
+    if b.tenant.spent + estimate_micros > b.tenant.cap_micros:
+        return "stop", "tenant", "commercial"
+
+    if b.principal.spent + estimate_micros > b.principal.cap_micros:
+        return "stop", "principal", "reject"
+
+    if b.run.spent + estimate_micros > b.run.cap_micros:
+        return "stop", "run", "escalate"
+
+    # Degrade before the wall. A truncated run wastes everything spent.
+    if b.run.spent > b.run.cap_micros * b.run.soft_ratio:
+        return "degrade", "run", None
+
+    return "proceed", "", None
+
+
+def run_cap_for(ticket) -> int:
+    # Derived per run from what the run is worth — not a global constant.
+    return int(ticket.margin_cents * 10_000 * 0.15)      # 15% of margin
+
+
+def charge(b: Budgets, micros: int, productive: bool) -> None:
+    # Counts EVERYTHING: retries, reflection, critics, abandoned branches.
+    b.run.spent += micros
+    b.principal.spent += micros
+    b.tenant.spent += micros
+    metrics.inc("cost.micros", micros, productive=productive)
+```
+
+</Tab>
+</Tabs>
+
+Checking the widest scope first matters. A tenant over their plan should not be able to consume more capacity just because the next run happens to be small and cheap: the ceiling that binds is the one with the broadest claim.
+
+## Trade-offs
+
+**Estimates drive the decision.** Charging an estimate before the call and reconciling after is the only way to check a budget *before* spending. A workflow whose estimates are consistently low overruns systematically until reconciliation catches up: estimate from the workflow's historical p75, not from a constant.
+
+**Caps sized for the average break the tail.** The rare hard ticket legitimately needs more, and it is the one a p95-derived cap cuts off. Watch the cap-hit rate by route and treat a rising one as a signal to investigate rather than a number to raise reflexively.
+
+**Distributed counters cost a hop or leak.** Per-process counters allow N times the intended spend across N workers. A shared store is correct and adds latency to every call; sharding tenants across workers is cheaper and less exact.
+
+**Rejecting a tenant is a business decision.** Hard-stopping a paying customer mid-billing-period may be right and it is not on-call's call. Route it to the account team with enough lead time that the conversation happens before the wall.
+
+## When not to use it
+
+**When cost is genuinely immaterial.** A low-volume internal tool does not need three ceilings. The [run cap alone](/book/patterns/control/bounded-autonomy) still earns its place, because it bounds the pathological loop.
+
+**When value is not per-run.** [A batch job](/book/patterns/cost/batch-api-offload) has a job-level budget rather than a per-item one; applying a per-run cap to 340,000 items is 340,000 individually reasonable numbers and no ceiling on the total.
+
+**When the tenant scope has no commercial meaning.** Internal single-tenant deployments have nobody to bill, so the tenant ceiling is a capacity control and belongs with [priority shares](/book/patterns/scale/priority-queues) instead.
+
+**As a substitute for the cheaper levers.** [Cutting turns and shrinking what is re-sent](/book/production/cost-engineering) reduce cost with no quality risk. A budget stops the bleeding; it does not make the system efficient.
+
+<Aside type="note" title="Enforce here, but do not diagnose here">
+A budget stops spend. It cannot tell you *why* it was high, which is the question anyone hits the ceiling immediately asks.
+
+That answer needs [per-run, per-tenant, per-feature, per-node attribution](/book/observability/cost-accounting), recorded at the [model gateway](/book/production/reference-architecture), because provider billing has no tagging model and the invoice cannot be decomposed after the fact.
+
+The two work as a pair and neither substitutes for the other. Attribution without enforcement is a report that explains the invoice you already received; enforcement without attribution is a wall you hit with no idea which change moved you toward it. Build the attribution first: it is the prerequisite for choosing any of these ceilings honestly.
+</Aside>
+
+## Related
+
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the run ceiling among the other four bounds
+- [Token and Cost Accounting](/book/observability/cost-accounting): the attribution that makes these numbers choosable
+- [Tenant Fairness](/book/patterns/scale/tenant-fairness): capacity sharing, which the tenant ceiling complements
+- [Partial Result Return](/book/patterns/failure/partial-result-return): what a run produces when its cap fires
+- [Cost Engineering](/book/production/cost-engineering): the levers to pull before reaching for a ceiling

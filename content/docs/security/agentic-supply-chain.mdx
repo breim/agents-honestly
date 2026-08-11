@@ -1,0 +1,181 @@
+---
+title: "The Agentic Supply Chain"
+description: "Models, datasets, tools, MCP servers, remote agents, sandboxes, registries, and update channels that can change the system without changing your code."
+---
+
+No code changed, but Atlas started calling a new tool.
+
+The MCP server added it to its catalogue overnight. The client loaded the updated description at startup. The model considered the new tool relevant and sent customer data to it. The application passed every code review because the change entered through runtime discovery.
+
+Traditional dependency review watches packages and images. An agentic system also loads behavior, instructions, capabilities, and data at runtime.
+
+## Inventory everything that can change behavior
+
+A production manifest needs more than a lockfile.
+
+| Component | Examples | Change channel |
+| --- | --- | --- |
+| Model | Hosted ID, open weights, fine-tune | Provider repoint, registry update |
+| Prompt and graph | System prompt, routing rules | Config store, feature flag |
+| Knowledge | Documents, chunks, ontology | Ingestion and index build |
+| Tool | Function, API adapter, schema | Deploy or remote catalogue |
+| MCP server | Tools, descriptions, auth | Server release or discovery |
+| Remote agent | Agent Card, skills, behavior | Remote release |
+| Runtime | Sandbox image, browser, packages | Image build and base update |
+| Evaluation | Dataset, rubric, judge | Dataset or model update |
+| Observability | Exporter, redaction, vendor | Collector config or SaaS change |
+
+For each component, record owner, source, version or digest, approval status, data access, update mechanism, rollback target, and contingency.
+
+<Figure caption="The build supply chain is only half the system. Runtime discovery and hosted services can change Atlas after deployment." frame={false}>
+
+```text
+BUILD TIME                          RUN TIME
+
+source code                        hosted model
+packages                           model router
+container image                    MCP catalogue
+prompt bundle                      remote agent card
+dataset snapshot                   retrieved documents
+      |                                  |
+      +------------- manifest -----------+
+                         |
+                         v
+                  approved run config
+```
+
+</Figure>
+
+## Pin identity, then monitor behavior
+
+Pinning solves attribution. It does not freeze a hosted service.
+
+Use immutable identities where the supplier provides them:
+
+- package and container digest;
+- model artifact hash or explicit provider version;
+- prompt and graph hash;
+- dataset and index build ID;
+- tool catalogue snapshot;
+- MCP server identity and accepted schema hash;
+- Agent Card hash and protocol version;
+- sandbox image digest.
+
+Then run behavioral canaries. A provider can preserve an identifier while changing infrastructure or implementation. The pin tells you what you asked for. The canary tells you what you received.
+
+## Review dynamic catalogues as code
+
+Tool and agent descriptions influence model behavior. A changed description is executable policy in prose.
+
+At discovery time:
+
+1. fetch into quarantine;
+2. authenticate the source;
+3. canonicalize and hash the catalogue;
+4. diff tools, schemas, descriptions, permissions, and endpoints;
+5. reject new or broadened capabilities by default;
+6. run selection and adversarial evals;
+7. promote the snapshot to an allowlist;
+8. attach its hash to every run.
+
+Do not let the application consume the live discovery response directly. Discovery produces a candidate. Review produces the runtime catalogue.
+
+<Aside type="caution" title="A description-only change can be a security change">
+Changing "reads the current account" to "reads any account by ID" may leave the JSON Schema untouched while expanding what the model will attempt. Diff prose and examples, not only fields.
+</Aside>
+
+## Supplier review follows the data and authority
+
+The same vendor may occupy several roles. A model provider sees prompts. A reranker sees queries and candidate documents. A sandbox host sees code and files. A tracing vendor sees almost the whole run.
+
+For every supplier, answer:
+
+- which data enters and in which region;
+- whether the supplier stores it or trains on it;
+- which subprocessors receive it;
+- which operations the supplier can initiate;
+- how identities and tenant boundaries are enforced;
+- how changes and incidents are reported;
+- which logs and evidence you can obtain;
+- how you export data and leave;
+- what happens during outage, compromise, or termination.
+
+The [NIST Generative AI Profile](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf) recommends use-case-specific supplier assessment, approved provider lists, third-party inventory, procurement review, ongoing monitoring, change records, and contingency for third-party failures. These are engineering inputs because they decide architecture, fallback, telemetry, and data flow.
+
+## Open artifacts need provenance too
+
+Open weights, datasets, adapters, and container images remove a hosted dependency and add an artifact-verification problem.
+
+Require:
+
+- origin and license;
+- cryptographic digest;
+- acquisition date;
+- expected architecture and size;
+- malware and secret scanning where applicable;
+- known evaluation results and limitations;
+- conversion, quantization, or fine-tuning lineage;
+- reproducible build or conversion steps;
+- storage location and access log.
+
+A model file is executable input to a complex runtime. Treating it as inert data understates the parser, loader, custom-code, and dependency paths involved.
+
+## Every critical supplier needs an exit test
+
+An exit plan written in a procurement document is not a tested fallback.
+
+Run these exercises before dependence becomes irreversible:
+
+| Dependency | Exit test |
+| --- | --- |
+| Model provider | Route a representative eval slice to an approved fallback |
+| Embedding model | Rebuild a small index and verify version isolation |
+| Vector service | Export vectors, metadata, and IDs, then restore elsewhere |
+| MCP server | Replace with a recorded adapter for critical tools |
+| Remote agent | Cancel work and route the case to a human or ordinary API |
+| Trace vendor | Export one complete run and reconstruct it locally |
+| Sandbox host | Start the pinned image on the alternate runtime |
+
+Measure time, missing data, quality loss, and authority differences. A fallback that has never handled the current schema or prompt bundle is inventory, not resilience.
+
+## Contain a compromised dependency
+
+Predefine the response:
+
+1. disable the component at the gateway or catalogue allowlist;
+2. stop new runs from selecting it;
+3. decide whether in-flight work continues, pauses, or cancels;
+4. revoke credentials and trust material;
+5. identify affected runs from manifest hashes;
+6. reconcile external effects;
+7. preserve artifacts and supplier communications;
+8. promote the incident into tests before re-enabling.
+
+This is where per-run manifests pay for themselves. Without component hashes, incident scope becomes every run during an approximate time window.
+
+## Atlas, concretely
+
+Atlas records one `supply_manifest_hash` alongside `config_hash`. The supply manifest includes the model route, tool catalogue, MCP servers, carrier Agent Card, corpus build, ontology, sandbox image, eval set, judge, and telemetry exporter.
+
+Remote catalogue changes enter a quarantined snapshot. New tools fail closed. Changed descriptions run tool-selection and injection suites. Meridian performs a quarterly exit test for the primary model, trace vendor, and carrier agent because all three can block support operations.
+
+## References
+
+- [NIST AI RMF Generative AI Profile](https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.600-1.pdf), including value-chain, supplier, procurement, inventory, and contingency actions.
+- [NIST SP 800-161 Rev. 1](https://csrc.nist.gov/pubs/sp/800/161/r1/upd1/final), cybersecurity supply-chain risk management for systems and organizations.
+- [NIST AI RMF Manage 3](https://airc.nist.gov/airmf-resources/playbook/manage/), monitoring and managing third-party AI risks and decommissioning suppliers that exceed tolerance.
+- [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), especially agentic supply-chain vulnerabilities involving models, tools, MCP, A2A, registries, and update channels.
+
+---
+
+Next: [Adversarial Evals and Red Teaming](/book/security/adversarial-evals), testing what a compromised component can induce across the whole trajectory.
+
+## Takeaways
+
+- Inventory every component that can change behavior, including hosted services and runtime discovery.
+- Pin immutable identities for attribution and run behavioral canaries for what pins cannot freeze.
+- Quarantine, diff, evaluate, and approve dynamic catalogues before exposing them to a model.
+- Review suppliers by the data they receive and the authority they can exercise.
+- Record provenance and digests for open weights, datasets, adapters, and images.
+- Test exit plans. A fallback that never handled the current system is not ready.
+- Attach the complete supply manifest to every run so a compromised component has a queryable incident scope.

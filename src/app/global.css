@@ -1,6 +1,191 @@
 @import 'tailwindcss';
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+
+  /* The site is set in Geist Sans, code samples included. The mono slot is remapped rather
+     than left to Tailwind's default stack because fumadocs applies `font-mono` to code
+     itself, and that markup is not ours to edit. The one exception is further down: a
+     diagram drawn out of box characters is on a grid, and a grid needs equal advances. */
+  --font-mono: var(--font-geist-sans);
+
+  /* The landing page reads as an operator's console, printed in true black and white: zero
+     chroma everywhere, no accent hue. Emphasis comes from inversion, weight, and tone (ink
+     vs quiet), the way a monochrome terminal or a printed report actually works — never
+     from color. The dark scope further down (the console's native mood) redefines these
+     same properties. */
+  --color-ground: oklch(0.99 0 0);
+  --color-surface: oklch(0.96 0 0);
+  --color-ink: oklch(0.12 0 0);
+  --color-quiet: oklch(0.4 0 0);
+  --color-rule: oklch(0.12 0 0 / 0.14);
+
+  /* Springs sampled from Apple's damping-ratio + response pairs into linear().
+     Generated: x(t) = 1 - e^(-ζωt)(cos ω_d t + ζω/ω_d · sin ω_d t), ω = 2π/response. */
+  --ease-spring-smooth: linear(
+    0, 0.067, 0.2056, 0.3589, 0.5005, 0.6203, 0.7167, 0.7917, 0.8485, 0.8909, 0.922, 0.9446, 0.9609,
+    0.9725, 0.9808, 0.9866, 0.9907, 0.9935, 0.9955, 0.9969, 0.9979, 0.9985, 0.999, 0.9993, 1
+  );
+  --ease-spring-snappy: linear(
+    0, 0.0695, 0.2122, 0.3686, 0.5118, 0.6319, 0.7276, 0.8014, 0.8568, 0.8977, 0.9275, 0.949,
+    0.9643, 0.9751, 0.9828, 0.9881, 0.9918, 0.9944, 0.9961, 0.9974, 0.9982, 0.9988, 0.9992, 0.9994,
+    1
+  );
+  --ease-spring-drawer: linear(
+    0, 0.0645, 0.2076, 0.3755, 0.5368, 0.6759, 0.787, 0.8705, 0.9296, 0.9689, 0.9933, 1.007, 1.0133,
+    1.0152, 1.0143, 1.0122, 1.0097, 1.0072, 1.0051, 1.0034, 1.0021, 1.0011, 1.0005, 1.0001, 1
+  );
+  --ease-spring-smooth-reverse: linear(
+    0, 0.0007, 0.001, 0.0015, 0.0021, 0.0031, 0.0045, 0.0065, 0.0093, 0.0134, 0.0192, 0.0275,
+    0.0391, 0.0554, 0.078, 0.1091, 0.1515, 0.2083, 0.2833, 0.3797, 0.4995, 0.6411, 0.7944, 0.933, 1
+  );
+
+  --duration-spring-smooth: 642ms;
+  --duration-spring-snappy: 492ms;
+  --duration-spring-drawer: 458ms;
+
+  /* Tracking tightens as size grows; leading loosens as size shrinks. */
+  --text-display: clamp(2.75rem, 6.5vw, 4.5rem);
+  --text-display--line-height: 1.02;
+  --text-display--letter-spacing: -0.035em;
+  --text-display--font-weight: 700;
+
+  --text-title: clamp(1.75rem, 3.2vw, 2.25rem);
+  --text-title--line-height: 1.15;
+  --text-title--letter-spacing: -0.025em;
+  --text-title--font-weight: 700;
+
+  --text-headline: 1.125rem;
+  --text-headline--line-height: 1.4;
+  --text-headline--letter-spacing: -0.008em;
+  --text-headline--font-weight: 600;
+
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.65;
+  --text-body--letter-spacing: -0.002em;
+
+  --text-note: 0.9375rem;
+  --text-note--line-height: 1.6;
+  --text-note--letter-spacing: 0;
+
+  --text-caption: 0.8125rem;
+  --text-caption--line-height: 1.5;
+  --text-caption--letter-spacing: 0.01em;
+
+  /* Overlays inherit spring motion; exits mirror the entry curve. */
+  --animate-fd-dialog-in: fd-dialog-in var(--duration-spring-snappy) var(--ease-spring-smooth);
+  --animate-fd-dialog-out: fd-dialog-out 220ms var(--ease-spring-smooth-reverse);
+  --animate-fd-popover-in: fd-popover-in var(--duration-spring-snappy) var(--ease-spring-smooth);
+  --animate-fd-popover-out: fd-popover-out 180ms var(--ease-spring-smooth-reverse);
+  --animate-fd-sidebar-in: fd-sidebar-in var(--duration-spring-drawer) var(--ease-spring-drawer);
+  --animate-fd-sidebar-out: fd-sidebar-out 240ms var(--ease-spring-smooth-reverse);
+
+  --animate-scroll-edge: scroll-edge linear both;
+
+  @keyframes scroll-edge {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+:root {
+  --material-opacity: 72%;
+  --material-blur: 20px;
+  --material-edge: rgb(255 255 255 / 0.7);
+
+  --viz-1: #2a78d6;
+  --viz-2: #eb6834;
+  --viz-3: #1baf7a;
+  --viz-4: #eda100;
+  --viz-5: #e87ba4;
+  --viz-grid: color-mix(in oklab, var(--color-fd-foreground) 12%, transparent);
+  --viz-empty: color-mix(in oklab, var(--color-fd-foreground) 6%, transparent);
+  --viz-muted: var(--color-fd-muted-foreground);
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --material-opacity: 68%;
+  --material-edge: rgb(255 255 255 / 0.08);
+
+  --viz-1: #3987e5;
+  --viz-2: #d95926;
+  --viz-3: #199e70;
+  --viz-4: #c98500;
+  --viz-5: #d55181;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
 
 html {
   scrollbar-gutter: stable;
@@ -10,3 +195,368 @@ html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
 }
+
+/* Chrome is a floating material layer: content scrolls under it, and a bright
+   top edge reads as light catching the surface. */
+#nd-nav > *,
+#nd-subnav[data-transparent='false'] {
+  background-color: color-mix(
+    in oklab,
+    var(--color-fd-background) var(--material-opacity),
+    transparent
+  );
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+  border-bottom-color: transparent;
+  box-shadow: inset 0 1px 0 0 var(--material-edge);
+}
+
+/* A scroll edge fade where chrome overlaps content, instead of a hard divider. */
+#nd-nav::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  top: 100%;
+  height: 2rem;
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+  mask-image: linear-gradient(to bottom, #000, rgb(0 0 0 / 0.4) 45%, transparent);
+  animation: var(--animate-scroll-edge);
+  animation-timeline: scroll();
+  animation-range: 0 3rem;
+}
+
+#nd-sidebar {
+  background-color: color-mix(in oklab, var(--color-fd-card) 80%, transparent);
+  backdrop-filter: blur(var(--material-blur)) saturate(180%);
+}
+
+/* Vibrancy: secondary text over a translucent surface needs more weight and a
+   touch more tracking than it would on a solid one. */
+#nd-sidebar .text-fd-muted-foreground,
+#nd-toc .text-fd-muted-foreground {
+  font-weight: 450;
+  letter-spacing: 0.006em;
+}
+
+#nd-page h1,
+#nd-page h2 {
+  letter-spacing: -0.022em;
+  text-wrap: balance;
+}
+
+#nd-page p {
+  text-wrap: pretty;
+}
+
+/* Blocks whose content is box-drawing characters, tagged in `mdx.tsx` by looking at the
+   glyphs rather than at a fence tag, so a new diagram needs no annotation. Tailwind's
+   preflight sets the family on `pre`/`code` directly, so inheriting from the figure is not
+   enough and the elements have to be named. Geist Mono is metrically matched to the sans,
+   so a diagram sits at the same size as the prose around it. */
+.is-diagram :is(pre, code) {
+  font-family: var(--font-geist-mono);
+}
+
+/* Feedback lands on pointer-down and springs back on release. */
+@utility pressable {
+  transition:
+    transform var(--duration-spring-snappy) var(--ease-spring-smooth),
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out;
+
+  &:active {
+    transform: scale(0.978);
+    transition-duration: 90ms;
+  }
+}
+
+.landing {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+}
+
+/* shadcn's palette re-pointed at the console's ink and ground, so no component carries a hue:
+   `primary` is a solid ink block with knocked-out text rather than a colored button, and
+   `destructive` is just ink. A var() is substituted where it is declared, not where it is
+   read, so these have to be re-declared on the sections as well as the root — otherwise a
+   section that flips the ink/ground pair below would inherit component tokens already
+   resolved against the palette it just replaced. The docs keep shadcn's stock neutrals. */
+.landing,
+.landing > section {
+  --background: var(--color-ground);
+  --foreground: var(--color-ink);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-ink);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-ink);
+  --primary: var(--color-ink);
+  --primary-foreground: var(--color-ground);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-ink);
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-quiet);
+  --accent: var(--color-surface);
+  --accent-foreground: var(--color-ink);
+  --destructive: var(--color-ink);
+  --border: var(--color-rule);
+  --input: var(--color-rule);
+  --ring: var(--color-ink);
+}
+
+/* The landing is printed dark whichever theme the reader picked, so its shell carries the
+   `dark` class rather than inheriting one. The nav is a translucent layer over the page, so
+   it is tinted by the ground it floats on rather than by fumadocs' lighter dark surface. */
+.landing-shell {
+  --color-fd-background: oklch(0.09 0 0);
+
+  /* `body` resolves `color` against the reader's theme, and inheritance carries that computed
+     value down regardless of the tokens redefined here. Re-declaring both re-resolves them
+     for the nav, which sits outside `.landing` and so has no palette of its own. */
+  background-color: var(--color-fd-background);
+  color: var(--color-fd-foreground);
+}
+
+.dark .landing {
+  --color-ground: oklch(0.09 0 0);
+  --color-surface: oklch(0.16 0 0);
+  --color-ink: oklch(0.97 0 0);
+  --color-quiet: oklch(0.74 0 0);
+  --color-rule: oklch(0.97 0 0 / 0.16);
+}
+
+/* The band is the separator: sections alternate rather than being divided by a rule. Every
+   other section wears the opposite palette outright — ink becomes ground and back — so the
+   page reads as a strip of prints alternating positive and negative. Because the flip is
+   expressed as values rather than as fixed colors, the toggle keeps working: .dark below
+   swaps which palette an even section inherits. Counting by type keeps the full-bleed
+   figures between sections out of the alternation. */
+.landing > section {
+  background-color: var(--color-ground);
+  color: var(--color-ink);
+}
+
+.landing > section:nth-of-type(even) {
+  --color-ground: oklch(0.12 0 0);
+  --color-surface: oklch(0.19 0 0);
+  --color-ink: oklch(0.99 0 0);
+  --color-quiet: oklch(0.74 0 0);
+  --color-rule: oklch(0.99 0 0 / 0.18);
+}
+
+.dark .landing > section:nth-of-type(even) {
+  --color-ground: oklch(0.97 0 0);
+  --color-surface: oklch(0.92 0 0);
+  --color-ink: oklch(0.12 0 0);
+  --color-quiet: oklch(0.4 0 0);
+  --color-rule: oklch(0.12 0 0 / 0.16);
+}
+
+/* A scrim over the hero photograph, mixed against the section's own ground so a single
+   declaration is correct in both themes: it thins toward white in light, toward black in dark.
+   It also thins left to right — densest behind the column of text, lightest over the empty
+   right edge, where the photograph is free to come through. */
+.landing-scrim {
+  background-image: linear-gradient(
+    to right,
+    color-mix(in oklab, var(--color-ground) 100%, transparent),
+    color-mix(in oklab, var(--color-ground) 80%, transparent)
+  );
+}
+
+.landing :is(a, button):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* A terminal panel's own surface: a hairline border, a flat fill, a small radius — a
+   screen, not a card. Never paired with a soft drop shadow; the border does the framing. */
+.landing-panel {
+  border: 1px solid var(--color-rule);
+  border-radius: 10px;
+  background-color: var(--color-surface);
+}
+
+.landing-quiet-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  color: var(--color-ink);
+  font-size: var(--text-note);
+  font-weight: 600;
+  letter-spacing: -0.006em;
+  text-decoration: underline solid transparent;
+  text-underline-offset: 0.28em;
+  text-decoration-thickness: 2px;
+  transition:
+    text-decoration-color 160ms ease-out,
+    transform var(--duration-spring-snappy) var(--ease-spring-smooth);
+}
+
+.landing-quiet-link:active {
+  transform: scale(0.978);
+  transition-duration: 90ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .landing-quiet-link:hover {
+    text-decoration-color: var(--color-ink);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .landing-rise {
+    animation: landing-rise 560ms var(--ease-spring-smooth) both;
+    animation-delay: calc(var(--i, 0) * 110ms);
+  }
+
+  @keyframes landing-rise {
+    from {
+      opacity: 0;
+      transform: translateY(0.75rem);
+    }
+  }
+
+  /* A dithered skeleton shimmers by sliding the screen under the block rather than sweeping a
+     highlight over it. Travel is exactly one 16px tile, so the loop has no seam, and the steps
+     match the tile so the dots land on the grid at every frame. */
+  .dither-shimmer {
+    animation: dither-shimmer 1.1s steps(4, jump-none) infinite;
+  }
+
+  @keyframes dither-shimmer {
+    to {
+      transform: translateX(-16px);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --animate-fd-dialog-in: fd-fade-in 160ms ease;
+    --animate-fd-dialog-out: fd-fade-out 160ms ease;
+    --animate-fd-sidebar-in: fd-fade-in 160ms ease;
+    --animate-fd-sidebar-out: fd-fade-out 160ms ease;
+  }
+
+  #nd-nav::after {
+    animation: none;
+  }
+
+  .pressable {
+    transition: background-color 150ms ease-out;
+  }
+
+  .pressable:active {
+    transform: none;
+  }
+
+  .landing-quiet-link {
+    transition-duration: 0ms;
+  }
+
+  .landing-quiet-link:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  #nd-nav > *,
+  #nd-subnav[data-transparent='false'],
+  #nd-sidebar {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+  }
+
+  #nd-nav::after {
+    display: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  #nd-nav > *,
+  #nd-subnav[data-transparent='false'] {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+    border-bottom-color: var(--color-fd-foreground);
+  }
+
+  #nd-sidebar {
+    background-color: var(--color-fd-background);
+    backdrop-filter: none;
+    border-inline-end-color: var(--color-fd-foreground);
+  }
+
+  #nd-nav::after {
+    display: none;
+  }
+
+  .landing {
+    --color-rule: var(--color-ink);
+    --color-quiet: var(--color-ink);
+  }
+
+  .landing-panel {
+    border-color: var(--color-ink);
+  }
+}
+
+@theme inline {
+  /* No --font-sans here: redeclaring it as var(--font-sans) is self-referential, which makes
+     it invalid at computed-value time and drops the real definition at the top of this file. */
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* shadcn's reset paints the body from its own --background. Fumadocs already owns that
+   surface through --color-fd-background, and the rule above would repaint every docs page
+   in shadcn's stock white, so the body is left to Fumadocs and shadcn's tokens stay scoped
+   to the components that read them. */

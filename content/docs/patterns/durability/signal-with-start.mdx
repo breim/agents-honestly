@@ -1,0 +1,199 @@
+---
+title: "Signal With Start"
+description: "Deliver an inbound event to an agent that may or may not already exist."
+---
+
+## Problem
+
+A webhook fires: the customer has replied to ticket 9104.
+
+Is there a workflow for 9104? Maybe. It might be running and waiting for exactly this. It might have completed last week and the ticket just got reopened. It might never have existed, because this is the first message.
+
+The obvious implementation has a race in it:
+
+```
+   if (!exists(workflowId)) start(workflowId, input);
+   signal(workflowId, reply);
+```
+
+Two replies four milliseconds apart both see "does not exist," both start, and one loses with `WorkflowExecutionAlreadyStarted`, dropping a customer message. Or the workflow completes between the check and the signal, and the signal hits a closed execution and vanishes. Or the process dies between the two calls and the workflow exists with no message in it, waiting for something that already happened.
+
+Every one of these is a check-then-act race, and no amount of retry logic in the caller fixes it, because the caller cannot make two operations atomic.
+
+## Forces
+
+- **Inbound events are unordered and concurrent.** Webhooks retry, and two can arrive simultaneously.
+- **The workflow's existence is not knowable in advance** without a race.
+- **A dropped customer message is a visible product failure**, not a degraded one.
+- **The event may need to be handled before the agent has initialized** anything.
+- **Duplicate delivery is normal.** Webhooks are [at-least-once](/book/reliability/idempotency-in-practice).
+
+## Solution
+
+**Signal-with-start**: one atomic operation that signals the workflow if it is running, and otherwise starts it and immediately signals it.
+
+<Figure caption="One call, no race. The caller never asks whether the workflow exists." frame={false}>
+
+```
+   webhook: customer replied to 9104
+        │
+        ▼
+   signalWithStart(
+     workflowId: 'ticket-9104',      ← the entity IS the id
+     signal: 'customerReply',
+     args:   [message],
+     input:  [initialTicketState],   ← used ONLY if it has to start
+   )
+        │
+        ├── running?  ─── yes ──▶ signal delivered to the live execution
+        │
+        └── not running? ──────▶ start, THEN deliver the signal
+                                  ▲
+                                  │ the handler runs BEFORE the
+                                  │ workflow's main method — see below
+```
+
+</Figure>
+
+Four rules:
+
+**The entity is the workflow ID.** `ticket-9104`, not a UUID. That is what makes the operation addressable without a lookup, and it is what makes duplicates impossible. Two concurrent calls with the same ID cannot both start.
+
+**Send the start input every time.** It is ignored when the workflow is already running. Callers that try to send it only "when needed" have reintroduced the check they were avoiding.
+
+**Initialize in the handler-safe order.** On a cold start the **signal handler runs before the workflow's main method**. A handler that touches state the main method was going to create will fail on exactly the path that matters: the first message. Initialize in the constructor or in the handler itself, never on the assumption that the main body ran first.
+
+**Buffer, do not process, in the handler.** The handler appends to a queue; the main loop drains it. This keeps the handler fast, keeps ordering explicit, and avoids running agent logic before the run is set up.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/client/inbound.ts"
+// One atomic call. The caller never asks whether the workflow exists.
+export async function onCustomerReply(ev: ReplyWebhook) {
+  await client.workflow.signalWithStart(ticketAgent, {
+    workflowId: `ticket-${ev.ticketId}`,     // the entity IS the id
+    taskQueue: 'atlas',
+    signal: customerReply,
+    signalArgs: [{ messageId: ev.messageId, body: ev.body, at: ev.at }],
+    args: [initialStateFor(ev)],             // ignored if already running
+  });
+}
+```
+
+```ts title="ts/src/workflows/agent.ts"
+export async function ticketAgent(init: TicketInput): Promise<Outcome> {
+  // Initialized where the HANDLER can see it: on a cold start the signal
+  // handler runs before this function body does.
+  const inbox: Reply[] = [];
+  const seen = new Set<string>();
+
+  setHandler(customerReply, (r: Reply) => {
+    // Webhooks are at-least-once. Dedupe on the provider's message id.
+    if (seen.has(r.messageId)) return;
+    seen.add(r.messageId);
+    inbox.push(r);            // buffer only — never run agent logic here
+  });
+
+  const state = initState(init);
+
+  while (!state.done) {
+    if (inbox.length === 0) await condition(() => inbox.length > 0, idleTimeout);
+    while (inbox.length) state.acceptReply(inbox.shift()!);
+    await step(state);        // the main loop drains and acts
+  }
+  return state.outcome();
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/client/inbound.py"
+async def on_customer_reply(ev: ReplyWebhook) -> None:
+    # One atomic call. The caller never asks whether the workflow exists.
+    await client.start_workflow(
+        TicketAgent.run,
+        initial_state_for(ev),                 # ignored if already running
+        id=f"ticket-{ev.ticket_id}",           # the entity IS the id
+        task_queue="atlas",
+        start_signal="customer_reply",
+        start_signal_args=[Reply(ev.message_id, ev.body, ev.at)],
+    )
+```
+
+```python title="py/atlas/workflows/agent.py"
+@workflow.defn
+class TicketAgent:
+    def __init__(self) -> None:
+        # Initialized in the CONSTRUCTOR: on a cold start the signal handler
+        # runs before run() does.
+        self._inbox: list[Reply] = []
+        self._seen: set[str] = set()
+
+    @workflow.signal
+    def customer_reply(self, r: Reply) -> None:
+        # Webhooks are at-least-once. Dedupe on the provider's message id.
+        if r.message_id in self._seen:
+            return
+        self._seen.add(r.message_id)
+        self._inbox.append(r)      # buffer only — no agent logic here
+
+    @workflow.run
+    async def run(self, init: TicketInput) -> Outcome:
+        state = init_state(init)
+        while not state.done:
+            if not self._inbox:
+                try:
+                    await workflow.wait_condition(lambda: bool(self._inbox),
+                                                  timeout=IDLE_TIMEOUT)
+                except asyncio.TimeoutError:
+                    pass          # idle, not broken — fall through and step
+            while self._inbox:
+                state.accept_reply(self._inbox.pop(0))
+            await step(state)      # the main loop drains and acts
+        return state.outcome()
+```
+
+</Tab>
+</Tabs>
+
+The `_seen` set is not optional. Webhook providers retry on any non-2xx and occasionally on success, so the same reply arrives more than once. Unlike a [tool call](/book/reliability/idempotency-in-practice), a duplicated inbound message does not fail loudly. It makes the agent answer the same question twice.
+
+## Trade-offs
+
+**A completed workflow starts a new one.** If the ticket was resolved last week, this reopens it as a fresh execution with a fresh history, which is usually right, and occasionally not. If reopening should be a different process, check the terminal state in the start input and branch.
+
+**Signal ordering is not guaranteed across senders.** Two replies delivered concurrently arrive in an order the platform chooses, which is why the inbox carries the provider's timestamp and the state sorts by it rather than trusting arrival order.
+
+**Signals can be lost if the handler throws.** An exception in the handler fails the workflow task and the signal may be redelivered, but a handler that throws deterministically will loop. Keep handlers trivial: dedupe, append, return.
+
+**The workflow ID becomes a public contract.** Anything that can construct `ticket-9104` can signal it, so signal payloads are [untrusted input](/book/security/threat-model) and the sender's authority is checked at the API boundary, not inside the workflow.
+
+## When not to use it
+
+**When the workflow definitely exists.** A signal from your own orchestrator to a child it just started is a plain signal. The start path is dead code that will not be tested.
+
+**When the event should never create work.** A status webhook that is purely informational should not spawn an agent run for a ticket nobody is working on. Route it to a table, and let the next real trigger read it.
+
+**When you need a response.** Signals are fire-and-forget. If the caller has to know what the agent decided, that is [an update](/book/patterns/durability/update-request-response), which is a different operation and now generally available.
+
+**When ordering across senders is load-bearing.** If two sources emit events whose relative order changes the outcome, put a sequencer in front rather than hoping for delivery order.
+
+<Aside type="caution" title="The handler runs first, and this is the bug everyone ships once">
+On a cold start, the sequence is: workflow created, **signal handler invoked**, then the main method begins. Not the other way round.
+
+So a handler that reads `this.state.tenant` will find `undefined` on precisely the first message, the one that started the workflow, and work perfectly for every subsequent one. Which means it passes every test written against a running workflow and fails only for brand-new tickets in production.
+
+Initialize anything a handler touches in the constructor or in the handler itself. The same caution applies after a [workflow reset](/book/durable-execution/signals-and-children), where preserved signals are replayed against a workflow that has not initialized yet.
+</Aside>
+
+## Related
+
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): why the entity ID is the workflow ID
+- [Updatable SLA Timer](/book/patterns/durability/sla-timer): the reply that arrives here is what resets the clock
+- [Request-Response via Update](/book/patterns/durability/update-request-response): when the caller needs an answer back
+- [Approval Gate](/book/patterns/durability/approval-gate): the same signal mechanism, waiting on a person instead of a customer
+- [Signals and Children](/book/durable-execution/signals-and-children): the three ways to talk to a running execution

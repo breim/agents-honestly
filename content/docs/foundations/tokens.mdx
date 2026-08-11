@@ -1,0 +1,192 @@
+---
+title: Tokens
+description: What a token really is, why output costs several times more than input, and how to do the cost math from first principles.
+---
+
+
+A model does not read your prompt. It reads a sequence of integers, and every decision you will make about cost, latency, and how much history an agent can carry is downstream of how your text becomes those integers.
+
+This is the shortest chapter in the book with the largest blast radius. Skip it and the rest will feel like a series of arbitrary rules.
+
+## A token is a fragment, not a word
+
+Text is split into **tokens**, chunks that are usually a few characters long, learned from a training corpus rather than defined by grammar. Common words are single tokens. Rare words shatter.
+
+<Figure caption="One tokenizer's segmentation of a short English sentence: eight tokens for thirty-five characters.">
+	<TokenStrip
+		tokens={['Dur', 'able', ' agents', ' survive', ' bad', ' deploy', 's', '.']}
+	/>
+</Figure>
+
+Three things in that picture are worth more than the rest of this section.
+
+**The leading space belongs to the word.** `" agents"` is one token; `"agents"` at the start of a line is a *different* token. This is why a stray double space, or joining two strings without a separator, can quietly change how a model reads your prompt.
+
+**Frequency decides granularity.** `" survive"` survives intact because it is common. `" deploy"` plus `"s"` costs two tokens because the plural is rarer than the stem. Push further into unusual vocabulary and the fragmentation gets worse:
+
+<Figure caption="Jargon and identifiers fragment hard: thirty-four characters, fourteen tokens. Nearly twice the cost of the sentence above, at the same length.">
+	<TokenStrip
+		tokens={['idem', 'pot', 'ency', ' key', ' for', ' ref', 'und', '_', 'tx', '_', '4', '9', '2', '1']}
+	/>
+</Figure>
+
+**There is no fixed exchange rate.** People repeat "about four characters per token" as if it were a constant. It is an average over English prose, and your agent's context is mostly not English prose. Compare:
+
+| Content | Roughly what you pay |
+| --- | --- |
+| English prose | The baseline everyone quotes |
+| Code and JSON | Noticeably more per character; punctuation, indentation, and identifiers all fragment |
+| UUIDs, hashes, base64 | Dramatically more, near one token per couple of characters |
+| Languages not written in Latin script | Often several times English for the same meaning |
+
+An agent's context is dominated by tool schemas, JSON results, and identifiers. If you budget with the prose average, you will be wrong in the expensive direction.
+
+<Aside type="caution" title="Tokenizers are not portable">
+Every model family has its own tokenizer, and they change between versions. The same sentence costs a different number of tokens on different models, and *counts you measured last year on the same family may no longer hold*, because a new model generation can ship a new tokenizer.
+
+There is exactly one reliable way to know: ask the provider. Estimating Anthropic token counts with OpenAI's `tiktoken` undercounts by a wide margin, and worse on code than on prose.
+</Aside>
+
+## Count, don't estimate
+
+Every major provider exposes a token-counting endpoint. It is cheap, it is exact, and it is the only number worth putting in a budget.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="count.ts"
+import Anthropic from '@anthropic-ai/sdk';
+
+const client = new Anthropic();
+
+const { input_tokens } = await client.messages.countTokens({
+  model: 'claude-opus-5',
+  system: SYSTEM_PROMPT,
+  tools: TOOL_DEFINITIONS,
+  messages: history,
+});
+
+console.log(`${input_tokens} tokens before we send anything`);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="count.py"
+from anthropic import Anthropic
+
+client = Anthropic()
+
+result = client.messages.count_tokens(
+    model="claude-opus-5",
+    system=SYSTEM_PROMPT,
+    tools=TOOL_DEFINITIONS,
+    messages=history,
+)
+
+print(f"{result.input_tokens} tokens before we send anything")
+```
+
+</Tab>
+</Tabs>
+
+Note what is being counted: system prompt, **tool definitions**, and history. Tool schemas are part of every single request, and in a tool-heavy agent they are frequently the largest fixed cost in the prompt. Developers who have never counted them are routinely surprised by how much they weigh. A dozen well-documented tools can run to several thousand tokens that you pay for on every turn, forever.
+
+Counting is also the honest way to evaluate a prompt change. "I trimmed the system prompt" is a feeling. A before-and-after count is a number.
+
+## Why output costs more than input
+
+Look at any provider's pricing page and output tokens cost several times input tokens, commonly around five to one. This is not a pricing decision. It is a description of the hardware.
+
+Processing your prompt is **prefill**: the whole input goes through the model in one pass, and the GPU chews through thousands of tokens in parallel. It is compute-bound and embarrassingly parallel.
+
+Generating the response is **decode**: one token at a time, each one requiring a full forward pass through the model whose input includes every token generated so far. It cannot be parallelized, because token 200 depends on token 199. It is bound by memory bandwidth, not compute, which is the resource that scales worst.
+
+<Figure caption="Prefill reads the whole prompt in one pass. Decode emits one token per pass, and each pass must wait for the last." frame={false}>
+
+```
+PREFILL                                DECODE
+one pass over the entire prompt        one pass per output token
+
+┌──────────────────────────────┐       ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐
+│ ████████████████████████████ │  ───▶ │█│▶│█│▶│█│▶│█│▶│█│▶│█│ ...
+└──────────────────────────────┘       └─┘ └─┘ └─┘ └─┘ └─┘ └─┘
+        40,000 tokens                   sequential · unavoidable
+        parallel · fast                  ~1 pass each
+```
+
+</Figure>
+
+Two consequences follow directly, and both shape agent design:
+
+**Latency is dominated by output length, not input length.** Doubling your prompt costs you a little time. Doubling your response length roughly doubles the wait. When an agent feels slow, the fix is almost never a shorter prompt. It is a shorter answer, or streaming so the user sees the first token sooner.
+
+**Verbose agents are expensive twice.** A chatty response costs output rates now, and then becomes part of the history you resend at input rates on every subsequent turn, forever. A single rambling turn early in a long conversation gets paid for dozens of times.
+
+## The cost math
+
+You now have everything needed to compute what an agent actually costs, which is the number that decides whether it ships.
+
+<Aside type="note" title="Illustrative rates">
+The rest of this chapter uses **$3 per million input tokens** and **$15 per million output tokens**. These are plausible mid-tier rates chosen to make the arithmetic legible. Use your provider's current pricing for anything real. The shape of the reasoning is what transfers, not the digits.
+</Aside>
+
+A single request costs:
+
+```
+cost = (input_tokens × input_rate) + (output_tokens × output_rate)
+```
+
+For one Atlas turn, with 6,000 tokens of system prompt and tool schemas, 900 tokens of history, a 40-token question, and a 300-token answer:
+
+```
+input   6,940 × $3  / 1,000,000  =  $0.021
+output    300 × $15 / 1,000,000  =  $0.0045
+                                    ───────
+                                    $0.0253
+```
+
+Two and a half cents. Fine. Now notice that this is a *turn*, and agents do not stop at one.
+
+One ticket is rarely one turn. Atlas reads the ticket and calls `get_order`; reads the result and calls `get_shipment_status`; reads that and writes a reply. Three turns for the simplest useful shape of ticket, and [four is the common case](/book/observability/cost-accounting). Each one resends everything that came before it plus the growing pile of tool results, so they do not cost two and a half cents each. They cost two to four, rising as they go. **Handling one ticket is not one request; it is a small conversation the user never sees.** Four turns at that rate is about **fifteen cents a ticket**, six times the figure above. At ten thousand tickets a month, a mid-size support desk, that is $1,500, before a single retry.
+
+That multiplier is where agent economics actually live, and it is why the next chapter, on how the context grows, is really a chapter about money.
+
+## Where the tokens go
+
+Here is a real request from the middle of an Atlas session, broken down. Nothing about it is unusual, and that is the point.
+
+<Figure caption="A single mid-conversation request. The user's actual question is under a tenth of one percent of what you pay for.">
+	<TokenStrip
+		stats={false}
+		tokens={['The', ' user', ' typed', ' forty', ' tokens', '.', ' You', ' paid', ' for', ' forty', '-', 'six', ' thousand', '.']}
+	/>
+</Figure>
+
+| Segment | Tokens | Notes |
+| --- | ---: | --- |
+| System prompt | 1,200 | Policy, tone, escalation rules |
+| Tool definitions | 4,800 | Eleven tools with proper descriptions |
+| Conversation history | 26,000 | Nine turns, including four tool results |
+| Retrieved policy documents | 12,000 | Three chunks from the help centre |
+| Tool result, this turn | 2,000 | One order record as JSON |
+| The user's message | 40 | The actual question |
+
+The user's question is 0.09% of the bill. Everything else is context you chose, and every piece of it is something you can measure, budget, cache, or cut.
+
+That is the whole discipline: **the context window is a budget you are spending, not a memory you are filling.** Which is the next chapter.
+
+---
+
+## Takeaways
+
+- Tokens are subword fragments; the leading space is part of the token, and rare or structured text fragments hardest.
+- Never estimate with a characters-per-token constant, and never use another vendor's tokenizer. Call the provider's counting endpoint.
+- Tool definitions are part of every request. Count them; they are often the largest fixed cost you have.
+- Output costs more than input because decode is sequential and bandwidth-bound. Output length drives latency; input length mostly doesn't.
+- A verbose response is billed once at output rates and then repeatedly at input rates for the rest of the conversation.
+- One user-facing answer takes several turns, and each turn is a model call that re-sends the whole transcript. Budget per run, the completed task, never per request.
+
+## References
+
+- [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting), the provider endpoint that settles what a string actually costs, including tools, images, and documents.

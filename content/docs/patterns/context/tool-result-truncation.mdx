@@ -1,0 +1,181 @@
+---
+title: "Tool Result Truncation"
+description: "Cap and summarize tool output before it ever reaches the model."
+---
+
+## Problem
+
+`query_warehouse` returns 340 rows of line-item JSON, about 40,000 tokens. The model needed the total and the ship date.
+
+Three things go wrong at once. The window takes a 40,000-token hit for two numbers. Because the transcript is re-sent every turn, [that payload is billed again on every subsequent turn](/book/production/cost-engineering) of the run. And the two numbers that mattered are now buried in the middle of a long context, [which is where attention is weakest](/book/foundations/context-window).
+
+The naive fix is worse than the problem: slicing the JSON at 4,000 characters produces invalid JSON, and the model, reading a truncated array with no marker, treats what it can see as the complete result and confidently reports a total over 31 rows.
+
+## Forces
+
+- **Tool output is unbounded** and its size is a property of the data, not the schema.
+- **The model usually needs a small projection** of it, but which projection depends on the question.
+- **Silent truncation is a correctness bug**, not a budget optimization: the model cannot distinguish "these are all the rows" from "these are the first thirty-one."
+- **Sometimes the whole result genuinely is needed**, so the pattern must leave a route to it.
+- **Every turn pays again.** A one-off cost at turn three is a recurring cost for the rest of the run.
+- **The right place to enforce this is the dispatcher**, which is the only code that sees every tool result.
+
+## Solution
+
+Cap tool output at the [dispatcher](/book/production/reference-architecture), and make the cap **shape** the result rather than cut it.
+
+<Figure caption="Three operations, in order. Only the last one is truncation, and it is always announced." frame={false}>
+
+```
+   raw result (40k tokens)
+        │
+   ①  PROJECT   drop fields nobody asked for; the schema of the
+        │       result is a design decision, not the API's default
+        ▼
+   ②  AGGREGATE where the answer is a number, compute it here
+        │       340 rows → { count, sum, min, max, span }
+        ▼
+   ③  CAP       first N items, valid structure, plus:
+        │         "showing 31 of 340"  ← the model must know
+        │         a handle to fetch more  ← and be able to act
+        ▼
+   shaped result (~400 tokens)
+```
+
+</Figure>
+
+Four rules:
+
+**Project before you cap.** [Result design](/book/tools/result-design) is the primary fix and truncation is the backstop. A tool that returns thirty fields when the agent uses four has a schema problem, and capping the output is treating the symptom.
+
+**Aggregate in the tool, not in the model.** If the question is "what did we ship to Iberia in Q2," the tool should return a number. Sending 340 rows so the model can add them up is expensive, slow, and wrong often enough to matter, because [models are unreliable arithmetic engines](/book/foundations/nondeterminism).
+
+**Never truncate silently.** The truncated result says what it is: `"showing": 31, "of": 340`. This is the same discipline as [errors as instructions](/book/tools/errors-as-instructions): the result is prompt text, and a result that misrepresents itself produces confident wrong reasoning with nothing to catch it.
+
+**Give it a way to get more.** A `continuation` handle, a narrower query, or a `get_full_result(ref)` tool. A cap with no escape route turns a large result into a dead end, and the model's alternative is to guess.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/dispatch/shape-result.ts"
+export interface ShapedResult {
+  data: unknown;
+  truncated?: { showing: number; of: number; continuation: string };
+}
+
+const MAX_RESULT_TOKENS = 2_000;
+
+export function shapeForModel(
+  raw: unknown, tool: ToolDef, ctx: RunContext,
+): ShapedResult {
+  // ① project — the tool declares what the model actually needs
+  const projected = tool.project ? tool.project(raw) : raw;
+
+  // ② aggregate — a summary beats rows whenever the answer is a number
+  if (tool.aggregate) return { data: tool.aggregate(projected) };
+
+  if (estimateTokens(projected) <= MAX_RESULT_TOKENS) return { data: projected };
+
+  // ③ cap — structurally valid, explicitly labelled, with a way forward
+  if (Array.isArray(projected)) {
+    const kept = takeUntilTokens(projected, MAX_RESULT_TOKENS);
+    return {
+      data: kept,
+      truncated: {
+        showing: kept.length,
+        of: projected.length,
+        // Stored server-side; the model passes it back to page or refine.
+        continuation: stash(ctx.runId, tool.name, projected, kept.length),
+      },
+    };
+  }
+
+  // Not a list: keep the head, and say so rather than pretending.
+  return {
+    data: headByTokens(projected, MAX_RESULT_TOKENS),
+    truncated: { showing: 1, of: 1, continuation: stash(ctx.runId, tool.name, projected, 0) },
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/dispatch/shape_result.py"
+MAX_RESULT_TOKENS = 2_000
+
+
+def shape_for_model(raw, tool, ctx) -> dict:
+    # ① project — the tool declares what the model actually needs
+    projected = tool.project(raw) if tool.project else raw
+
+    # ② aggregate — a summary beats rows whenever the answer is a number
+    if tool.aggregate:
+        return {"data": tool.aggregate(projected)}
+
+    if estimate_tokens(projected) <= MAX_RESULT_TOKENS:
+        return {"data": projected}
+
+    # ③ cap — structurally valid, explicitly labelled, with a way forward
+    if isinstance(projected, list):
+        kept = take_until_tokens(projected, MAX_RESULT_TOKENS)
+        return {
+            "data": kept,
+            "truncated": {
+                "showing": len(kept),
+                "of": len(projected),
+                # Stored server-side; the model passes it back to page.
+                "continuation": stash(ctx.run_id, tool.name, projected, len(kept)),
+            },
+        }
+
+    # Not a list: keep the head, and say so rather than pretending.
+    return {
+        "data": head_by_tokens(projected, MAX_RESULT_TOKENS),
+        "truncated": {"showing": 1, "of": 1,
+                      "continuation": stash(ctx.run_id, tool.name, projected, 0)},
+    }
+```
+
+</Tab>
+</Tabs>
+
+`stash` keeps the full result outside the context, in object storage or the run's state, which means the data is not lost, it is merely not *in the prompt*. That distinction is the whole pattern: the model gets a projection and a handle, and the full result stays available to the [trace](/book/observability/what-a-trace-must-answer), to a later call, and to a human.
+
+## Trade-offs
+
+**A round trip when the cap is wrong.** If the model needed row 200, it pays a turn to page. Sizing the cap is an empirical question: look at how often continuations are actually followed, and raise the cap if the answer is "often."
+
+**Aggregation moves logic into tools.** `tool.aggregate` is application code that has to be written, tested, and kept aligned with what users ask. This is real work, and it is the same work [tool granularity](/book/tools/schema-and-granularity) asks for anyway.
+
+**Projection can drop what mattered.** A fixed projection encodes an assumption about which fields matter. Where the question genuinely varies, prefer a field-selection argument on the tool over a hardcoded projection, and note that this is [a schema decision](/book/tools/schema-and-granularity), so the model chooses the fields and your code still enforces the cap.
+
+**One more thing that must not be forgotten at [compaction](/book/patterns/context/context-compaction).** A continuation handle referencing a stashed result must survive a context rebuild, or the model is holding a pointer into nothing.
+
+## When not to use it
+
+**When results are naturally small.** `get_order` returns one order. Adding a shaping layer to a tool whose output is bounded by its schema is ceremony.
+
+**When the tool should have been narrower.** If truncation is firing constantly on one tool, that is a [granularity signal](/book/tools/schema-and-granularity), not a capping problem. `query_warehouse` that returns everything and gets truncated should probably be `count_orders`, `sum_orders_by_region`, and `list_recent_orders`.
+
+**When the full result is the deliverable.** A tool whose output goes into a report or a file the user receives should write to [object storage](/book/production/reference-architecture) and return a reference: the model never needed the bytes at all.
+
+**When the caller is code, not the model.** A [node reading a tool result directly](/book/langgraph/node-or-function) should get the full result. Shaping exists because the consumer is a context window; a function has no such constraint.
+
+<Aside type="caution" title="The cap is also a denial-of-service control">
+A tool that returns whatever a downstream API produced is an unbounded write into your context window, and the size is decided by data you do not control. On any [retrieval or ticket path](/book/security/untrusted-retrieval), that includes data an attacker can influence.
+
+A 400,000-token response does not just cost money. It can blow the window mid-run, which surfaces as a [permanent error](/book/reliability/error-taxonomy) that retrying reproduces exactly, and it is trivially cheap for an attacker to trigger by uploading a large file.
+
+Cap at the dispatcher, before the bytes reach the assembler. That makes this a security control as much as a budget one, and it is one of the cases where the same line of code appears in two chapters for two unrelated reasons.
+</Aside>
+
+## Related
+
+- [Result Design](/book/tools/result-design): the primary fix; truncation is the backstop
+- [Schema and Granularity](/book/tools/schema-and-granularity): constant truncation on one tool means the tool is too broad
+- [Rolling Summary](/book/patterns/context/rolling-summary): compresses the turns; this compresses what goes into them
+- [Sub-Agent Isolation](/book/patterns/context/subagent-isolation): when the *processing* of a large result should also stay out
+- [Batch Iterator](/book/patterns/scale/batch-iterator): when the model genuinely must work through all 340 rows

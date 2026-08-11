@@ -1,0 +1,166 @@
+---
+title: "What a Framework Buys You"
+description: "Now that you have written it, an honest accounting of what you would delegate and what you would keep."
+---
+
+
+Atlas v0 resolves fourteen of twenty tickets in about eighty lines you wrote yourself. So: was that worth doing, or was it an exercise you could have skipped by importing something?
+
+It was worth doing, and not for the reason usually given. The point was not to appreciate the frameworks. It was to find out **which part is actually hard**, because that determines what you should be shopping for, and the answer surprises people.
+
+## The loop is not the hard part
+
+Look back at what the loop cost: a `for`, a `stop_reason` check, a dispatch, and a push. Nothing in it was subtle. You did not struggle with it, and you will not struggle to maintain it.
+
+This matters because "we handle the agent loop for you" is the headline feature of nearly every product in this space, and **the agent loop is the cheapest thing in the system.** A framework whose pitch is the loop is selling you the easy part.
+
+What was hard, or rather what we enumerated and did *not* solve, was the punch list:
+
+| The problem | Who actually answers it |
+| --- | --- |
+| Dies with the process | Durable execution (Temporal), or a checkpointer |
+| Cannot wait days for a human | Durable execution: signals and timers |
+| No memory across tickets | A store you design; nobody gives you this |
+| Not idempotent | Your tool layer, and it's on you |
+| Invisible | Tracing: OpenTelemetry, or a framework's hooks |
+| History grows unbounded | Context engineering; frameworks give plumbing, not policy |
+| No streaming to a user | The interface layer (AI SDK) |
+| Branching, subgraphs, resumable state | Graph frameworks (LangGraph) |
+
+Read that column. It has at least three different answers in it, from three different products that solve three different problems. **"Which agent framework should I use" is the wrong question**, and it is wrong in a specific way: it assumes there is one slot to fill.
+
+## Two axes, four positions
+
+Before naming products, separate the question people reliably conflate: *who supplies the harness* (the loop, the context handling, the tool dispatch) and *who supplies the deployment* (where it runs, what survives a crash).
+
+<Figure caption="Most confusion in this space is two independent questions asked as one." frame={false}>
+
+```
+                        who runs it?
+                 you  ─────────────────▶  someone else
+              ┌──────────────────────┬──────────────────────┐
+   you write  │  ① manual loop       │                      │
+   the harness│    (Atlas v0)        │        rare          │
+              │                      │                      │
+              ├──────────────────────┼──────────────────────┤
+   library    │  ② SDK tool runner   │  ③ managed agents    │
+   writes it  │  ④ agent frameworks  │    (harness AND      │
+              │    (LangGraph, …)    │     deployment)      │
+              └──────────────────────┴──────────────────────┘
+```
+
+</Figure>
+
+**① Manual loop.** What you built. You own everything, nothing is hidden, no beta dependency. Correct when the control flow is genuinely yours or when you're learning what you're delegating.
+
+**② SDK tool runner.** The SDK drives request → execute → repeat, and hands you per-turn hooks so you can still gate an action, intercept an error, modify a result, or bound the run. This is the most under-considered option in the field: it removes the loop boilerplate without introducing a state model you have to learn. Reach for it before reaching for a framework. "I need control" is rarely a reason to skip it.
+
+**③ Managed agents.** A hosted service supplies the harness *and* the sandbox the tools run in. You define an agent config and stream events. The genuine unlock is that deployment stops being your problem; the genuine cost is that the execution environment stops being your choice.
+
+**④ Agent frameworks.** A library supplies the structure: state, nodes, edges, checkpoints. You still host and deploy it. This is where LangGraph sits, and it is worth being precise that it does **not** solve the deployment half. A LangGraph app still dies with its process unless something underneath it doesn't.
+
+## The three in this book, by problem
+
+[The map](/book/the-map) places these by layer. Here is the same thing as a decision:
+
+**Do you need branching, loops, subgraphs, and resumable state that you can inspect?** → [LangGraph](/book/langgraph/state-nodes-edges). It models how intelligence flows. Once your agent has more than one shape of run, say a triage path, an investigation path, and a compose-and-approve path, expressing that as an explicit graph beats expressing it as conditionals in a `while` body.
+
+**Does the work need to survive crashes, deploys, and multi-day waits?** → [Temporal](/book/durable-execution/why-durable-execution). It models how durable work flows. This is the answer to half our punch list on its own, and it is the one people reach for last because "it's not an AI tool," which is exactly why it works.
+
+**Does a human watch it happen?** → [The AI SDK](/book/interface/ai-sdk). Streaming, tool calls rendered as interface, approvals where the user actually is.
+
+They compose. The Temporal plugin for LangGraph, currently in public preview, lets each graph node declare whether it runs as a durable activity or inline, which is [a chapter of its own](/book/durability/langgraph-on-temporal) because the determinism rules are the entire game. And there is one place where two of them genuinely conflict rather than compose, which [also gets a chapter](/book/interface/two-durable-runtimes).
+
+<FrameworkCheck decision="Keep Atlas on the hand-written loop for now. Add a runtime only when a measured failure names the layer it must own.">
+<FrameworkOption name="plain">
+
+**Plain loop or SDK runner.** Best while Atlas has one bounded run shape. The control flow is visible, and its tool, authorization, and outcome contracts remain portable.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+**LangGraph.** Adopt when run topology, resumable graph state, interrupts, or subgraphs have become real requirements rather than anticipated ones.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal.** Adopt when business work must survive process loss, deploys, ambiguous retries, timers, or long waits.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+**AI SDK.** Use for generation and the user-facing stream. Its tool runner can replace loop boilerplate without becoming the owner of business durability.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+<Aside type="note" title="The question that routes you">
+Not "which framework is best" but: **what is the first thing that will break in production?**
+
+If it's a crash losing a refund → durability. If it's the agent doing something it shouldn't → approval gates, which need durability underneath. If it's nobody being able to tell what happened → tracing. If it's the run shape getting too complicated to read → a graph. Buy the answer to the failure you actually have.
+</Aside>
+
+## What you genuinely get
+
+Being fair to the tools, in descending order of value:
+
+**Persistence and resumption you didn't have to design.** Checkpointing after every step, resuming from where a crash left off. This is real, it is tedious to build, and getting it subtly wrong is worse than not having it.
+
+**Waiting that costs nothing.** A workflow parked for three days holding no thread, no connection, no memory. There is no way to bolt this onto a `while` loop, and it is the single hardest item on the punch list.
+
+**Retry and timeout semantics that already handle the ambiguous cases.** Especially "the call succeeded but the response was lost," which is where hand-rolled retries turn into duplicate refunds.
+
+**Streaming plumbing.** Token streaming, tool-call rendering, partial state to a UI: a large amount of fiddly work that is entirely solved.
+
+**A shape other people recognize.** Onboarding, hiring, and getting help are real engineering concerns, and an idiosyncratic loop is a tax on all three.
+
+## What it costs
+
+And being fair to the alternative:
+
+**You debug through someone else's state model.** When a run misbehaves you are now reading a graph execution trace, not your own code. That is a worthwhile trade for real features, and a terrible one for features you didn't need.
+
+**Version churn.** This ecosystem moves fast enough that an upgrade can change behavior. Pin, and read changelogs like they're production code, because they are.
+
+**The abstraction hides what you just learned to see.** You now know that a tool result enters the transcript as user content, that history is resent in full, that tool schemas are billed on every call. A framework does not delete those facts; it just stops showing them to you. Engineers who never saw them tune prompts for weeks against a cost curve they can't perceive.
+
+**Structure has gravity.** Once state lives in a graph, the natural move for every new requirement is another node. That is fine until the graph is the deployment artifact and nobody can say what runs when.
+
+## What stays hand-written regardless
+
+Whatever you adopt, these do not move:
+
+- **The tool layer.** Schemas, descriptions, result shaping, error text. A framework calls your tools; it does not design them, and their quality dominates agent quality.
+- **Authorization.** The `customerId` filter is yours forever. No framework knows your tenancy model.
+- **The outcome union.** `answered` / `escalated` / `halted` is a product decision. Frameworks return state; they don't tell you what "done" means.
+- **The acceptance spec and the eval set.** The twenty tickets are the thing that tells you whether any of this works, and they are portable across every rewrite.
+
+That list is the durable part of your work. Everything else is replaceable, including the framework, including the model.
+
+## The sequencing
+
+The advice this chapter has been building toward:
+
+**Start with the manual loop or the SDK tool runner. Adopt a framework when you have the problem it solves, and you will know because something will have broken.** Not before. An architecture chosen in advance of the failure it prevents is a guess, and guesses in this field age badly.
+
+That is not a counsel of minimalism. Atlas will end this book running on durable execution, because it issues refunds and waits for humans and those are real requirements. It just won't get there because a framework was the starting posture.
+
+You now have a working agent, a measured baseline, and a list of six things that will break it. Part III attacks the one that is already limiting you today: not durability, not tooling, but what the model is allowed to see.
+
+Two catalog entries are worth reading now rather than later, because they harden what you just built without adding a dependency: [ReAct Loop](/book/patterns/control/react-loop), which is the loop from the last chapter with the five bounds that make it survivable, and [Escalation Ladder](/book/patterns/control/escalation-ladder), which turns [the escalation contract](/book/first-agent/the-problem) into named rungs the rest of the book keeps referring back to.
+
+---
+
+Next: [Context as an Allocation Problem](/book/context/context-as-budget). Every claimant competes for the same space, and deciding who gets it is an engineering decision rather than a default.
+
+## Takeaways
+
+- The agent loop is the cheapest part of the system. A product whose headline feature is the loop is selling you the easy part.
+- The punch list has several different answers from several different products. "Which agent framework" presumes one slot; there are at least three.
+- Separate who supplies the harness from who supplies the deployment. An agent framework usually supplies only the first: your LangGraph app still dies with its process.
+- The SDK tool runner is the most under-considered option: it removes loop boilerplate without imposing a state model, and its per-turn hooks cover approval, interception, and bounding.
+- Route by failure, not by feature. Buy durability for crashes and waits, a graph for run-shape complexity, an interface layer for humans watching.
+- Real value: checkpointing, zero-cost waiting, correct retry semantics for ambiguous failures, streaming plumbing, a recognizable shape.
+- Real cost: debugging through someone else's state model, version churn, and losing sight of the mechanics you just learned to see.
+- Tools, authorization, the outcome union, and the eval set stay yours across every rewrite. They are the durable work.
+- Adopt when the failure arrives, not in anticipation of it.

@@ -1,0 +1,205 @@
+---
+title: "Tenant Fairness"
+description: "Stop one customer from consuming the whole agent fleet."
+---
+
+## Problem
+
+Meridian serves eleven customer accounts from one deployment. On a Tuesday morning, one of them migrates a legacy system and files nine hundred tickets in twenty minutes.
+
+Every other customer's tickets are now behind those nine hundred in the queue. Their agents are not slow: they have not started. A customer whose normal volume is four tickets an hour is waiting forty minutes for the first one, because a first-in-first-out queue is a fairness policy, and it is the wrong one.
+
+[Priority classes](/book/patterns/scale/priority-queues) do not help: all nine hundred are interactive. The contention is *within* a class, between peers, and no amount of separating urgent from batch addresses it.
+
+The version that is worse and quieter: the noisy tenant is not bursting, they are simply large. They generate 60% of volume every day, so they consistently get 60% of capacity, which may be exactly right, or may mean ten customers are permanently degraded so one can be served.
+
+## Forces
+
+- **Tenants share one finite pool** of quota, workers, and downstream capacity.
+- **Volume is unequal by nature** and unequal volume is not by itself unfair.
+- **Per-tenant caps waste capacity** when the capped tenant is quiet.
+- **Agent work has wildly variable cost.** One run can cost fifty times another, so counting requests measures the wrong thing.
+- **Small tenants suffer most.** A large tenant losing 10% of throughput is an inconvenience; a small one waiting behind them is an outage.
+- **Fairness must be cheap to compute**, on every admission.
+
+## Solution
+
+**Per-tenant virtual queues with deficit round robin**, metered in tokens rather than requests.
+
+<Figure caption="Each tenant has its own queue and a deficit counter. The scheduler cycles, so a small tenant waits one round rather than behind nine hundred tickets." frame={false}>
+
+```
+   ✗ ONE FIFO QUEUE
+   [A A A A A A A A A ... ×900 ... A A] [B] [C]
+                                         ▲   ▲
+                                    B and C wait 40 minutes
+
+   ✓ VIRTUAL QUEUES + DEFICIT ROUND ROBIN
+   tenant A  [A A A A A ... ×900]   quantum 1,000 · deficit 1,000
+   tenant B  [B]                    quantum 1,000 · deficit 1,000
+   tenant C  [C]                    quantum 1,000 · deficit 1,000
+             ────────────────────────────────────────────────────
+   scheduler cycles: A, B, C, A, B, C, …
+
+   each visit adds a quantum of TOKENS to the deficit and dispatches
+   while deficit ≥ the head item's cost
+
+   ── B and C are served in the first cycle
+   ── A still gets the majority: it is the only one with work left
+   ── unused quantum is NOT carried forever (deficit resets when idle)
+```
+
+</Figure>
+
+Four rules:
+
+**Meter the quantum in tokens, not requests.** This is why deficit round robin rather than plain weighted round robin: weighted round robin works for fixed-size items and breaks on variable ones, and **agent runs are the definition of variable**. The deficit counter is what lets a scheduler be fair over items whose cost it cannot know in advance.
+
+**Estimate cost at admission, reconcile after.** Charge the deficit an estimate before the run, and correct it with the actual spend when the run completes. Without reconciliation a tenant whose runs consistently overrun their estimate gets systematically more than their share.
+
+**Reset the deficit when a queue goes empty.** Otherwise a tenant that was idle for an hour accumulates a huge credit and consumes everything on their next request. Deficit is a smoothing mechanism, not a savings account.
+
+**Weight by plan, and say so.** Fairness does not mean equality. An enterprise account paying ten times more may legitimately get a larger quantum: what matters is that the ratio is a stated policy rather than an emergent property of who happens to be loudest.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/scale/fairness.ts"
+interface TenantQueue {
+  tenantId: string;
+  quantumTokens: number;   // per visit; weighted by plan, deliberately
+  deficit: number;
+  pending: RunRequest[];
+}
+
+export class DeficitRoundRobin {
+  private queues = new Map<string, TenantQueue>();
+  private order: string[] = [];
+  private cursor = 0;
+
+  enqueue(req: RunRequest) {
+    const q = this.queues.get(req.tenantId)!;
+    // Idle → reset. Deficit is smoothing, not a savings account: a tenant
+    // quiet for an hour must not be able to consume everything at once.
+    if (q.pending.length === 0) q.deficit = 0;
+    q.pending.push(req);
+  }
+
+  /** One full cycle: visit every tenant with work, dispatch what fits. */
+  next(): RunRequest | null {
+    for (let visited = 0; visited < this.order.length; visited++) {
+      const q = this.queues.get(this.order[this.cursor])!;
+      this.cursor = (this.cursor + 1) % this.order.length;
+      if (q.pending.length === 0) continue;
+
+      q.deficit += q.quantumTokens;
+
+      // Cost is in TOKENS. Counting requests would hand most of the real
+      // capacity to whichever tenant has the bigger runs.
+      const head = q.pending[0];
+      if (head.estTokens <= q.deficit) {
+        q.deficit -= head.estTokens;
+        return q.pending.shift()!;
+      }
+      // Head does not fit yet: it accumulates and is served next cycle.
+    }
+    return null;
+  }
+
+  /** Estimates drift. Without this, chronic over-runners take extra share. */
+  reconcile(tenantId: string, estimated: number, actual: number) {
+    this.queues.get(tenantId)!.deficit -= (actual - estimated);
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/scale/fairness.py"
+@dataclass
+class TenantQueue:
+    tenant_id: str
+    quantum_tokens: int      # per visit; weighted by plan, deliberately
+    deficit: int = 0
+    pending: deque = field(default_factory=deque)
+
+
+class DeficitRoundRobin:
+    def __init__(self, queues: dict[str, TenantQueue]):
+        self._q = queues
+        self._order = list(queues)
+        self._cursor = 0
+
+    def enqueue(self, req) -> None:
+        q = self._q[req.tenant_id]
+        # Idle → reset. Deficit is smoothing, not a savings account.
+        if not q.pending:
+            q.deficit = 0
+        q.pending.append(req)
+
+    def next(self):
+        """One full cycle: visit every tenant with work, dispatch what fits."""
+        for _ in range(len(self._order)):
+            q = self._q[self._order[self._cursor]]
+            self._cursor = (self._cursor + 1) % len(self._order)
+            if not q.pending:
+                continue
+
+            q.deficit += q.quantum_tokens
+
+            # Cost is in TOKENS. Counting requests would hand most of the
+            # real capacity to whichever tenant has bigger runs.
+            head = q.pending[0]
+            if head.est_tokens <= q.deficit:
+                q.deficit -= head.est_tokens
+                return q.pending.popleft()
+        return None
+
+    def reconcile(self, tenant_id: str, estimated: int, actual: int) -> None:
+        # Estimates drift. Without this, chronic over-runners take extra share.
+        self._q[tenant_id].deficit -= (actual - estimated)
+```
+
+</Tab>
+</Tabs>
+
+Deficit round robin comes from packet scheduling, Shreedhar and Varghese, 1995, where the problem was identical in shape: share a link fairly among flows whose packet sizes you cannot control, in constant time per item. Agent runs are variable-cost packets, and the same algorithm applies without modification.
+
+## Trade-offs
+
+**Estimates drive the scheduling, so bad estimates skew it.** Estimate from that workflow's historical distribution rather than a constant, reconcile on completion, and watch the per-tenant estimate error: a tenant whose runs consistently cost triple the estimate is getting triple their share until reconciliation catches up.
+
+**Shared state across schedulers.** Deficits must be shared or partitioned consistently, or N schedulers each grant a full quantum and the fairness is N times looser than intended. Consistent-hash tenants to schedulers, or keep the counters in a shared store.
+
+**Fairness is not free.** A cycle over eleven tenants is cheap; a cycle over ten thousand needs an active-tenant index rather than a full sweep. Deficit round robin is O(1) per dispatch when implemented with an active list, and that is why it is the right algorithm at scale.
+
+**A fair system can still be an overloaded one.** Fairness distributes shortage; it does not remove it. If every tenant is degraded equally, the answer is capacity or [admission control](/book/reliability/backpressure), not a better scheduler.
+
+## When not to use it
+
+**Single-tenant systems.** No peers, no contention. [Priority classes](/book/patterns/scale/priority-queues) are the relevant control.
+
+**When tenants have dedicated capacity.** If each customer has their own quota and workers, isolation is physical and fairness is not a scheduling problem.
+
+**When volume is naturally even.** Eleven tenants with similar steady rates rarely trigger this. Add it when you see the queue-age skew, not preemptively.
+
+**When per-tenant caps suffice.** A simple hard cap per tenant is much less code and works well when capacity is comfortable: it wastes room when a tenant is quiet, and that waste can be cheaper than the machinery.
+
+<Aside type="caution" title="Measure queue age per tenant, not aggregate">
+The aggregate p95 queue age can look healthy through this entire failure. Nine hundred of a thousand queued items belong to one tenant, so nine hundred are being served promptly and the percentile is fine, while ten customers wait forty minutes.
+
+Every metric that matters here is **per tenant**: queue age p95, admission rejection rate, tokens consumed against share. And the alert is on the *skew*, the ratio between the worst-served and median tenant, rather than on any absolute number.
+
+This is the same shape as [measuring retrieval recall per tenant rather than globally](/book/patterns/retrieval/filtered-retrieval), and the same shape as [the cost dashboard needing a tenant dimension](/book/observability/cost-accounting). A multi-tenant system whose metrics are all aggregates is a system that cannot see its own worst customer experience, which is usually the one about to churn.
+</Aside>
+
+## Related
+
+- [Priority Task Queues](/book/patterns/scale/priority-queues): fairness between urgency classes; this is fairness within one
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): per-tenant caps, and admission before starting a run
+- [Multi-Tenant Isolation](/book/security/tenant-isolation): the correctness boundary this shares a dimension with
+- [Token and Cost Accounting](/book/observability/cost-accounting): the per-tenant spend this schedules against
+- [Sliding Window](/book/patterns/scale/sliding-window): the in-flight bound the scheduler feeds

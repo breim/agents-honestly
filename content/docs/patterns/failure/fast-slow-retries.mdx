@@ -1,0 +1,195 @@
+---
+title: "Fast and Slow Retries"
+description: "Two retry policies: one for blips, one for outages."
+---
+
+## Problem
+
+One retry policy has to cover two situations that want opposite behaviour.
+
+A **blip**, a dropped connection, one overloaded shard, a momentary hiccup, is over in milliseconds. The right response is to retry immediately, three times, and never tell anyone. A policy that waits thirty seconds before the second attempt turns a 200-millisecond problem into a 30-second latency spike for no reason.
+
+An **outage**, the provider is degraded for ninety seconds, is not over. The right response is to back off hard, and after a few attempts to [stop generating traffic entirely](/book/reliability/fallbacks-and-breakers). A policy that retries fast turns your fleet into the thing keeping the provider down.
+
+Pick the fast policy and you amplify outages. Pick the slow one and every blip becomes a visible latency spike. Split the difference and you get both problems at half strength.
+
+## Forces
+
+- **The two failure durations differ by orders of magnitude**: milliseconds versus minutes.
+- **You cannot tell them apart from the first failure.** The first error looks identical.
+- **You can tell them apart from the pattern**: one failure is a blip, a rising failure *rate* is an outage.
+- **Retries are load**, and during an outage they arrive when there is least room for them.
+- **Latency budgets are finite**, so a slow retry may exceed the run's deadline anyway.
+- **Model retries cost tokens**, not just sockets.
+
+## Solution
+
+**Two phases in one policy**: a short burst of near-immediate attempts, then a hard switch to exponential backoff, with a [breaker](/book/patterns/failure/tool-circuit-breaker) watching the aggregate to end the second phase entirely.
+
+<Figure caption="Fast phase absorbs blips invisibly. Slow phase survives outages. The breaker ends the argument when it is clearly not coming back." frame={false}>
+
+```
+   attempt 1  ─── fail
+   ┌──────────────────────── FAST PHASE ────────────────────────┐
+   │ attempt 2   +50 ms     jittered                            │
+   │ attempt 3   +150 ms                                        │
+   │  ── covers blips: recovers inside a normal latency budget  │
+   └────────────────────────────────────────────────────────────┘
+   ┌──────────────────────── SLOW PHASE ────────────────────────┐
+   │ attempt 4   +2 s       full jitter, capped                 │
+   │ attempt 5   +8 s                                           │
+   │  ── covers outages: stops adding load to a struggling      │
+   │     dependency, and usually exceeds the run deadline first │
+   └────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+   BREAKER (aggregate, across runs)
+   failure rate high ──▶ OPEN ──▶ no attempts at all, fail fast
+                                  → the fallback ladder, or escalate
+```
+
+</Figure>
+
+Four rules:
+
+**Fast phase is short and near-immediate.** Two or three attempts within a few hundred milliseconds, jittered. It has to fit inside a normal latency budget or it is not fast. The point is that a blip never becomes visible.
+
+**Slow phase uses full jitter and a cap.** Sample uniformly from `[0, ceiling]` rather than adding a wobble to a fixed delay. [Deterministic backoff re-synchronizes every client that failed in the same second](/book/reliability/timeouts-and-retries) into a sharper second spike.
+
+**The breaker ends the slow phase.** Individual retry policies bound one call; only an aggregate view knows the dependency is down. When the breaker opens, attempts stop entirely, which is the only thing that actually reduces load during an outage.
+
+**Both phases share one budget, and it is a run budget.** Attempts per run, not per call, and counted against the same [token and time budget](/book/patterns/control/bounded-autonomy) as productive work. A twenty-step run with five attempts per step has a hundred attempts of headroom nobody chose.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/failure/retry-phases.ts"
+const FAST = { attempts: 3, baseMs: 50,   capMs: 200 };     // blips
+const SLOW = { attempts: 2, baseMs: 2_000, capMs: 30_000 }; // outages
+
+export async function withPhasedRetry<T>(
+  fn: () => Promise<T>, ctx: RunContext, dep: string,
+): Promise<T> {
+  // The breaker sees every run. A single call's policy cannot know the
+  // dependency is down; only the aggregate can.
+  if (breaker(dep).isOpen()) throw new CircuitOpen(dep);
+
+  let attempt = 0;
+  for (;;) {
+    try {
+      const out = await fn();
+      breaker(dep).recordSuccess();
+      return out;
+    } catch (err) {
+      const cls = classify(err);
+      // Only transient failures retry at all — see non-retryable errors.
+      if (cls !== 'transient') throw err;
+
+      breaker(dep).recordFailure();
+      attempt += 1;
+
+      // Retries count against the RUN's budget, like productive work.
+      if (!ctx.budget.allowAttempt() || attempt >= FAST.attempts + SLOW.attempts) {
+        throw err;
+      }
+
+      const phase = attempt < FAST.attempts ? FAST : SLOW;
+      const ceiling = Math.min(phase.capMs, phase.baseMs * 2 ** attempt);
+      // Full jitter: uniform in [0, ceiling]. A fixed delay re-synchronizes
+      // every client that failed in the same second.
+      const waitMs = retryAfterMs(err) ?? Math.random() * ceiling;
+
+      if (ctx.deadline.wouldExceed(waitMs)) throw err;   // no point waiting
+      await sleep(waitMs);
+    }
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/failure/retry_phases.py"
+FAST = Phase(attempts=3, base_ms=50, cap_ms=200)        # blips
+SLOW = Phase(attempts=2, base_ms=2_000, cap_ms=30_000)  # outages
+
+
+async def with_phased_retry(fn, ctx, dep: str):
+    # The breaker sees every run. A single call's policy cannot know the
+    # dependency is down; only the aggregate can.
+    if breaker(dep).is_open():
+        raise CircuitOpen(dep)
+
+    attempt = 0
+    while True:
+        try:
+            out = await fn()
+            breaker(dep).record_success()
+            return out
+        except Exception as err:
+            # Only transient failures retry at all.
+            if classify(err) != "transient":
+                raise
+
+            breaker(dep).record_failure()
+            attempt += 1
+
+            # Retries count against the RUN's budget, like productive work.
+            if not ctx.budget.allow_attempt() or attempt >= FAST.attempts + SLOW.attempts:
+                raise
+
+            phase = FAST if attempt < FAST.attempts else SLOW
+            ceiling = min(phase.cap_ms, phase.base_ms * 2 ** attempt)
+            # Full jitter: uniform in [0, ceiling]. Note `is not None`, not
+            # `or`: a Retry-After of 0 means retry now, and `or` would
+            # silently discard it and sleep instead.
+            header = retry_after_ms(err)
+            wait_ms = header if header is not None else random.random() * ceiling
+
+            if ctx.deadline.would_exceed(wait_ms):
+                raise                                    # no point waiting
+            await asyncio.sleep(wait_ms / 1000)
+```
+
+</Tab>
+</Tabs>
+
+`ctx.deadline.wouldExceed(waitMs)` is the check that keeps the slow phase honest. Sleeping eight seconds inside a run with four seconds left produces a failure at second twelve instead of second four, strictly worse, and invisible unless someone thought about it.
+
+## Trade-offs
+
+**Two phases is more to reason about than one.** The tuning surface doubles. Most systems need only the fast phase plus a breaker; add the slow phase when you have evidence that multi-second outages are common enough to be worth waiting through.
+
+**The fast phase can mask a real problem.** A dependency failing 20% of the time looks healthy from the outside because attempt two usually succeeds. Alert on *attempt rate*, not just on final failures. A rising retry rate is the leading indicator, and the final-failure rate is the lagging one.
+
+**Slow retries rarely help within a run.** By the time you have waited eight seconds, the run's deadline is usually the binding constraint. In practice the slow phase mostly exists for background work; interactive paths should fail to [a fallback](/book/patterns/failure/fallback-model-ladder) rather than wait.
+
+**Retries on model calls are billed.** A transient failure after the model generated most of a response still costs the input tokens, and the retry costs them again. This is [why the retry budget is a cost control](/book/production/cost-engineering) and why attempt counts on expensive calls should be small.
+
+## When not to use it
+
+**When the failure is not transient.** [Context-length, refusals, and malformed arguments](/book/patterns/failure/non-retryable-model-errors) must not enter this function at all.
+
+**When the operation is not safe to repeat.** A [class ④ or ⑤ write](/book/tools/read-and-write-tools) retries only if it is idempotent, and a timeout on one is [resolved by the paired read, not by another attempt](/book/reliability/idempotency-in-practice).
+
+**When a fallback is better than waiting.** If a [ladder rung](/book/patterns/failure/fallback-model-ladder) can serve the request in 400 ms, waiting eight seconds for the primary is the wrong trade on any interactive path.
+
+**When something upstream already retries.** [Retry at exactly one layer per failure class](/book/reliability/timeouts-and-retries). Two phased policies stacked is up to twenty-five attempts, and nobody chose that number.
+
+<Aside type="note" title="You cannot classify the first failure, so classify the pattern">
+The premise of this pattern is an admission: from a single error you cannot tell a blip from an outage. Both are a `503`.
+
+What distinguishes them is *aggregate behaviour over time*, which no per-call policy can see. The fast phase is a cheap bet that it was a blip. The slow phase is a hedge. And the [breaker](/book/patterns/failure/tool-circuit-breaker) is the only component with the information to actually decide, because it watches every call across every run, and a failure rate is the thing that says *this is not coming back*.
+
+Which is why these three patterns are really one design. A retry policy without a breaker amplifies outages by construction, and a breaker without a retry policy makes every blip a user-visible failure. Neither works alone, and most systems ship the first half.
+</Aside>
+
+## Related
+
+- [Non-Retryable Model Errors](/book/patterns/failure/non-retryable-model-errors): deciding what may enter this function
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): the aggregate view that ends the slow phase
+- [Delayed Retry with Jitter](/book/patterns/failure/delayed-retry-jitter): the jitter arithmetic, and why full jitter
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the chapter, including retry budgets and the four retry layers
+- [Fallback Model Ladder](/book/patterns/failure/fallback-model-ladder): serving the request instead of waiting for the primary

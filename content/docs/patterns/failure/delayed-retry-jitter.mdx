@@ -1,0 +1,172 @@
+---
+title: "Delayed Retry with Jitter"
+description: "Back off without synchronizing your whole fleet into a thundering herd."
+---
+
+## Problem
+
+A provider blips at 14:00:00. Four hundred in-flight calls fail in the same second.
+
+Every one of them runs the same exponential backoff: wait one second, retry. At 14:00:01, four hundred requests arrive simultaneously at a service that is still recovering. They fail again. Every one waits two seconds. At 14:00:03, four hundred more arrive at once.
+
+The backoff worked exactly as designed and made things worse. Exponential delays spread retries out *over time* while leaving them perfectly aligned *with each other*, so instead of continuous pressure you get a series of sharp, synchronized spikes, each hitting a dependency at its least capable moment.
+
+Adding backoff to a retry policy is the well-known half of the fix. The half that actually decorrelates the fleet is randomization, and it is the half that gets left out.
+
+## Forces
+
+- **Failures are correlated by construction.** One outage fails everyone at the same instant.
+- **A deterministic delay preserves that correlation** through every subsequent attempt.
+- **Randomness costs nothing**: one call to a random number generator.
+- **Too much randomness wastes time** if it can delay a retry far beyond what recovery required.
+- **The provider may know better than you.** `Retry-After` is information, not a suggestion.
+- **Agents amplify this**: [four retry layers](/book/reliability/timeouts-and-retries) plus a fan-out means one blip can produce thousands of aligned retries.
+
+## Solution
+
+**Full jitter**: sample the delay uniformly from zero to the exponential ceiling, rather than waiting the ceiling.
+
+<Figure caption="Same ceiling, same expected number of retries. The difference is that the arrivals are spread instead of stacked." frame={false}>
+
+```
+   DETERMINISTIC BACKOFF (delay = base × 2^n)
+   t=0  ████████████████████████  400 fail together
+   t=1  ████████████████████████  400 retry together   ◀── spike
+   t=3  ████████████████████████  400 retry together   ◀── spike
+        the herd stays a herd, forever
+
+   FULL JITTER (delay = random in [0, base × 2^n])
+   t=0  ████████████████████████  400 fail together
+   t=0–1   ▂▃▁▂▄▁▃▂▁▄▂▃▁▂▃▁▄▂    spread across the window
+   t=0–3      ▁▂▁▃▁▂▁▁▂▃▁▂▁▁▂     spread wider, still bounded
+        one blip, one recovery, no second outage
+
+   delay = random() × min(cap, base × 2^attempt)
+                     ▲
+                     └── the cap keeps the tail bounded
+```
+
+</Figure>
+
+Four rules:
+
+**Sample from `[0, ceiling]`, not `ceiling ± wobble`.** Adding a small random offset to a fixed delay leaves the fleet largely aligned. Full jitter spreads uniformly across the whole window, which is what actually breaks the correlation.
+
+**Cap the ceiling.** Exponential growth without a cap produces a retry scheduled beyond any plausible recovery, and beyond the run's [deadline](/book/patterns/control/bounded-autonomy), which makes the wait pure waste. Thirty seconds is a common ceiling for interactive work.
+
+**Honour `Retry-After` above your own arithmetic**, and then jitter it. The provider's number is better information than any curve, and if every client obeys it exactly you have re-synchronized the herd on the provider's own schedule. Wait the header's value plus a small random additional amount.
+
+**Never sleep past the deadline.** Check whether the computed delay fits in the time the run has left. Sleeping eight seconds in a run with four seconds remaining converts a fast failure into a slow one.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/failure/jitter.ts"
+const BASE_MS = 500;
+const CAP_MS  = 30_000;
+
+// Full jitter: uniform in [0, ceiling]. NOT ceiling ± wobble, which leaves
+// the fleet largely aligned and produces a second, sharper spike.
+export function fullJitterMs(attempt: number, base = BASE_MS, cap = CAP_MS): number {
+  const ceiling = Math.min(cap, base * 2 ** attempt);
+  return Math.random() * ceiling;
+}
+
+export async function waitBeforeRetry(
+  attempt: number, err: unknown, ctx: RunContext,
+): Promise<'wait' | 'give_up'> {
+  const header = retryAfterMs(err);
+
+  const delay = header != null
+    // The provider's number beats any curve — but if every client obeys it
+    // exactly, the herd re-synchronizes on THEIR schedule. Jitter it too.
+    ? header + Math.random() * Math.min(header * 0.2, 2_000)
+    : fullJitterMs(attempt);
+
+  // Sleeping past the deadline turns a fast failure into a slow one.
+  if (ctx.deadline.wouldExceed(delay)) return 'give_up';
+
+  ctx.trace.observe('retry.delay_ms', delay, { attempt });
+  await sleep(delay);
+  return 'wait';
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/failure/jitter.py"
+import random
+
+BASE_MS = 500
+CAP_MS = 30_000
+
+
+def full_jitter_ms(attempt: int, base: int = BASE_MS, cap: int = CAP_MS) -> float:
+    # Full jitter: uniform in [0, ceiling]. NOT ceiling ± wobble, which
+    # leaves the fleet aligned and produces a second, sharper spike.
+    ceiling = min(cap, base * 2 ** attempt)
+    return random.random() * ceiling
+
+
+async def wait_before_retry(attempt: int, err, ctx) -> str:
+    header = retry_after_ms(err)
+
+    if header is not None:
+        # The provider's number beats any curve — but if every client obeys
+        # it exactly, the herd re-synchronizes on THEIR schedule.
+        delay = header + random.random() * min(header * 0.2, 2_000)
+    else:
+        delay = full_jitter_ms(attempt)
+
+    # Sleeping past the deadline turns a fast failure into a slow one.
+    if ctx.deadline.would_exceed(delay):
+        return "give_up"
+
+    ctx.trace_observe("retry.delay_ms", delay, attempt=attempt)
+    await asyncio.sleep(delay / 1000)
+    return "wait"
+```
+
+</Tab>
+</Tabs>
+
+Jittering the `Retry-After` value is the part most implementations miss. A header that says *wait 5 seconds* is excellent advice, and four hundred clients following it precisely arrive together at second five, the same herd, on a schedule the provider chose.
+
+## Trade-offs
+
+**Individual latency becomes unpredictable.** A given retry might fire immediately or near the ceiling. Expected wait is halved relative to deterministic backoff, and the variance is much higher, which is fine for throughput and worth knowing when reading a p99.
+
+**Full jitter can retry very early.** A sample near zero means retrying almost immediately, which for a genuine outage is a wasted call. That is the trade: some early attempts fail cheaply in exchange for the fleet never spiking. If early retries are expensive, a model call, consider a floor.
+
+**Randomness makes reproduction harder.** A test asserting retry timing needs a seeded generator. Inject the RNG rather than calling it globally, which is also required if the code runs inside [a durable workflow](/book/durable-execution/determinism-and-retries).
+
+**It does not reduce total load.** Jitter spreads the same number of retries. During a real outage, the thing that reduces load is [the breaker](/book/patterns/failure/tool-circuit-breaker) and the [retry budget](/book/reliability/timeouts-and-retries). Jitter only stops the load arriving in spikes.
+
+## When not to use it
+
+**In workflow code that must replay deterministically.** `Math.random()` is [a source of divergence](/book/durable-execution/determinism-and-retries). Use the SDK's replay-safe random, or let the platform's own retry policy apply the jitter.
+
+**When the delay is a business rule.** *"Retry the payment at 09:00 tomorrow"* is a schedule, not a backoff. Jittering it is wrong.
+
+**When the operation is not retryable at all.** [Context-length errors, refusals, and unknown-outcome writes](/book/patterns/failure/non-retryable-model-errors) never reach this function.
+
+**When there is one client.** A single-instance job cannot form a herd with itself. Jitter is harmless there and is not buying anything.
+
+<Aside type="note" title="Backoff is the famous half; jitter is the half that works">
+The AWS simulations that made this canonical, Marc Brooker's work, now baked into every AWS SDK, show the result that is counterintuitive until you see it: **exponential backoff alone does not solve the thundering herd.** It delays it and sharpens it.
+
+The reason is that backoff changes *when* each client retries and jitter changes *whether they retry together*. A correlated failure produces a correlated retry schedule, and no amount of exponential growth decorrelates identical clients running identical code from identical timestamps.
+
+Which is why this is one of the few places in this book where a one-line change, multiply the delay by a random number in `[0, 1]`, is the whole fix, and why leaving it out is one of the most common production incidents in distributed systems. Agents make it worse only in scale: [four retry layers](/book/reliability/timeouts-and-retries) and a fan-out means one blip can synchronize thousands of calls instead of hundreds.
+</Aside>
+
+## Related
+
+- [Fast and Slow Retries](/book/patterns/failure/fast-slow-retries): the two phases this jitter is applied within
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): what actually reduces load when the dependency is down
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the chapter, including retry budgets and the four layers
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): avoiding the 429 that starts this in the first place
+- [Determinism and Retries](/book/durable-execution/determinism-and-retries): why `Math.random()` cannot live in workflow code

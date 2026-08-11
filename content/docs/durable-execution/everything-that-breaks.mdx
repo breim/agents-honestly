@@ -1,0 +1,142 @@
+---
+title: "Everything That Breaks"
+description: "A field guide to agent failure: dead processes, provider outages, throttling, poison inputs, deploys mid-run."
+---
+
+Part X is about a thirty-year-old idea from distributed systems, and before any of it is worth learning you should see the problem it is for.
+
+Start with arithmetic, because the arithmetic is the whole argument.
+
+## An agent is a machine for amplifying small failure rates
+
+Every step in an agent run depends on the ones before it. Dependent steps multiply:
+
+| Per-step success | 5 steps | 20 steps | 50 steps |
+| --- | --- | --- | --- |
+| 99% | 95% | 82% | 61% |
+| 98% | 90% | 67% | 36% |
+| 95% | 77% | 36% | 8% |
+
+*(Illustrative. Real systems are worse than this table, for the reason below.)*
+
+A 99% per-step success rate sounds like a system that works. Across a forty-step investigation it is a coin flip. And the research on long-horizon agentic tasks reports something worse than clean multiplication: **failures compound nonlinearly with task length**, which drives systems from reliable short-task performance to near-systematic failure as the horizon grows.
+
+The same body of work carries a finding worth absorbing before you reach for a fix: **stacking more scaffolding does not reliably improve reliability.** More prompt engineering, more validation layers, more retry wrappers. Past a point they stop buying anything, and some of them make the run longer, which makes the arithmetic above worse.
+
+That is why this part exists. Reliability at length is a systems problem, not a prompting problem.
+
+## Six places it breaks
+
+A synthesis of twenty-seven benchmark, taxonomy, and audit papers across 2023–2026 converged on six clusters. They are worth knowing as a checklist, because most teams instrument exactly one of them:
+
+| Cluster | Looks like |
+| --- | --- |
+| Tool invocation and parameters | Wrong tool, wrong arguments, malformed calls |
+| Planning and constraint satisfaction | A plan that violates a stated rule, or never converges |
+| **Long-horizon degradation** | Quality falling as context accumulates |
+| Multi-agent coordination | Agents overwriting or contradicting each other |
+| Safety and security | Injection, exfiltration, unauthorized action |
+| Measurement validity | Your evaluation does not measure what you think |
+
+Parts VIII, III, XIX, XVII, and XIV take those in turn. **Part X is about a seventh thing the list does not mention**, because it is not a property of models at all. The machine running the agent is itself unreliable, and every cluster above gets worse when the process hosting it can vanish.
+
+## The infrastructure field guide
+
+Sorted by how surprising each one is the first time.
+
+**The process dies.** A deploy, an OOM kill, a pod eviction, a spot instance reclaimed, a laptop closed. The obvious fix is to restart, and the obvious fix does nothing, because nothing recorded where the run had got to. The refund either happened or did not, and the new process has no way to find out.
+
+**Deploys are the common case, and nobody counts them as failures.** You ship on Tuesday afternoon. Every run in flight is executing code that no longer exists on any machine. This is not an incident, it is a normal Tuesday. For a run measured in seconds it does not matter, while for one that waits three days for an approval it is the defining constraint.
+
+**The provider throttles you.** A `429` means you exceeded a rate limit measured in requests or tokens per minute, and it usually arrives with a `retry-after` header. The provider has already computed how long you should wait. A naive retry loop ignores that number and retries immediately, converting throttling into more throttling.
+
+**The provider is overloaded, or out.** A `529` means the provider itself is saturated. Regional and global outages happen.
+
+<Aside type="caution" title="429 and 529 are not the same failure, and your circuit breaker must know">
+The distinction people get wrong: **a 429 should not count as a circuit-breaker failure.** It is a backoff signal, and the provider told you the delay. Counting throttling as failure trips your breaker during normal operation and takes you down harder than the rate limit would have.
+
+A **529 is** a failure. The provider is saturated, and continuing to hammer it helps nobody.
+
+And the third case is the one no error handler catches: **latency degrading under load with no error returned at all.** Nothing throws. Requests just take four times longer, timeouts start firing somewhere downstream, and your dashboards show a healthy error rate. Timeouts are the only instrument that sees this, which is [why the previous chapters spend so long on them](/book/durable-execution/determinism-and-retries).
+</Aside>
+
+**The tool call ends in "unknown."** The third state from [idempotency](/book/tools/idempotency): the connection died and most timeouts happen on the *response*, so the operation probably succeeded. Without a paired read, no amount of infrastructure resolves it.
+
+**A poison input never terminates.** A ticket that makes the model loop: call a tool, read the result, call the same tool. Bounds catch it, which is what [bounds are for](/book/first-agent/the-loop-by-hand), and the run still costs a full step budget to learn nothing.
+
+**Time itself fails.** The approval that waits three days outlives the token that authenticated it and the [idempotency key window](/book/tools/idempotency) that would have deduplicated the retry. Long waits are not just long. They cross the expiry boundary of everything around them.
+
+## The failure that matters most is the one you cannot see
+
+A longitudinal study of a production agent runtime documented 22 incidents across eight weeks. One meta-pattern appeared **at least 28 times**, more often than there were incidents, because it compounded them:
+
+> **A failure whose error signal never reaches a human in actionable form.**
+
+Its taxonomy of mechanisms reads like an index of this book: environment and platform quirks, design-assumption mismatches, **error swallowing and dilution**, chained hallucination and fabrication, and operational omission and forensic blind spots.
+
+This book keeps meeting that pattern under different names, and it is worth seeing them in one place:
+
+- A [tool result truncated](/book/tools/result-design) mid-payload and reported as complete.
+- A [selector that dropped the right document](/book/context/dynamic-selection), so the model answered from the second-best source.
+- A [run that halted on a bound](/book/first-agent/the-loop-by-hand) and returned whatever text was lying around, marked handled.
+- A [workflow task retrying forever](/book/durable-execution/determinism-and-retries) while the execution's status says `RUNNING`.
+- A [tool that found nothing](/book/tools/errors-as-instructions) and reported it as an error, or found something and reported nothing.
+- A [crashed run](/book/langgraph/persistence) whose checkpoint sits in a table with nothing scheduled to notice it. Durable, and permanently stopped.
+
+Loud failures get fixed in week one. **The failures that survive to month six are the ones that look like success**. Durable execution matters more than its feature list suggests because its mechanism produces, as a by-product, a complete and queryable record of what actually happened.
+
+## What Part X does and does not fix
+
+Being precise, because this part is about to spend four chapters on machinery:
+
+| Failure | Durable execution's answer |
+| --- | --- |
+| Process dies mid-run | **Removed.** Another worker resumes from the journal. |
+| Deploy mid-run | **Removed.** In-flight executions pin to the version that started them. |
+| Effect repeated on recovery | **Removed**, given the effect is idempotent. |
+| Provider throttling and outages | **Managed.** Retries with backoff as policy, not as a loop you wrote. |
+| Three-day waits | **Removed.** A durable timer, no process held. |
+| Nobody notices a stopped run | **Removed.** The platform reassigns abandoned work. |
+| No record of what happened | **Removed.** The event history is the record. |
+| The model picks the wrong tool | **Not addressed.** That is Part VIII. |
+| Quality decaying as context grows | **Not addressed.** That is Part III. |
+| Your evaluation measures the wrong thing | **Not addressed.** That is Part XIV. |
+| A plan that violates a rule, or never converges | **Not addressed.** That is [Part VI](/book/workflows/the-determinism-test), and the bounds in Part XXI. |
+| Agents overwriting each other | **Not addressed.** That is [Part XIX](/book/multi-agent/when-not-to), which mostly argues against having them. |
+| Injection, exfiltration, unauthorized action | **Not addressed at all.** That is [Part XVII](/book/security/threat-model). A replayable journal of a breach is still a breach. |
+
+The bottom three matter as much as the top seven. Durable execution makes an unreliable *machine* reliable; it has nothing to say about an unreliable *decision*. A system with perfect durability and a badly designed tool catalogue will fail every ticket identically, forever, with an immaculate audit trail.
+
+## Atlas's actual failure budget
+
+Twenty tickets, and the failures are not evenly interesting:
+
+- **Eleven need more than one tool round trip**, so every one of them is exposed to the arithmetic at the top of this chapter.
+- **One moves money.** `issue_credit` carries every infrastructure failure in the guide at once: a process that can die, a network that times out on the response, a provider that can throttle, and a customer who notices either mistake.
+- **One waits for a person.** Which turns a run measured in seconds into one measured in days, and crosses every expiry boundary in the system.
+- **The rest are read-only** and genuinely fine under a restart.
+
+That distribution is typical, and it is the honest case for this part: **most of your agent does not need durable execution, and the part that does cannot be talked out of it.**
+
+## References
+
+- [Beyond the Leaderboard](https://arxiv.org/abs/2607.05775), twenty-seven benchmark, taxonomy, and audit papers reduced to six failure clusters.
+- [When Errors Become Narratives](https://arxiv.org/abs/2606.14589), twenty-two incidents with postmortems from eight weeks of one production runtime.
+
+---
+
+Next: [Why Durable Execution](/book/durable-execution/why-durable-execution). Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
+
+## Takeaways
+
+- Dependent steps multiply. 99% per-step success is 82% over twenty steps and 61% over fifty, and long-horizon research reports compounding that is nonlinear rather than merely multiplicative.
+- More scaffolding does not reliably improve reliability, and it lengthens runs, which makes the arithmetic worse. Reliability at length is a systems problem.
+- The literature converges on six failure clusters: tool invocation, planning, long-horizon degradation, multi-agent coordination, safety, and measurement validity. Part X is about a seventh the list omits: the machine itself is unreliable.
+- A deploy is the most common mid-run failure and nobody counts it as one, because it is a normal Tuesday.
+- 429 is a backoff signal carrying a delay the provider computed; 529 is genuine overload. Counting 429s as circuit-breaker failures takes you down during normal operation.
+- The provider failure no error handler catches is latency degrading with no error at all. Timeouts are the only instrument that sees it.
+- A production study found the dominant meta-pattern was a failure whose signal never reaches a human in actionable form: 28 occurrences across 22 incidents in eight weeks.
+- This book has met that pattern as silent truncation, silent selection, a halt reported as an answer, a task retrying under a `RUNNING` status, and a checkpoint nothing is scheduled to resume.
+- Loud failures get fixed in week one. The ones that survive to month six look like success.
+- Durable execution removes dead processes, mid-run deploys, repeated effects, unnoticed stopped runs, and the absence of a record. It does not fix tool selection, context decay, or a bad evaluation.
+- Most of an agent does not need this. The part that moves money cannot be talked out of it.

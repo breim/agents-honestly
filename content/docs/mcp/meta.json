@@ -1,0 +1,9 @@
+{
+  "title": "Part IX · Agent Protocols: MCP & A2A",
+  "pages": [
+    "what-mcp-is",
+    "servers-clients-transports",
+    "when-a-function-is-better",
+    "remote-agents-and-a2a"
+  ]
+}

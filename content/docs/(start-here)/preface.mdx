@@ -1,0 +1,71 @@
+---
+title: Preface
+description: Who this book is for, what you will build, and why most agent material stops right before the hard part.
+---
+
+## The gap this book fills
+
+There is a large and growing body of material that teaches you to build an agent. There is very little that teaches you to run one.
+
+The gap is not subtle. A tutorial agent lives inside a single process, for a few seconds, serving one cooperative user, with a budget nobody is measuring, over data nobody is guarding. A production agent lives across deploys, gets interrupted, waits days for a human, runs a thousand times in parallel against a provider that throttles you, reads documents an attacker may have written, spends real money on every retry, and occasionally does something wrong in a way that costs a customer.
+
+The techniques that close that gap are mostly not new. They come from information retrieval, from durable execution, from distributed transactions, from authorization, from testing methodology. Those disciplines predate this wave by decades, and the agent ecosystem is rediscovering them one incident at a time.
+
+This book connects them to agents directly, and it makes a claim about what that adds up to:
+
+> **Building an agent is easy. Building an agentic system a company can depend on is software engineering.**
+
+## Who this is for
+
+You write software. You may have called an LLM API, you may not have. Either way you have not built an agent yet, and no two explanations of what one is have agreed. This book assumes none of it and starts at a single API call.
+
+Applied AI engineering is not machine learning. ML engineering is the work of making a model behave: data, training, weights, evaluating the model itself. This book is the work of making a *system* behave when a model you did not train, cannot inspect, and do not control sits in the middle of it. Different artifact, different failure modes, different parent disciplines.
+
+So you do **not** need an ML background. This is a different job, not ML made easy. What you need is comfort with a typed language, an HTTP API, SQL, and the idea that a system can fail halfway through.
+
+If you have run distributed systems before, several parts will feel familiar in structure and unfamiliar in detail. The failure modes are old. A nondeterministic, expensive, occasionally-wrong component in the middle changes what the fixes look like.
+
+## What you'll build
+
+The running project is **Atlas**, an internal agent for a fictional company called Meridian Supply. Atlas does two things that most real enterprise agents do, and that pull in opposite directions:
+
+**It answers questions** across systems that were never designed to be queried together: a document corpus, a Postgres warehouse, a CRM, and the relationships between customers, contracts, and projects.
+
+**It takes actions** with consequences. It issues refunds, sends customer email, and updates records, all under a policy, with approval where the blast radius warrants it.
+
+The first half forces retrieval engineering: knowing when a question is semantic, when it is lexical, when it is SQL, when it is a graph traversal, and when the index is a stale copy of a live system. The second half forces everything about durability: compensation when step two fails after step one succeeded, approval gates that hold no thread open for three days, and idempotency for a refund call that timed out ambiguously.
+
+| Atlas has to… | Which forces you to learn |
+| --- | --- |
+| Answer "what's our policy on…" | Retrieval, chunking, grounding, citations |
+| Answer "how much did we sell in Spain in Q2" | That this is SQL, not retrieval |
+| Answer "why is the Acme account at risk" | Multi-hop relationships across systems |
+| Never show one tenant another's documents | Metadata filtering as an authorization boundary |
+| Ignore instructions hidden inside a document | That retrieved text is untrusted input |
+| Issue a refund, then email the customer | Compensating a side effect when step two fails |
+| Escalate anything over the policy limit | Human-in-the-loop that holds no process open |
+| Wait days for a customer to reply | State that outlives every process and deploy |
+| Share one provider quota with live chat | Rate limiting, priority, and fairness |
+| Cost less than a person doing the same job | Token budgets as a first-class constraint |
+
+You will build Atlas more than once, and this is deliberate. First with no framework at all, so you know what the loop actually is. Then as an explicit graph, so you can see what the abstraction buys. Then on durable execution, so it survives being real. Each rewrite is short, because by then you understand the thing you are rewriting.
+
+## What this book is not
+
+**Not a framework manual.** LangChain, LangGraph, Temporal, and the AI SDK all have documentation, and it is better than anything a book could reproduce. This book covers what those docs assume you already know: which tool to reach for, why, what it costs, and what happens when two of them claim the same job.
+
+**Not prompt engineering.** Prompting matters, and it changes with every model release. Some of it generalizes: how tokens and context work, how tool schemas shape behavior, why your agent is nondeterministic. That part is here. The rest belongs in a blog post with a date on it.
+
+**Not machine learning.** Nothing here trains a model. You will choose models, embeddings, and rerankers, and one chapter covers *when* a fine-tune is the right answer. Deciding to fine-tune is an engineering call. Running one belongs to a different book. Evals are the one place you borrow from ML directly, and what you borrow is the measurement discipline, not the gradients.
+
+**Not neutral.** I will tell you when I think a popular approach is wrong. Multi-agent architectures are usually a mistake. Most RAG pipelines should have been a tool call. GraphRAG is expensive and most teams reaching for it have a chunking problem instead. A lot of what gets called "an agent" should be three if-statements. You are free to disagree, and I try to give you enough reasoning to do so productively.
+
+## A note on things that go stale
+
+Everything specific to one model or one library version on one date will be wrong by the time you read it. Prices drop, context windows grow, parameters get deprecated, integrations leave preview.
+
+So the book states mechanisms, not numbers. *Output tokens cost several times what input tokens cost* is a fact about how inference works and will outlive this book. *Output tokens cost $15 per million* is a fact about a pricing page. Where a concrete figure makes an example clearer, the text labels it illustrative, and you should check the source before it reaches a spreadsheet. Where a library is moving fast, the chapter says so.
+
+---
+
+Next: [The Agentic Engineer's Map](/book/the-map). The whole system on one page, and the three questions that route every decision in it.

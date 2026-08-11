@@ -1,0 +1,167 @@
+---
+title: Diagram Lab
+description: Working reference for the four diagram components. Not part of the book.
+---
+
+Every figure below is the real content from [The Agentic Engineer's Map](/book/the-map),
+rendered through the components rather than as ASCII. Delete this page once the
+book's diagrams have been converted.
+
+## Layers
+
+<Figure caption="Each layer owns a different kind of decision. Most production failures are a decision made at the wrong altitude.">
+
+<Layers
+	bands={[
+		{ label: 'User', plain: true },
+		{
+			label: 'Interface',
+			part: 'Part XIII',
+			tone: 1,
+			via: 'streams, approvals, interruptions',
+			items: ['streaming', 'approvals', 'provenance', 'undo'],
+		},
+		{
+			label: 'Agent Runtime',
+			part: 'Parts II, VII',
+			tone: 2,
+			via: 'intent',
+			flow: ['model', 'decide', 'tool', 'observe', 'decide', '…'],
+			items: ['state', 'memory', 'routing', 'subgraphs', 'stopping'],
+		},
+		{
+			split: [
+				{
+					label: 'Context & Knowledge',
+					part: 'Parts III–V',
+					tone: 3,
+					via: 'what does it need to know?',
+					items: ['prompt', 'retrieval', 'memory', 'embeddings', 'SQL', 'graph'],
+				},
+				{
+					label: 'Durable Execution',
+					part: 'Parts X–XII',
+					tone: 4,
+					via: 'what should happen?',
+					items: ['retries', 'timers', 'signals', 'approval', 'compensation'],
+				},
+			],
+		},
+		{
+			label: 'Tools & Data',
+			part: 'Parts VI, VIII, IX',
+			tone: 5,
+			via: 'effects on the real world',
+			items: ['APIs', 'DBs', 'MCP', 'SaaS'],
+		},
+		{ label: 'External world', plain: true },
+	]}
+	spans={[
+		{
+			label: 'Evals · Observability · Reliability · Security',
+			part: 'Parts XIV–XVII',
+			items: ['none of the above is safe without them'],
+		},
+	]}
+/>
+
+</Figure>
+
+## Ladder
+
+<Figure caption="Ask this before writing the code, not after the incident.">
+
+<Ladder
+	question="Who should own this state?"
+	rungs={[
+		{ when: 'The model is choosing, reasoning, or judging', then: 'Agent Runtime', tone: 2 },
+		{
+			when: 'Conversation position, intermediate results, the plan',
+			then: 'Graph state',
+			note: 'LangGraph',
+			tone: 1,
+		},
+		{
+			when: 'A business process that must survive hours, days, deploys, crashes, and retries',
+			then: 'Workflow',
+			note: 'Temporal',
+			tone: 4,
+		},
+		{ when: 'Facts the business considers true', then: 'Database / APIs', tone: 3 },
+	]}
+/>
+
+</Figure>
+
+## Decision
+
+<Figure caption="Every rung up costs latency, money, and predictability. Take one only when the rung below genuinely cannot do it.">
+
+<Decision
+	root="The task"
+	node={{
+		q: 'Is the sequence known?',
+		branches: [
+			{
+				on: 'yes',
+				q: 'Does it need to survive failure?',
+				branches: [
+					{ on: 'no', outcome: 'Function', tone: 3 },
+					{ on: 'yes', outcome: 'Workflow', tone: 1 },
+				],
+			},
+			{
+				on: 'no',
+				q: 'Does it decide more than once?',
+				branches: [
+					{ on: 'no', outcome: 'Rules', tone: 3 },
+					{
+						on: 'yes',
+						outcome: 'Agent',
+						tone: 2,
+						q: 'Is one context enough?',
+						branches: [
+							{ on: 'yes', outcome: 'One agent', tone: 2 },
+							{ on: 'no', outcome: 'Multi-agent', tone: 5 },
+						],
+					},
+				],
+			},
+		],
+	}}
+/>
+
+</Figure>
+
+## Flow
+
+<Figure caption="The agent loop: the model keeps deciding until it stops asking for tools.">
+
+<Flow
+	mono
+	steps={[
+		{ label: 'model' },
+		{ label: 'decide', tone: 2 },
+		{ label: 'tool' },
+		{ label: 'observe', note: 'result enters context' },
+	]}
+	loop="until the model stops calling tools"
+/>
+
+</Figure>
+
+<Figure caption="An unlabelled fan-out is a Decision with no branch conditions.">
+
+<Decision
+	node={{
+		outcome: 'render card',
+		tone: 1,
+		branches: [
+			{ outcome: 'inline in the session' },
+			{ outcome: 'the review queue' },
+			{ outcome: 'the audit record' },
+		],
+	}}
+/>
+
+</Figure>

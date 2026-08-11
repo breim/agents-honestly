@@ -1,0 +1,203 @@
+---
+title: The Agentic Engineer's Map
+description: The whole system on one page. Each layer owns a different decision, and one question routes every piece of work to the right one.
+---
+
+
+Building an agent is easy. Building an agentic system that a company can depend on is software engineering, most of it engineering that predates LLMs by decades.
+
+That sentence is the thesis of this book, and this chapter is the map it draws. Everything after this is one region of it in detail.
+
+## The layers
+
+<Figure caption="Each layer owns a different kind of decision. Most production failures are a decision made at the wrong altitude.">
+
+<Layers
+	bands={[
+		{ label: 'User', plain: true },
+		{
+			label: 'Interface',
+			part: 'Part XIII',
+			tone: 1,
+			via: 'streams, approvals, interruptions',
+			items: ['streaming', 'approvals', 'access', 'locale', 'voice'],
+		},
+		{
+			label: 'Agent Runtime',
+			part: 'Parts II, VII',
+			tone: 2,
+			via: 'intent',
+			flow: ['model', 'decide', 'tool', 'observe', 'decide', '…'],
+			items: ['state', 'memory', 'routing', 'subgraphs', 'stopping'],
+		},
+		{
+			split: [
+				{
+					label: 'Context & Knowledge',
+					part: 'Parts III–V',
+					tone: 3,
+					via: 'what does it need to know?',
+					items: ['prompt', 'retrieval', 'memory', 'embeddings', 'SQL', 'graph'],
+				},
+				{
+					label: 'Durable Execution',
+					part: 'Parts X–XII',
+					tone: 4,
+					via: 'what should happen?',
+					items: ['retries', 'timers', 'signals', 'approval', 'compensation'],
+				},
+			],
+		},
+		{
+			label: 'Tools & Data',
+			part: 'Parts VI, VIII, IX',
+			tone: 5,
+			via: 'effects on the real world',
+			items: ['APIs', 'DBs', 'MCP', 'A2A', 'UI', 'code workspaces'],
+		},
+		{ label: 'External world', plain: true },
+	]}
+	spans={[
+		{
+			label: 'Purpose · Value · Governance',
+			part: 'Parts I, XVIII',
+			items: ['process', 'baseline', 'ownership', 'risk', 'evidence', 'retirement'],
+		},
+		{
+			label: 'Evals · Observability · Reliability · Security · Supply chain',
+			part: 'Parts XIV–XVII',
+			items: ['none of the above is safe without them'],
+		},
+	]}
+/>
+
+</Figure>
+
+Both cross-cutting bands are drawn across everything on purpose. Purpose and governance decide whether the system should exist, who owns it, and when it stops. Evals, tracing, reliability, security, and supply-chain controls decide whether it remains safe to operate. Neither band is a phase after the build.
+
+## The question before the architecture
+
+Before asking which component owns state, follow the current business process from trigger to outcome. Measure its active time, waits, rework, error cost, and handoffs. Then classify each step as something to delete, ordinary software, a bounded model call, an agent, or human work.
+
+[Process Discovery and Value](/book/foundations/process-discovery-and-value) develops that method. It also requires the project to name exit criteria before a convincing demo makes stopping politically difficult.
+
+## The question that decides everything
+
+Almost every architectural mistake in this field is the same mistake: **state held by the wrong layer.**
+
+<Figure caption="Ask this before writing the code, not after the incident.">
+
+<Ladder
+	question="Who should own this state?"
+	rungs={[
+		{ when: 'The model is choosing, reasoning, or judging', then: 'Agent Runtime', tone: 2 },
+		{
+			when: 'Conversation position, intermediate results, the plan',
+			then: 'Graph state',
+			note: 'LangGraph',
+			tone: 1,
+		},
+		{
+			when: 'A business process that must survive hours, days, deploys, crashes, and retries',
+			then: 'Workflow',
+			note: 'Temporal',
+			tone: 4,
+		},
+		{ when: 'Facts the business considers true', then: 'Database / APIs', tone: 3 },
+	]}
+/>
+
+</Figure>
+
+Read it as a ladder and the common failures name themselves:
+
+- Business state living in the graph. The process now dies with the worker.
+- Conversation state living in the database. You have rebuilt session handling badly.
+- Facts living in the context window. The agent is confidently reasoning from a stale copy.
+- Decisions living in the workflow. You have made a deterministic engine responsible for judgment, and the first replay will disagree with itself.
+
+## Where does the answer live?
+
+The second question, asked once per piece of information the agent needs. Most teams answer "vector database" reflexively and pay for it for a year.
+
+| The question sounds like | Reach for | Because |
+| --- | --- | --- |
+| "similar to…", "about…", "related to…" | Vector search | Meaning matters more than wording |
+| "INC-93842", an exact name, a code | Lexical search (BM25) | Embeddings are bad at identifiers |
+| "how many", "total", "between these dates" | SQL | It is an aggregation, not a retrieval |
+| "who is connected to what", "what does this affect" | Graph | The relationship *is* the answer |
+| "what is the status right now" | API / tool call | An index is a stale copy by definition |
+| "what is our policy on…" | Retrieval over documents | Genuinely a corpus question |
+| "do this thing" | Tool, or a workflow | Not a retrieval problem at all |
+
+Read the rows as ingredients rather than as a routing switch. Most real questions need two or three of them at once. A credit for a damaged pallet wants the live API for the order, documents for the damage policy, and SQL for the totals. An architecture that assumes one route per question will bend every question toward the path it happens to have.
+
+[Part IV](/book/retrieval/where-does-the-answer-live) is this table with the reasoning attached. It is, per page, probably the most cost-saving chapter in the book.
+
+## The escalation ladder
+
+The third question, and the one that separates engineers from enthusiasts.
+
+<Figure caption="Every rung up costs latency, money, and predictability. Take one only when the rung below genuinely cannot do it.">
+
+<Decision
+	root="The task"
+	node={{
+		q: 'Is the sequence known?',
+		branches: [
+			{
+				on: 'yes',
+				q: 'Does it need to survive failure?',
+				branches: [
+					{ on: 'no', outcome: 'Function', tone: 3 },
+					{ on: 'yes', outcome: 'Workflow', tone: 1 },
+				],
+			},
+			{
+				on: 'no',
+				q: 'Does it decide more than once?',
+				branches: [
+					{ on: 'no', outcome: 'Rules', tone: 3 },
+					{
+						on: 'yes',
+						outcome: 'Agent',
+						tone: 2,
+						q: 'Is one context enough?',
+						branches: [
+							{ on: 'yes', outcome: 'One agent', tone: 2 },
+							{ on: 'no', outcome: 'Multi-agent', tone: 5 },
+						],
+					},
+				],
+			},
+		],
+	}}
+/>
+
+</Figure>
+
+Most things labelled "an agent" belong on one of the first two rungs. That is not a criticism of the technology; it is the reason the technology works when you do use it. An agent asked to do something deterministic is slower, costlier, and less reliable than the `for` loop it replaced, and it fails in ways a `for` loop cannot.
+
+<Aside type="caution" title="The framework check">
+Throughout the book, when there is more than one reasonable way to do something, you will find a box that lays out the options side by side: without a framework, with LangGraph, with Temporal, with the AI SDK, with MCP, or with A2A. It also says **why this book picks one**. The goal is not to make you fluent in one API. It is to make you able to evaluate the next one, because there will be a next one.
+</Aside>
+
+## Where the frameworks actually sit
+
+The three named in this book are not competing, except in one place where they very much are.
+
+**LangGraph models how intelligence flows.** State, nodes, edges, branching, loops, checkpoints. It is the right shape for the agent's reasoning and execution structure.
+
+**Temporal models how durable work flows.** Retries, timers, signals, compensation, replay across deploys. It is the right shape for the business process the agent is embedded in.
+
+They compose. Temporal's LangGraph integration, currently Python-only and in public preview, lets you mark each node `execute_in: "activity"` or `"workflow"`. Model calls and I/O become activities, and pure routing logic can stay inline. The determinism rules are the whole game, and [Part XI](/book/durability/langgraph-on-temporal) is about nothing else.
+
+**The AI SDK models how work reaches a human.** Streaming, tool calls rendered as interface, approvals where the user actually is.
+
+And here is the one genuine conflict, which most material glosses over: the AI SDK's `WorkflowAgent` is *also* a durable execution runtime, running on Vercel's own workflow engine rather than on Temporal. Two answers to the same question, in one stack, that do not compose. Picking one deliberately, and knowing what you gave up, is [its own chapter](/book/interface/two-durable-runtimes).
+
+## What to do with this map
+
+Come back to it. Every part of this book is a region on it, and when a chapter feels like it is about a library, this page is where you check what it is actually about.
+
+Next: [How to Read This Book](/book/how-to-read), or straight into [What an Agent Actually Is](/book/foundations/what-is-an-agent).

@@ -118,6 +118,28 @@ All written output — code, identifiers, comments, docs, commit messages, PR de
 
 Enforce these with whatever static-analysis, linting, and coverage tooling your stack provides; configure thresholds in the project's tooling rather than tracking them by hand. These complement, not replace, Sections 2–3 (Simplicity, Surgical Changes): prefer the change that keeps complexity and module size low without expanding scope.
 
+## 11. Docs Sidebar Mirrors the Book
+
+**The sidebar comes from `meta.json`, never from the filesystem.**
+
+Without a `meta.json`, Fumadocs orders pages alphabetically and titles a group by capitalizing its folder name — so `foundations/` renders as "Foundations" instead of "Part I · The Model as an Interface", and root pages scatter instead of sitting under "Start Here". Every group title and chapter order in `content/docs/` is set explicitly to match the source book's table of contents.
+
+- Every chapter of the book is already listed in its part's `meta.json`, including chapters not yet ported. Fumadocs silently skips entries whose file is absent, so a newly ported chapter appears in its correct slot with no other change.
+- When porting a chapter, do not touch `meta.json` and do not reorder anything. The entry exists already.
+- A chapter showing up in the wrong position, or a group titled with a bare capitalized folder name, means a `meta.json` entry is missing or misspelled. Fix the entry, not the filename — filenames must keep matching the book's slugs so cross-chapter links resolve.
+- Group titles and chapter order come from `book-structure.mjs` in the source book. When that file changes, mirror the change into the affected `meta.json` rather than editing one to taste.
+- A sidebar group needs a real directory; a `---Label---` separator only prints a heading. Where the book groups chapters that sit at its root, the directory is parenthesised — `(start-here)` — because Fumadocs strips parenthesised segments when building slugs. The group appears in the sidebar and `/docs/preface` stays `/docs/preface`.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

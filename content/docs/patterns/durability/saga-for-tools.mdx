@@ -1,0 +1,191 @@
+---
+title: "Saga for Tool Side Effects"
+description: "Compensate the refund you issued before the next step failed."
+---
+
+## Problem
+
+The agent issues a $2,500 credit on order 4921. Then it updates the ticket status. Then it tries to send the confirmation reply, and the mail service is down.
+
+The run fails. The credit is real and the customer has heard nothing about it. There is no transaction to roll back, because the three effects live in three systems and none of them has ever heard of the others.
+
+The instinct is to retry the whole run, and that makes it worse: [the credit is idempotent](/book/reliability/idempotency-in-practice), so it does not double, but the ticket status flips again and the run may take a different path this time. And if the failure had been at the credit step instead, the agent would have a *partially applied* refund with no record anywhere saying which parts happened.
+
+## Forces
+
+- **The effects span systems** that cannot participate in one transaction.
+- **Some effects are irreversible**, and past a certain point in the sequence, going back is not an option.
+- **The agent chooses the steps at runtime.** Unlike a hand-written saga, the sequence is not known when the code is written.
+- **Compensations can themselves fail**, and a failed compensation is worse than the original failure because it is silent.
+- **Order matters**: undo in the reverse of the order you did.
+- **Some things cannot be undone at all.** [A sent email is gone](/book/tools/read-and-write-tools).
+
+## Solution
+
+Maintain a **compensation stack**: as each effect succeeds, push the operation that would undo it. On failure, unwind.
+
+<Figure caption="Push on success, unwind in reverse on failure. The pivot is the point past which unwinding is no longer possible." frame={false}>
+
+```
+   FORWARD                          COMPENSATION STACK
+   ──────────────────────           ─────────────────────────────────
+   ① get_order          class ①     (nothing — reads need no undo)
+   ② issue_credit       class ④     push: reverse_credit(cr_9104_1)
+   ③ set_ticket_status  class ③     push: set_ticket_status(previous)
+   ─────────────── PIVOT ──────────────────────────────────────────
+   ④ send_reply         class ⑤     ✗ FAILS — and cannot be undone
+
+   UNWIND (reverse order)
+   ③ set_ticket_status(previous)     ✓
+   ② reverse_credit(cr_9104_1)       ✓
+   ① —                               ✓
+   → run ends compensated; customer state is as it was
+```
+
+</Figure>
+
+Four rules:
+
+**Push the compensation, not the intent.** After `issue_credit` returns `cr_9104_1`, push a closure holding *that reference*. A compensation that has to re-derive what to undo will re-derive it wrong when the state has moved.
+
+**Name the pivot explicitly.** Order the steps so everything reversible happens before the first irreversible one, and mark that boundary in the code. Past the pivot, failure means [escalate to a human](/book/human-in-the-loop/escalation-and-audit), not unwind, because unwinding is no longer possible.
+
+**Compensations are activities, with their own retries.** They run in a failure path where things are already broken, so they need at least the retry discipline of the forward path. A compensation that fails silently leaves the world in the state the saga existed to prevent.
+
+**The stack is workflow state, so it survives the crash.** This is the whole reason the pattern lives in [durable execution](/book/patterns/durability/agent-as-entity-workflow): a compensation stack in process memory is gone precisely when the process dies, which is the case it was built for.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/saga.ts"
+interface Compensation {
+  tool: string;
+  args: Record<string, unknown>;   // captured refs, not re-derived later
+  description: string;             // for the escalation card, if it fails
+}
+
+export class Saga {
+  private stack: Compensation[] = [];   // workflow state — survives a crash
+  private pivoted = false;
+
+  push(c: Compensation) { this.stack.push(c); }
+
+  /** Past the pivot there is no unwinding. Mark it where it happens. */
+  pivot() { this.pivoted = true; }
+
+  async unwind(ctx: RunContext): Promise<UnwindOutcome> {
+    if (this.pivoted) {
+      // Irreversible work has happened. A person owns this now.
+      return escalate(ctx, 'failed after an irreversible step', this.stack);
+    }
+
+    const failed: Compensation[] = [];
+    // Reverse order. Undo the most recent thing first.
+    while (this.stack.length) {
+      const c = this.stack.pop()!;
+      try {
+        await compensateActivity(c.tool, c.args);   // its own retry policy
+      } catch (err) {
+        // A failed compensation is the worst outcome and must be loud.
+        failed.push(c);
+      }
+    }
+
+    if (failed.length) return escalate(ctx, 'compensation failed', failed);
+    return { status: 'compensated' };
+  }
+}
+
+// In the dispatcher, after a successful class ③/④ write:
+//   if (tool.compensation) saga.push(tool.compensation(result));
+//   if (tool.class === 5)  saga.pivot();
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/saga.py"
+@dataclass
+class Compensation:
+    tool: str
+    args: dict            # captured refs, not re-derived later
+    description: str      # for the escalation card, if it fails
+
+
+class Saga:
+    def __init__(self) -> None:
+        self.stack: list[Compensation] = []   # workflow state — survives a crash
+        self.pivoted = False
+
+    def push(self, c: Compensation) -> None:
+        self.stack.append(c)
+
+    def pivot(self) -> None:
+        """Past the pivot there is no unwinding. Mark it where it happens."""
+        self.pivoted = True
+
+    async def unwind(self, ctx) -> dict:
+        if self.pivoted:
+            # Irreversible work has happened. A person owns this now.
+            return await escalate(ctx, "failed after an irreversible step", self.stack)
+
+        failed = []
+        while self.stack:                      # reverse order: most recent first
+            c = self.stack.pop()
+            try:
+                await compensate_activity(c.tool, c.args)   # own retry policy
+            except Exception:
+                failed.append(c)               # loud: worst possible outcome
+
+        if failed:
+            return await escalate(ctx, "compensation failed", failed)
+        return {"status": "compensated"}
+
+
+# In the dispatcher, after a successful class ③/④ write:
+#   if tool.compensation: saga.push(tool.compensation(result))
+#   if tool.tool_class == 5: saga.pivot()
+```
+
+</Tab>
+</Tabs>
+
+The dispatcher lines at the bottom are what make this work for an agent. **The saga is assembled at runtime**, one push per successful write, because the model chose the sequence. You cannot write the compensation chain in advance when you do not know which tools will be called.
+
+## Trade-offs
+
+**Every reversible write needs a compensation written and tested.** That is real work per tool, and the compensation path is the [least-exercised code in the system](/book/reliability/failure-injection). It runs only when something has already gone wrong. Inject failures to exercise it, or you are shipping an untested recovery.
+
+**Compensation is not rollback, and the difference is visible.** `reverse_credit` appends a reversing entry to a ledger; it does not erase the original. The customer may see both lines on a statement, and someone in finance will ask. That is correct behavior and it needs to be explained once, in the product, rather than treated as a bug.
+
+**The pivot constrains the agent's ordering.** Putting all irreversible steps last is easy in hand-written code and awkward when a model picks the order. In practice this means the [dispatcher enforces it](/book/capstone/building-it): a class ⑤ call is refused until the reversible work has settled, which is a real constraint on what the agent may do when.
+
+**Escalation after the pivot needs the whole picture.** The stack, the completed steps, and what could not be undone all go into the [escalation package](/book/first-agent/the-problem). A person receiving *"the run failed"* after a partially applied refund is being handed an investigation, not a task.
+
+## When not to use it
+
+**When everything is reversible.** If no step is class ④ or ⑤, a failed run can simply be retried from a checkpoint. Sagas are for the effects retry cannot fix.
+
+**When one system owns all the effects.** If the credit and the status both live in your Postgres, use a transaction. A saga is what you build because you *cannot* have one.
+
+**When the operation is naturally idempotent and convergent.** [Declarative writes](/book/tools/idempotency) that set a desired state, for example `set_priority('high')`, converge on retry and need no compensation. Prefer designing the tool this way over writing an undo for it.
+
+**When the right answer is a human.** For a small number of high-value, low-frequency effects, an alert saying *"credit issued, reply not sent, ticket 9104"* may be better than an automated reversal, because reversing a customer-visible credit has its own cost, and a person can weigh it.
+
+<Aside type="caution" title="The step that cannot be undone is the one to design around">
+[A class ⑤ external write](/book/tools/read-and-write-tools), such as a sent email, a posted webhook, or a message to a customer, has no compensation, because the undo would have to live inside someone else's system.
+
+Which makes the pivot a design decision rather than a bookkeeping one: **put the irreversible step last, alone in its unit of work, and check everything before it.** If `send_reply` is the final action and everything reversible has already settled, a failure at that step leaves a consistent world and a person to notify. If it happens in the middle, no amount of saga machinery recovers the situation.
+
+This is the same constraint [the one-effect-per-node rule](/book/langgraph/graph-topologies) arrived at from graph design and [idempotency](/book/tools/idempotency) arrived at from retries. Three independent lines of argument land on the same sequencing rule, which is usually a sign it is not negotiable.
+</Aside>
+
+## Related
+
+- [Compensation](/book/durability/compensation): the chapter, with ordering by reversibility and the failed-compensation problem in full
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): compensations are activities too, with their own retry policies
+- [Idempotency](/book/tools/idempotency): the cheaper alternative when the operation can converge instead
+- [Read Tools and Write Tools](/book/tools/read-and-write-tools): the five classes that decide which steps need a compensation
+- [Approval Gate](/book/patterns/durability/approval-gate): what happens after the pivot, when a person has to decide

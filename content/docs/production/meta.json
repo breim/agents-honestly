@@ -1,0 +1,13 @@
+{
+  "title": "Part XVIII · Production Architecture",
+  "pages": [
+    "ai-governance",
+    "reference-architecture",
+    "versioning",
+    "rollout",
+    "cost-engineering",
+    "operating-manual",
+    "go-live-readiness-review",
+    "organizational-rollout"
+  ]
+}

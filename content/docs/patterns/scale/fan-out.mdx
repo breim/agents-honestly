@@ -1,0 +1,189 @@
+---
+title: "Fan-Out Over Items"
+description: "One child workflow per item, with controlled parallelism."
+---
+
+## Problem
+
+A quarterly review needs every ticket from the last three months classified, summarized, and checked against the current policy. Four thousand items, each needing a model call, each independent of the others.
+
+The sequential version takes forty minutes and [loses everything to a redeploy](/book/patterns/durability/resumable-activity). The naive parallel version, starting four thousand concurrent calls, hits the provider's rate limit in the first second, produces a wall of `429`s, triggers [retry amplification](/book/reliability/timeouts-and-retries), and takes down the interactive agent that shares the quota.
+
+Between those is a large, unglamorous middle: run many at once, but not all at once, with failures isolated per item and progress that survives a worker dying.
+
+## Forces
+
+- **The items are independent.** No item's result affects another's processing.
+- **Parallelism is the whole point**: latency drops from sum to max.
+- **Provider quota is finite and shared** with traffic that has users waiting.
+- **One poisoned item must not fail the batch.** Item 3,112 having malformed data is not a reason to lose 3,999 results.
+- **The parent has limits too**: a workflow tracking four thousand children accumulates [history](/book/patterns/durability/continue-as-new-memory).
+- **Results have to be collected**, and four thousand payloads through the parent is its own problem.
+
+## Solution
+
+**One child per item, a bounded concurrency window, and results written to storage rather than returned through the parent.**
+
+<Figure caption="Bounded parallelism, isolated failures, and results that never travel through the parent's history." frame={false}>
+
+```
+   PARENT
+   ┌───────────────────────────────────────────────────────────┐
+   │  4,000 items · semaphore of 20 in flight                  │
+   │                                                           │
+   │   ┌────┐ ┌────┐ ┌────┐        ┌────┐                      │
+   │   │ c1 │ │ c2 │ │ c3 │  ...   │c20 │  ◀── window          │
+   │   └─┬──┘ └─┬──┘ └─┬──┘        └─┬──┘                      │
+   │     │      │      │             │                         │
+   │     ▼      ▼      ✗ fails       ▼    one child finishing  │
+   │   ok     ok    recorded,      ok    starts the next item  │
+   │                batch continues                            │
+   │                                                           │
+   │  each child writes its OWN result to storage              │
+   │  the parent collects REFERENCES, not payloads             │
+   └────────────────────────┬──────────────────────────────────┘
+                            ▼
+                   { done: 3,987, failed: 13, manifest: s3://… }
+```
+
+</Figure>
+
+Four rules:
+
+**Bound concurrency from the token budget, not from a thread count.** The binding constraint is [input tokens per minute](/book/reliability/backpressure), not CPU. Compute the window as available TPM divided by tokens per item per minute, and expect a number in the tens rather than the thousands.
+
+**Isolate failures per item.** A child that fails records its failure and the batch continues. Fail the *batch* only on a systemic signal: a [breaker opening](/book/reliability/fallbacks-and-breakers), an auth error, a failure rate above a threshold, because those mean the next 3,000 items will fail too.
+
+**Return references, not payloads.** Each child writes its result to object storage and returns a key. Four thousand result objects through the parent's history is how a fan-out hits the [50 MB history limit](/book/patterns/durability/continue-as-new-memory) on a job that would otherwise have been fine.
+
+**Give the batch its own quota class.** This is bulk work with no user waiting, so it belongs on the [batch endpoint](/book/patterns/cost/batch-api-offload) at half price and in a [priority class](/book/patterns/scale/priority-queues) that cannot starve interactive traffic. The 2am incident where an eval job took the interactive quota is this rule not being applied.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/fan-out.ts"
+export async function classifyBacklog(input: BatchInput): Promise<BatchResult> {
+  // Sized from the TOKEN budget, not from a thread count. The binding
+  // constraint is input TPM, and it usually yields tens, not thousands.
+  const window = Math.max(1, Math.floor(input.tpmBudget / input.tokensPerItemPerMin));
+
+  const inFlight = new Set<Promise<void>>();
+  const results: string[] = [];      // storage keys, never payloads
+  const failures: ItemFailure[] = [];
+
+  for (const item of input.items) {
+    if (inFlight.size >= window) await Promise.race(inFlight);
+
+    const p = runChild(item)
+      .then(key => { results.push(key); })
+      .catch(err => {
+        // Isolated: one bad item does not lose 3,999 good ones.
+        failures.push({ id: item.id, error: String(err) });
+      })
+      .finally(() => { inFlight.delete(p); });
+
+    inFlight.add(p);
+
+    // Systemic signals DO stop the batch — the next 3,000 will fail too.
+    if (failures.length / (results.length + failures.length || 1) > 0.2
+        && results.length + failures.length > 50) {
+      break;
+    }
+  }
+  await Promise.all(inFlight);
+
+  // A manifest, not four thousand payloads through the parent's history.
+  return { done: results.length, failed: failures.length,
+           manifest: await writeManifest(results, failures) };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/fan_out.py"
+async def classify_backlog(input: BatchInput) -> BatchResult:
+    # Sized from the TOKEN budget, not a thread count. Binding constraint
+    # is input TPM, and it usually yields tens, not thousands.
+    window = max(1, input.tpm_budget // input.tokens_per_item_per_min)
+    in_flight: set[asyncio.Task] = set()
+    results: list[str] = []          # storage keys, never payloads
+    failures: list[ItemFailure] = []
+
+    def reap(tasks) -> None:
+        for t in tasks:
+            err = t.exception()
+            if err is None:
+                results.append(t.result())
+            else:
+                # Isolated: one bad item does not lose 3,999 good ones.
+                failures.append(ItemFailure(t.get_name(), str(err)))
+
+    for item in input.items:
+        # Lazy admission. Creating a Task per item up front would allocate
+        # the whole job immediately — fatal at the 340,000-item scale this
+        # pattern is used at — and would make the break below meaningless,
+        # because the work would already exist.
+        if len(in_flight) >= window:
+            done, in_flight = await asyncio.wait(
+                in_flight, return_when=asyncio.FIRST_COMPLETED)
+            reap(done)
+
+        in_flight.add(asyncio.create_task(run_child(item), name=item.id))
+
+        # Systemic signals DO stop the batch — the next 3,000 will fail too.
+        seen = len(results) + len(failures)
+        if seen > 50 and len(failures) / seen > 0.2:
+            break
+
+    if in_flight:                    # drain whatever is still running
+        done, _ = await asyncio.wait(in_flight)
+        reap(done)
+
+    # A manifest, not four thousand payloads through the parent's history.
+    return BatchResult(done=len(results), failed=len(failures),
+                       manifest=await write_manifest(results, failures))
+```
+
+</Tab>
+</Tabs>
+
+The failure-rate break is the difference between a batch that isolates failures and one that ignores them. Per-item isolation is right for a malformed record; it is exactly wrong when the credential expired, and a 20% failure rate over a reasonable sample is the cheapest available signal that something systemic is happening.
+
+## Trade-offs
+
+**Window sizing is the whole performance story.** Too small wastes wall clock; too large produces `429`s, retries, and contention with interactive traffic. Derive it, measure the actual `429` rate, and treat any provider rate limiting as evidence the window is wrong rather than as something to retry through.
+
+**Children have their own overhead.** Each is a workflow or activity with its own scheduling, history, and preamble. For four thousand tiny items, batching fifty per child is far cheaper than four thousand children: the unit of fan-out does not have to be the unit of work.
+
+**Partial success needs a product answer.** *3,987 done, 13 failed* is the normal outcome, and someone has to decide what that means: retry the thirteen, escalate them, or report the batch as complete with exceptions. Undefined means the manifest is a file nobody reads.
+
+**Progress visibility is worse than it looks.** From outside, a fan-out is one long-running parent. Emit counts as it goes, or the only observable states are *running* and *done*, and a batch that will take three hours looks identical to one that is stuck.
+
+## When not to use it
+
+**When items are not independent.** If item 12 needs item 11's result, this is a [pipeline or a batch iterator](/book/patterns/scale/batch-iterator), not a fan-out. Forcing parallelism onto sequential work produces subtly wrong results rather than an error.
+
+**When the set is small.** Under a few dozen items, a loop inside one activity is simpler and the parallelism buys little.
+
+**When the set is enormous.** Beyond a few thousand children, one parent becomes the bottleneck: its history grows and its scheduling saturates. [Fan out to intermediate parents](/book/patterns/scale/mapreduce-tree) instead.
+
+**When work arrives continuously.** Fan-out processes a known set in waves. A steady stream wants [a sliding window](/book/patterns/scale/sliding-window), which keeps N in flight permanently rather than draining and refilling.
+
+<Aside type="note" title="This is the multi-agent shape that actually works">
+[Part XIX is skeptical of multi-agent systems](/book/multi-agent/when-not-to) and endorses exactly this. Worth being precise about why the two positions are consistent.
+
+The failure modes in the empirical taxonomy: inter-agent misalignment, missing termination, ambiguous ownership. All of them require agents that *communicate*. In a fan-out the children never learn the others exist, the parent owns termination by construction, and the reduce step is code.
+
+So the coordination tax here is almost entirely the token multiplier, with the [cache](/book/patterns/context/stable-prefix) and [batch](/book/patterns/cost/batch-api-offload) discounts already available against it. That is a very different bill from a team of agents negotiating, and it is why *fan out over disjoint inputs* and *build a multi-agent system* should not be described with the same words.
+</Aside>
+
+## Related
+
+- [MapReduce Tree](/book/patterns/scale/mapreduce-tree): when one parent cannot hold the fan-out
+- [Sliding Window](/book/patterns/scale/sliding-window): continuous arrival instead of a known set
+- [Batch Iterator](/book/patterns/scale/batch-iterator): when the items must be walked in order
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): where the window size comes from
+- [Sub-Agent Context Isolation](/book/patterns/context/subagent-isolation): the per-item isolation, viewed from the context side

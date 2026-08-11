@@ -1,0 +1,29 @@
+{
+  "pages": [
+    "index",
+    "(start-here)",
+    "foundations",
+    "first-agent",
+    "context",
+    "retrieval",
+    "graphs",
+    "workflows",
+    "langgraph",
+    "tools",
+    "mcp",
+    "durable-execution",
+    "durability",
+    "human-in-the-loop",
+    "interface",
+    "evals",
+    "observability",
+    "reliability",
+    "security",
+    "production",
+    "multi-agent",
+    "capstone",
+    "patterns",
+    "appendix",
+    "..."
+  ]
+}

@@ -1,0 +1,189 @@
+---
+title: "When a Plain Function Is Better"
+description: "A protocol boundary you do not need is a protocol boundary that can fail."
+---
+
+Part IX has explained what MCP is and how to run it. This chapter is the default, and the default is a function call.
+
+But the argument has to be honest, which means starting by giving up the one most people reach for.
+
+## Concede the performance argument: it is wrong
+
+MCP is not slow.
+
+Over stdio, inter-process communication is sub-millisecond per message with a one-time process spawn typically under 100ms. Over Streamable HTTP, benchmarks report roughly **10ms per call under load**, with shared-session deployments sustaining 290–300 requests per second at full success. There is a fixed SDK overhead floor somewhere around 5–10ms per request that no amount of framework-swapping removes.
+
+Now put that against the thing it sits inside: a model call takes **500ms to 5s**. The protocol is one to two percent of the turn, and for a server that proxies an upstream API the real cost is the 50–500ms network hop to that API, which you would have paid from a plain function too.
+
+So if you are arguing against MCP on latency, you are arguing about noise. And doing it discredits the arguments that are actually load-bearing. Take it off the table.
+
+## The cost is coupling, not milliseconds
+
+Everything Part IX has already established, collected:
+
+| Cost | What it actually is |
+| --- | --- |
+| A new "unknown" outcome | [The third state](/book/tools/idempotency): succeeded, failed, *unknown*. Now reachable through one more network |
+| A dependency that moves without your deploy | A server can add tools, reword descriptions, change behaviour on its own schedule |
+| Version skew | Revisions differ meaningfully, and mismatches [surface as behaviour rather than errors](/book/mcp/servers-clients-transports) |
+| Descriptions you do not own | [Selection accuracy](/book/tools/tool-discovery) driven by prose you did not write and cannot review |
+| An operational surface, per server | Auth to configure, a deploy to run, monitoring to wire, credentials to rotate, someone to page |
+
+None of those is large. All of them are **per server**, and servers are one line of configuration to add. That asymmetry is the actual shape of the problem: cheap to adopt, priced monthly forever. It is why the default matters more than any individual decision.
+
+## The rule: protocol boundaries belong on organizational boundaries
+
+The decision is not technical.
+
+> **Draw a protocol boundary where an organizational boundary already exists.**
+
+If both sides live in the same repository, ship in the same deploy, and are owned by the same team, a protocol between them buys nothing. You have introduced a network hop, an authorization story, and a version negotiation between two pieces of code that could not possibly disagree, because they are released together.
+
+| Both sides are… | Use |
+| --- | --- |
+| Same repo, same deploy, same team | **A function.** They cannot get out of sync. |
+| Different teams, same company, known consumers | A function, or an ordinary internal service |
+| Different teams, **open or unknown** consumer set | **MCP.** This is M×N inside one company |
+| Different companies | **MCP** |
+
+[The test from the first chapter of this part](/book/mcp/what-mcp-is) still resolves it fastest: *what breaks if you delete the protocol and paste the tool definitions into your own catalogue?* If the answer is "I would be maintaining an integration someone else currently maintains," keep it. If the answer is "nothing," you have found the boundary that should not exist.
+
+<FrameworkCheck decision="Keep domain logic in a plain function. Publish an MCP adapter only when an organizational boundary or an open consumer set appears.">
+<FrameworkOption name="plain">
+
+**Plain function.** Same repository, deploy, owner, and release cadence. Authorization uses the application's existing identity and no protocol contract can drift.
+
+</FrameworkOption>
+<FrameworkOption name="mcp">
+
+**MCP server.** Different owner or company, consumers you cannot enumerate, or a capability catalogue that must serve several stacks independently.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Four places a function wins outright
+
+**Your own database.** Atlas's seven tools reach Meridian's own Postgres. A protocol between the agent and a database it already holds a connection to adds a serialization, a hop, and a second way to time out, in exchange for an integration nobody outside the team will ever consume.
+
+**Anything inside the deploy unit.** Version negotiation is machinery for parties that can be out of date relative to each other. Two modules in one artifact cannot be, so the machinery is dead weight by construction.
+
+**Hot-path tools called on every run.** The per-call cost is genuinely small. So is the benefit, when the consumer set is exactly one and always will be.
+
+**Anything you would immediately wrap anyway.** [Part VIII's advice for third-party servers](/book/tools/tools-are-apis-for-models) is to rename, re-describe, and reshape their tools into something your agent can select well. If you own the source and were going to do that work regardless, the protocol contributed nothing but a round trip in the middle of your own wrapper.
+
+## Three places the protocol wins
+
+Being fair requires the other list, and it is not short by accident. These are real:
+
+**You are publishing to consumers you will never meet.** The framing [the core path](/book/core-path) gave this part. Once you cannot enumerate the callers, you cannot coordinate a change with them, and a versioned protocol is exactly the tool for that.
+
+**You are consuming someone else's domain.** The freight carrier's tracking server. Their schema, their release cadence, their edge cases. Writing that integration yourself means maintaining a model of a business you are not in.
+
+**The consumer set is open even inside one company.** A platform team exposing capability to eight product teams on four stacks is M×N with a corporate boundary rather than a legal one. The diagram does not care which kind of boundary it is.
+
+<Aside type="note" title="A 2026 pattern worth knowing: registry without execution">
+Something the ecosystem converged on that is neither "adopt" nor "avoid": use MCP as a **discovery and registry layer**, and dispatch actual execution elsewhere. A CLI, a direct call, an internal service.
+
+The agent searches a catalogue over a lightweight MCP interface, and execution goes down whatever path is cheapest. You get structured discovery and versioned capability listing without paying schema bloat on every request for tools that resolve locally.
+
+Reported as a live pattern rather than a recommendation. It adds a moving part, and it earns its place only when the catalogue is genuinely large.
+</Aside>
+
+## The middle path most people skip
+
+The framing that makes this decision reversible, and it costs almost nothing:
+
+> **Write the tool as a plain function. Publish it over MCP later, if a second consumer appears.**
+
+The function is the artifact. The server is a thin adapter over it: twenty lines that name it, describe it, and hand it a transport.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/domain/account.ts — the artifact"
+export async function accountRiskProfile(
+  accountId: string,
+  requester: Requester,
+): Promise<RiskProfile> {
+  // the entire implementation, and the only copy of it
+}
+```
+
+```ts title="ts/src/tools/account.ts — delivery 1: in-process"
+export const crmAccountRiskProfile = {
+  name: 'crm_account_risk_profile',
+  description: '…',
+  input_schema: { /* … */ },
+  run: (args, requester) => accountRiskProfile(args.account_id, requester),
+};
+```
+
+```ts title="ts/mcp-server/index.ts — delivery 2: published"
+server.registerTool(
+  'crm_account_risk_profile',
+  { description: '…', inputSchema: z.object({ account_id: z.string() }) },
+  async ({ account_id }, { authInfo }) => ({
+    content: [
+      { type: 'text', text: JSON.stringify(
+          await accountRiskProfile(account_id, authInfo.subject)) },
+    ],
+  }),
+);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/domain/account.py — the artifact"
+async def account_risk_profile(account_id: str, requester: Requester) -> RiskProfile:
+    ...  # the entire implementation, and the only copy of it
+```
+
+```python title="py/atlas/tools/account.py — delivery 1: in-process"
+CRM_ACCOUNT_RISK_PROFILE = {
+    "name": "crm_account_risk_profile",
+    "description": "…",
+    "input_schema": {...},
+    "run": lambda args, requester: account_risk_profile(args["account_id"], requester),
+}
+```
+
+```python title="py/mcp_server/main.py — delivery 2: published"
+async def handler(args, ctx):
+    data = await account_risk_profile(args["account_id"], ctx.auth.subject)
+    return {"content": [{"type": "text", "text": json.dumps(data)}]}
+```
+
+</Tab>
+</Tabs>
+
+One implementation, two deliveries, and the second one is optional and additive. Which means **"should we expose this over MCP?" never has to be answered up front**. It becomes a question you answer when a second consumer actually exists, with evidence instead of speculation.
+
+The failure this avoids is the common one: a team decides to "build on MCP," writes the logic *inside* the server handler, and now the only way for their own agent to call its own code is over a loopback HTTP connection with an OAuth token. Every cost in the table above, paid to talk to yourself.
+
+## Atlas, concretely
+
+| | Count | Why |
+| --- | --- | --- |
+| In-process function tools | 7 | Same repo, same deploy, one consumer |
+| Also published over MCP | 2 | The sales team's agent: different team, different stack, not coordinated with Meridian's deploys |
+| Consumed over MCP | 1 server | The freight carrier: different company, their domain |
+| Running over stdio in production | 0 | stdio is how an engineer develops against their own credentials |
+
+Seven functions, two of which are *also* servers. The ratio is the chapter: the protocol is an export format for a small, deliberately chosen subset, and everything else stays a function call because nothing about it crosses a boundary that matters.
+
+---
+
+Next: [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a), where the remote system accepts a delegated task instead of exposing a tool.
+
+## Takeaways
+
+- MCP is not slow. Sub-millisecond over stdio, ~10ms per call over HTTP under load, against a 500ms–5s model call. Arguing against it on latency is arguing about noise, and it discredits the real objections.
+- The real cost is coupling: a new "unknown" outcome, a dependency that moves without your deploy, version skew that surfaces as behaviour, descriptions you do not own, and an operational surface per server.
+- Each cost is small and all of them are per-server, while adding a server is one line. Cheap to adopt, priced forever, which is why the default matters more than any single decision.
+- Draw a protocol boundary where an organizational boundary already exists. Same repo, same deploy, same team means a function.
+- Ask what breaks if you delete the protocol. "I'd maintain someone else's integration" means keep it; "nothing" means delete it.
+- A function wins for your own database, anything inside the deploy unit, hot-path tools with one consumer, and anything you were going to wrap anyway.
+- The protocol wins when you cannot enumerate your consumers, when the domain belongs to someone else, or when the consumer set is open even inside one company.
+- Write the tool as a plain function and publish it later. One implementation, two deliveries, the second additive and optional.
+- Putting the logic inside the server handler is the trap: your own agent then reaches its own code over loopback HTTP with an OAuth token, paying every cost to talk to itself.

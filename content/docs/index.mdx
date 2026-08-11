@@ -1,13 +1,50 @@
 ---
-title: Hello World
-description: Your first document
+title: Agents, Honestly
+description: A handbook for building agentic systems in production, from process discovery and context to durable execution, governance, and organizational rollout.
 ---
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+## The problem this book is about
 
-## What is Next?
+You can get an agent working in an afternoon. A model, three tools, a `while` loop. It answers questions, calls your API, looks impressive in a demo.
+
+Then it meets a week of reality. The provider returns a 503 halfway through a fourteen-step task and the work evaporates. A conversation reaches turn forty and each message costs thirty times the first. Someone deploys while two hundred runs are in flight. The agent issues a refund, then fails before sending the confirmation, and the ledger disagrees with the inbox. A document your pipeline ingested last month contains instructions, and the agent follows them. Nobody can tell you whether last week's prompt change made anything better.
+
+None of these are AI problems. They are context, state, idempotency, retries, authorization, evaluation, and observability problems wearing an AI hat.
+
+> **The goal of this book is not to teach you how to call an LLM. It is to teach you how to build software when part of the software can think, choose, fail, retry, wait, and act.**
 
 <Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
+  <Card title="Context & Knowledge">
+    Tokens, context windows, memory, and the retrieval decision that comes before any of it: semantic, lexical, SQL, graph, or a live API. Most reliability problems are context problems.
+  </Card>
+  <Card title="Agents & Graphs">
+    Build the loop by hand, then as a state machine. Tools designed for models rather than for humans. And the discipline of recognizing what should never have been an agent.
+  </Card>
+  <Card title="Durable Execution">
+    Agents that survive crashes, deploys, and week-long waits. Compensation for side effects, approval gates that hold no thread, and provider quotas that are not yours to exceed.
+  </Card>
+  <Card title="Proof & Defense">
+    Evals that gate releases, traces that answer every question at 3am, reliability engineering for a probabilistic component, governance evidence, and a threat model where retrieved text is hostile.
+  </Card>
+</Cards>
+
+## Frameworks are the implementation, not the subject
+
+LangChain, LangGraph, Temporal, and the AI SDK appear throughout, with real, working code in **TypeScript and Python**, side by side. MCP and A2A appear where interoperability earns a protocol boundary. All of them answer engineering problems the book poses first, and where defensible approaches disagree, the book records the choice.
+
+That is deliberate insurance. In a few years the popular framework may be a different one. Context, state, retrieval, workflows, authorization, evals, reliability, and distributed systems will still be there.
+
+<Cards>
+  <Card title="Start at the beginning" href="/book/preface">
+    The Preface covers who this is for and what you'll build.
+  </Card>
+  <Card title="See the whole thing first" href="/book/the-map">
+    The Map puts every layer on one page and names which one owns which decision.
+  </Card>
+  <Card title="You're in a hurry" href="/book/core-path">
+    The Core Path is the shortest route that still leaves you able to ship.
+  </Card>
+  <Card title="Something is broken" href="/book/patterns/durability/agent-as-entity-workflow">
+    The pattern catalog is written to be consulted, not read.
+  </Card>
 </Cards>

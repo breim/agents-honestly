@@ -1,0 +1,139 @@
+---
+title: "Operating It"
+description: "Deploy, watch, respond, iterate. What the first month looks like."
+---
+
+Atlas goes live on a Tuesday at 09:00, serving 5% of one account's tickets.
+
+Not a launch: an [assignment change](/book/production/rollout). The bundle was already deployed, the canary fraction moves from 0 to 0.05, and the difference between the two states is one number in a manifest. That is what a good rollout feels like: anticlimactic, and reversible in seconds.
+
+Here is the month that follows, because the gap between a launch plan and a launch is where most of the real learning lives.
+
+## Week 1 · Canary
+
+The [fast proxies](/book/production/rollout) are clean within an hour: format compliance at 99.4%, turn count p50 of five, input tokens per turn flat against the shadow runs. Nothing to do.
+
+The surprise arrives on Wednesday, and it is a metric moving in a direction that looks bad and is not.
+
+**Escalation rate is 41%, against an expectation of about 25%.** The instinct in the room is that Atlas is under-performing. Reading the escalations says otherwise: most are tickets where the customer asked two questions and one is out of scope: pricing, or a contract term. Atlas answers neither and escalates the whole ticket, which is [correct behavior](/book/first-agent/the-problem) and a bad outcome, because the support lead now re-does the half Atlas could have done.
+
+That is a **product finding, not a defect**, and it goes on the backlog as *partial resolution*: answer the in-scope half, escalate the rest with the answer attached. It ships in week four.
+
+Two things about this are worth generalizing. The metric that surprised you first is usually the one whose definition was wrong, not the one whose implementation was. And **the first week of a canary is for reading outputs, not for reading dashboards.** The numbers were all green and the finding came from a person opening forty escalations and looking at them.
+
+## Week 2 · The first incident
+
+Thursday, 14:20. The pager fires: `fallback_rate > 2% for 10m`.
+
+The primary provider is degrading. What follows is the machinery doing what it was built to do, and it is worth listing because it is entirely unremarkable, which is the point:
+
+| Time | What happened | Mechanism |
+| --- | --- | --- |
+| 14:19 | p99 latency crosses threshold; breaker opens | [Latency-tripped breaker](/book/reliability/fallbacks-and-breakers) |
+| 14:19 | Calls fail fast; retries stop being generated | [Retry budget exhausted, fails through](/book/reliability/timeouts-and-retries) |
+| 14:20 | Rung 2 (alternate region) serves; `served_by` recorded | Fallback ladder |
+| 14:20 | Tier-1 actions auto-gate to approval | [Degraded runs don't act](/book/reliability/fallbacks-and-breakers) |
+| 14:22 | On-call confirms the canary is also affected → provider, not us | [Frozen canary](/book/observability/drift) |
+| 14:51 | Provider recovers; half-open probe passes; breaker closes | Synthetic probe |
+| 15:10 | Quality by `served_by` compared: no material difference | Fallback observability |
+
+Total customer impact: eleven tickets answered slightly slower. No page for anyone beyond the primary, no retry storm, no queue to drain in the evening.
+
+The postmortem finding is not about the incident. It is that **nobody had checked what the approval queue does when tier-1 gating suddenly triples for thirty minutes.** It absorbed it, but nobody knew that in advance, and the [game day](/book/reliability/failure-injection) had injected provider failure without injecting the human consequence. The next game day does both.
+
+## Week 3 · The drift event
+
+Monday, resolution rate on the canary is 52%, down from 59% the previous week. Nothing was deployed. Every conventional metric is green.
+
+This is [the diagnosis this book has been building toward](/book/observability/drift), and the runbook routes it in four steps:
+
+```
+   1  deploy timeline for the window     → no code, no bundle repoint
+   2  canary score                       → unchanged. not the model
+   3  input centroid                     → unchanged. not the users
+   4  retrieval hit rate / chunk turnover → top-50 cited chunks
+                                            27% turned over  ◀── here
+```
+
+A batch of partner shipping documentation was ingested on Friday. It ranks well for delivery-timeline questions and displaced the reviewed policy chunk that had been answering them. Nobody changed the agent; the corpus moved.
+
+Two properties of the response are worth noting. **The fix took eleven minutes**: repoint to the previous index build, which existed because [retaining the previous build was a decision made in advance](/book/production/versioning). And **the diagnosis took nine minutes**, because each of the four steps was a query against something already instrumented, not an investigation.
+
+The durable fix is a routing rule: policy questions retrieve only from the reviewed index, which was [already the design](/book/security/untrusted-retrieval) and had been implemented for the *taint* path but not the *relevance* path. The security control and the quality control turned out to be the same control, discovered from the quality side.
+
+## Week 4 · Full traffic, and the ledger
+
+Assignment goes to 100% of ten accounts on Monday, with the [holdout account](/book/production/rollout) staying on the previous bundle permanently. By Friday there is a month of numbers against [the acceptance spec](/book/capstone/the-brief).
+
+| Metric | Target | Actual | |
+| --- | --- | --- | --- |
+| Resolved without a human | ≥ 60% | **58%** | ✗ narrowly |
+| Factual accuracy when answering | ≥ 95% | 96.2% | ✓ |
+| Escalation recall | ≥ 98% | 99.1% | ✓ |
+| Correct document version cited | ≥ 90% | 91.4% | ✓ |
+| Approval queue p95 age | < 4h | **6.2h** | ✗ |
+| Cost per resolved ticket | < 15% of human | 4% | ✓ |
+| Invariant violations | 0 | 0 | ✓ |
+
+Two misses, and they are not equally serious.
+
+**Resolution at 58% is the partial-resolution finding from week one**, already fixed and shipping. It is a known cause with a known fix, and the projection puts it above target next month.
+
+**Approval queue p95 at 6.2 hours is the real problem**, and it is a problem with the humans rather than the agent. Tier-1 approvals arrive across the whole day; the support team processes them in two batches. Nothing about Atlas fixes this, and [the risk-tiers chapter](/book/human-in-the-loop/risk-tiers) predicted exactly this shape: the gate you built for safety becomes the bottleneck, and then it becomes a rubber stamp.
+
+The response is to raise the tier-0 cap, and the interesting part is *how* the decision gets made: not by argument, but by querying a month of approvals for how many were approved unchanged at each amount. Below a certain threshold, effectively all of them were. That number is the new cap, and the decision is a query rather than an opinion, which was only possible because [every approval recorded what the reviewer saw and what they chose](/book/human-in-the-loop/escalation-and-audit).
+
+<Aside type="caution" title="The month's most important finding is about people">
+Six of the eight items on the month-one backlog are about the humans: queue batching, the escalation package format, who owns an approval when the assignee is on leave, and what the support lead sees on the dashboard.
+
+This is the normal result and it surprises engineering teams every time. The agent works; the socio-technical system around it is the part nobody designed. Budget month two for it explicitly, or it will be absorbed as unplanned work and blamed on the model.
+</Aside>
+
+## What stuck
+
+Five habits from the month, in the order they proved themselves:
+
+**Read the outputs, weekly.** Someone opens twenty escalations and twenty resolutions and reads them. Every significant product finding this month came from that hour, and none came from a dashboard.
+
+**Every incident becomes a fixture.** [Replay](/book/observability/replay-debugging) turns each one into a regression test, and the corpus grew by nineteen cases in four weeks: real, correctly distributed, and free.
+
+**"What changed" is one query.** Code deploys, bundle repoints, index builds, and provider events on one timeline. This is what turned week three's diagnosis into nine minutes.
+
+**The canary is the tiebreaker.** Twice this month the question was *is it us or them*, and both times the frozen canary answered it in under two minutes.
+
+**Cost per resolved ticket, not cost.** Reported weekly next to margin. It is the only cost number the business ever asked about, and it kept an efficiency conversation from turning into an escalate-more-to-humans conversation.
+
+## Where Part XX leaves you
+
+Atlas is a support agent at an industrial parts distributor. It answers policy questions with citations, runs aggregations, follows account relationships, issues small credits, and hands everything else to a person with the work already done.
+
+It is also, unremarkably, a piece of production software: versioned, rolled out by percentage, traced, budgeted, rate-limited, tenant-isolated, and paged on. Nothing about the month you just read is exotic. The incident was a provider blip handled by a circuit breaker. The regression was a re-index. The biggest finding was about how people batch their work.
+
+That ordinariness is the argument of the whole book, arriving at the end as a result rather than a claim:
+
+> **Building an agent is easy. Building an agentic system a company can depend on is software engineering, most of it engineering that predates LLMs by decades.**
+
+The model is the part you do not control. Everything this book has been about is the part you do.
+
+What remains is reference. Part XXI is the pattern catalog: the recurring shapes, each with its problem, its forces, its trade-offs, and, the section that matters most, when not to use it.
+
+---
+
+Next: [Rolling Summary](/book/patterns/context/rolling-summary), the first entry in the pattern catalog.
+
+## Takeaways
+
+- A good rollout is anticlimactic: one number in a manifest, reversible in seconds.
+- Week one of a canary is for reading outputs, not dashboards. Every product finding came from someone opening forty escalations and reading them.
+- The metric that surprises you first is usually the one whose definition was wrong, not the one whose implementation was.
+- Correct behavior can still be a bad outcome. Escalating a whole ticket because half of it is out of scope follows the rule and costs the human the other half.
+- A well-handled incident is unremarkable: breaker opens, retries stop, fallback serves, tier-1 auto-gates, canary confirms it is not you, probe closes it.
+- Inject the human consequence, not just the technical fault. Nobody had checked what the approval queue does when gating suddenly triples.
+- Drift diagnosis is four queries: deploy timeline, canary, input centroid, retrieval turnover. Nine minutes when each one is already instrumented.
+- Retaining the previous index build turned an eleven-minute fix into an available option. That decision was made months earlier.
+- The security control and the quality control were the same control, discovered from the quality side.
+- Report the ledger honestly, including the misses, and separate a known-cause miss from a structural one.
+- The approval queue becomes the bottleneck, exactly as predicted. Set the new cap by querying which amounts were approved unchanged, a decision made from data because approvals recorded what reviewers saw.
+- Most of the month-one backlog is about people, not the agent. Budget month two for it, or it becomes unplanned work blamed on the model.
+- Five habits that stuck: read outputs weekly, promote every incident to a fixture, keep "what changed" one query, trust the canary as tiebreaker, and report cost per resolved ticket rather than cost.
+- The month contained no exotic problems. That ordinariness is the point.

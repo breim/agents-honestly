@@ -1,0 +1,13 @@
+{
+  "title": "Control Patterns",
+  "pages": [
+    "router",
+    "plan-then-execute",
+    "react-loop",
+    "reflection",
+    "critic-reviser",
+    "bounded-autonomy",
+    "escalation-ladder",
+    "deterministic-rails"
+  ]
+}

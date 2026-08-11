@@ -1,0 +1,164 @@
+---
+title: "The Threat Model"
+description: "What an attacker actually wants from your agent, and which of your components they will use to get it."
+---
+
+Someone in the review asks the question that opens every one of these meetings: *what's the worst thing that can happen?*
+
+The answers come back in a predictable order. It says something offensive. It leaks the system prompt. It hallucinates a policy and a customer holds us to it. Someone jailbreaks it and posts a screenshot.
+
+Every one of those is real and none of them is the worst thing. The worst thing is that Atlas has a database connection, a payments credential, and an outbound mail sender, and it decides what to do with them by reading text that a stranger wrote.
+
+That is the whole part in one sentence, and it is why this part is not an appendix.
+
+## Three assets, and the first one is the least interesting
+
+An attacker is not interested in your agent. They are interested in what it is attached to. Enumerating that honestly is most of the work.
+
+| Asset | What it looks like for Atlas | What the attacker gets |
+| --- | --- | --- |
+| **What it can read** | Orders, contact records, the ticket history of every customer | Data they have no account to reach |
+| **What it can do** | `issue_credit`, `send_reply`, `set_ticket_status` | Money, and a trusted channel to your customers |
+| **What it is** | A service identity with standing credentials and a budget | A foothold that authenticates as you, indefinitely |
+
+The third row is the one that gets left off the diagram. An agent is not only a thing that leaks and a thing that acts. It is a **long-lived identity inside your perimeter with an API key**, which is exactly the asset an attacker would otherwise spend weeks phishing for. And unlike a stolen employee session, it is expected to make hundreds of unusual-looking requests an hour. It has an alibi built in.
+
+Note also what is *not* on the list: the model weights, the system prompt, the vendor's guardrails. Prompt extraction gets disproportionate attention because it produces a good screenshot. Treat your system prompt as public. [It should not contain secrets in the first place](/book/context/system-prompt). Spend the review on the three rows above.
+
+## The trust boundary moved somewhere you cannot put a check
+
+Classical application security is built on one structural idea: there is a **boundary** where untrusted input stops being data and starts being interpreted, and you put your validation there. A parser, a query planner, a template engine, a deserializer. The whole discipline is a catalogue of those crossings and how to guard each one.
+
+An agent has the crossing. It does not have the place to stand.
+
+<Figure caption="In classical software the boundary is a location in the code. In an agent it is a property of a token sequence, and there is no line to put the check on." frame={false}>
+
+```
+   CLASSICAL                            AGENTIC
+
+   untrusted input                      system prompt ─┐
+        │                               conversation ──┤
+        ▼                               retrieved doc ─┼──▶ one flat
+   ┌─────────────┐  ◀── the check       tool result ───┤    token
+   │   PARSER    │      goes here       user message ──┘    sequence
+   └─────────────┘                                │
+        │                                         ▼
+        ▼                                   ┌───────────┐
+   structured data                          │   MODEL   │
+   (code and data now                       └───────────┘
+    permanently distinct)                         │
+                                                  ▼
+                                             tool calls
+                                        (data and code were
+                                         never distinguished)
+```
+
+</Figure>
+
+Everything downstream follows from this. You cannot validate your way to safety, because validation requires a boundary and the boundary is inside a probability distribution. What you can do is decide, **before** untrusted text is in play, what the run is permitted to do afterwards. That is why every chapter in this part is about constraining authority rather than inspecting input.
+
+## The confused deputy, with a budget
+
+The classical name for this failure is a **confused deputy**: a program holding more authority than its caller, tricked into exercising that authority on the caller's behalf. It is a fifty-year-old idea and agents are the purest instance of it anyone has built.
+
+> **The attacker supplies the intent. Your agent supplies the authority. Nothing in between is checking whether they belong together.**
+
+What makes the agentic case worse than the classical one is not the model. It is four properties of the deployment:
+
+**Authority aggregates.** A useful agent is wired to the database *and* the payments API *and* email *and* the ticket system. Each integration was approved on its own merits. Nobody approved the union, and the union is what an attacker gets. This is why agents end up holding more combined access than any individual employee.
+
+**The loop amplifies.** A traditional injection gets one shot at one request. An agent that takes hostile instruction at step three has fifteen more steps to work with, each of which can read something, chain to something, and cover its own tracks in the transcript.
+
+**Nondeterminism defeats signatures.** The same attack produces a different trace every time and the same benign request does too. There is no request pattern to blocklist, and your anomaly baseline is a system whose normal behavior is "does something slightly different each run."
+
+**Nothing raises.** This is [the recurring theme of the whole book](/book/context/context-poisoning) arriving in a security context. A successful attack produces a clean trace, valid arguments, and a well-formed result. The failure mode of a compromised agent is *plausible work*.
+
+## Who is attacking, and what they already have
+
+Threat modeling goes wrong when everyone pictures the same adversary. These are five different problems.
+
+| Adversary | Already has | Wants | Primary vector |
+| --- | --- | --- | --- |
+| **Anonymous outsider** | Nothing. Cannot log in | Anything at all | Text placed where the agent will read it: a ticket, a form, an email, a public page you crawl |
+| **Legitimate customer** | Their own account | Someone else's data, a refund they aren't owed | Direct injection, argument manipulation, [tenant boundary probing](/book/security/tenant-isolation) |
+| **Insider** | Real credentials | Scale and deniability | Asking the agent to do at volume what they could do slowly by hand |
+| **Supply chain** | A tool, an MCP server, a package, a model endpoint you call | Everything the agent has | [A tool definition that is itself a prompt](/book/mcp/servers-clients-transports) |
+| **The agent** | All of the above | Nothing. It isn't adversarial | Ordinary error at machine speed, indistinguishable in impact |
+
+The first row deserves the emphasis. **The most dangerous adversary against an agent is the one with no account**, because they are the one your existing controls have nothing to say about. Authentication, RBAC, session management, and rate limiting all assume the attacker is a principal in your system. Someone who writes a support ticket is not a principal. They are a *string*, and the string reaches a component with credentials.
+
+The last row is not a joke. Most of this part's controls are indifferent to intent: an agent that mistakenly refunds four hundred customers and an agent that was manipulated into it produce the same incident, the same postmortem, and the same fix. Reliability and security converge here, which is why [failure injection](/book/reliability/failure-injection) and red-teaming end up being the same exercise run with different motives.
+
+## The surface, component by component
+
+This table is the map of Part XVII. Every component from the [reference architecture](/book/production/reference-architecture) is something an attacker can reach, and each has a chapter.
+
+| Component | What an attacker does with it | Where it's handled |
+| --- | --- | --- |
+| Anything that ingests third-party text | Places instructions where the agent will read them | [Prompt Injection](/book/security/prompt-injection) |
+| The retrieval corpus | Writes a document today that fires months from now | [Untrusted Retrieval](/book/security/untrusted-retrieval) |
+| The tool catalogue | Uses the one over-scoped tool nobody audited | [Least Privilege](/book/security/least-privilege) |
+| The service credential | Reads as the agent what the user could not | [The Agent Is Not a Superuser](/book/security/identity) |
+| The retrieval filter | Crosses a tenant boundary via a missing `WHERE` | [Multi-Tenant Isolation](/book/security/tenant-isolation) |
+| Code execution and secrets | Reads the environment the sandbox was supposed to hide | [Sandboxing](/book/security/sandboxing) |
+| Memory and the fact store | Writes a durable false belief that survives the run | [Memory](/book/context/memory) · [Poisoning](/book/context/context-poisoning) |
+| The approval queue | Floods it until the reviewer rubber-stamps | [Risk Tiers](/book/human-in-the-loop/risk-tiers) |
+| The trace and audit log | Relies on your not being able to reconstruct what happened | [What a Trace Must Answer](/book/observability/what-a-trace-must-answer) |
+| Another agent | Uses the trusted inter-agent channel nobody authenticates | [Multi-Agent](/book/multi-agent/when-not-to) |
+
+Two rows are easy to skip and shouldn't be. **The approval queue is an attack surface.** Flooding a reviewer with benign requests until approval becomes reflex is a documented technique, not a UX complaint. And **the audit log is an attack surface** in the sense that its absence is: an attacker's best outcome is not detection followed by cleanup, it is an incident nobody can scope.
+
+<Aside type="note" title="If you want a checklist rather than a narrative">
+OWASP's **Top 10 for Agentic Applications (2026)** enumerates the same territory as ten numbered risks: Agent Goal Hijack (ASI01), Tool Misuse (ASI02), Identity and Privilege Abuse (ASI03), Agentic Supply Chain (ASI04), Unexpected Code Execution (ASI05), Memory & Context Poisoning (ASI06), Insecure Inter-Agent Communication (ASI07), Cascading Failures (ASI08), Human-Agent Trust Exploitation (ASI09), and Rogue Agents (ASI10).
+
+It is a good coverage check to run against the table above, particularly ASI09, which is the approval-fatigue row, and ASI08, which is the one that only exists because agents call other agents.
+</Aside>
+
+## Rate paths, not components
+
+The last piece of method, because the usual scoring exercise misleads here.
+
+Likelihood is nearly useless as an axis for injection. The cost of an attempt is writing a sentence, so the rate is "as often as someone bothers," and you should assume any path that is reachable at all will be attacked. Rating a path 2/5 on likelihood is a statement about the current attacker's attention span, not about your system.
+
+Two questions do more work:
+
+**1 · Can attacker-controlled bytes reach this execution path?** Not "is this input validated": *can text a stranger wrote end up in the context of a run that reaches this code.* Trace it backwards from every class ③–⑤ tool call to every ingestion point. Most paths turn out to have a surprising answer.
+
+**2 · What is the worst well-formed call on this path?** Not a crash, not an exception. The maximum-damage *valid* invocation. `issue_credit` with the largest amount the schema permits, `send_reply` to any address the model can name. That number is your blast radius, and unlike likelihood it is a fact about your system that you can change.
+
+The product of those two is the priority order, and it produces a different list than a component-by-component scoring pass, usually a much shorter one, weighted toward a handful of paths where a public ingestion point and a high-authority tool meet in the same run.
+
+## Atlas, concretely
+
+| Path | Attacker-reachable? | Worst well-formed call | Standing |
+| --- | --- | --- | --- |
+| Ticket body → `get_order` | Yes, anyone can file a ticket | Read one order on the ticket's account | Acceptable |
+| Ticket body → `issue_credit` | **Yes** | A credit of any amount to any account | **The path this part exists for** |
+| Ticket body → `send_reply` | **Yes** | Arbitrary text, arbitrary recipient, out of the perimeter | Exfiltration primitive |
+| Help-center corpus → any tool | Yes, the corpus contains contributed content | Whatever the retrieved chunk asks for | [Next chapter but one](/book/security/untrusted-retrieval) |
+| Agent → warehouse database | Via any of the above | Whatever the service credential permits | Scoped in [Least Privilege](/book/security/least-privilege) |
+| Operator console → anything | Only authenticated staff | Everything | Ordinary appsec; not this part's problem |
+
+The shape of the table is the point. Five of six rows begin with text that someone outside your company wrote, and exactly one is the classical security problem your existing controls were built for.
+
+## References
+
+- [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), the ASI01–ASI10 enumeration used here as a coverage checklist rather than a taxonomy.
+
+---
+
+Next: [Prompt Injection](/book/security/prompt-injection), direct and indirect, why input filtering is not a defense, and what an actual defense looks like.
+
+## Takeaways
+
+- The worst case is not embarrassing output. It is that the agent holds a database connection, a payments credential, and a mail sender, and decides what to do with them by reading text a stranger wrote.
+- Three assets: what the agent can read, what it can do, and what it *is*, a long-lived service identity whose unusual traffic looks normal by design.
+- Treat the system prompt as public. Prompt extraction is the most photogenic and least consequential outcome.
+- Classical appsec puts the check at the boundary where data becomes code. An agent has no such location. The boundary is inside a token sequence.
+- Therefore: constrain authority before untrusted text arrives, rather than inspecting the text.
+- An agent is a confused deputy with a budget. The attacker supplies intent; the agent supplies authority; nothing checks that they belong together.
+- Four amplifiers: authority aggregates across integrations nobody approved together, the loop gives an attacker many steps, nondeterminism defeats signature detection, and success looks like clean work.
+- The most dangerous adversary has no account, because every control you already own assumes the attacker is a principal in your system.
+- The approval queue and the audit log are attack surfaces. One can be flooded into a rubber stamp, the other's absence makes an incident unscopeable.
+- Likelihood is a weak axis when an attempt costs one sentence. Ask instead whether attacker-controlled bytes can reach the path, and what the worst *well-formed* call on it is.
+- Blast radius is the number you can actually change.

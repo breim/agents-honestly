@@ -1,0 +1,217 @@
+---
+title: "Evaluating Graph Quality"
+description: "Node and edge accuracy, path validity, provenance, freshness, and whether the graph improved the answer rather than merely looking connected."
+---
+
+
+A graph can be wrong in ways that look authoritative. One false edge creates a clean path, a plausible explanation, and a confident answer. The graph visualization makes the mistake easier to believe because the relationship is drawn as a fact.
+
+Evaluation has to test four layers separately:
+
+```text
+source records or text
+          ↓
+entities and relationships       construction quality
+          ↓
+retrieved subgraph               retrieval quality
+          ↓
+answer and cited path            task quality
+          ↓
+business action                  outcome and safety
+```
+
+An end-to-end score tells you whether the system works. The layer scores tell you what to fix.
+
+## Start with the graph's origin
+
+Graphs built from records and graphs extracted from prose need different tests.
+
+| Origin | Available ground truth | Characteristic failure |
+| --- | --- | --- |
+| Database records | Keys, foreign keys, source rows | Stale sync, mapping bug, deleted edge retained |
+| Multiple business systems | Source IDs plus reconciliation rules | Identity conflict, temporal disagreement |
+| Model extraction from text | The cited span and a human label | Hallucinated or mistyped edge |
+| Human curation | Review record and policy | Inconsistent interpretation, silent edits |
+
+Do not grade a record-derived edge with an LLM judge when a foreign key can decide. Do not pretend a foreign key exists for an extracted claim. Use the strongest available ground truth at each boundary.
+
+## Node quality
+
+Entity extraction and resolution produce two distinct error classes.
+
+**False split.** One real entity becomes several nodes. Recall falls. Paths disappear. The graph quietly knows less than it should.
+
+**False merge.** Different entities become one node. Paths appear that should not exist. In a multi-tenant system this can become a confidentiality incident.
+
+Track both, and weight false merges more heavily. Useful metrics include pairwise precision and recall, cluster precision and recall, the distribution of cluster sizes, unresolved-rate by source, and human-review rate in the ambiguous band.
+
+The aggregate is not enough. Slice by tenant, source system, language, entity type, and identifier availability. A resolver that performs well on companies with tax IDs may fail completely on contacts identified only by names and email domains.
+
+## Edge quality
+
+Sample edges and label four fields:
+
+```text
+subject correct?
+relationship type correct?
+object correct?
+validity and provenance correct?
+```
+
+An edge passes only if all required fields pass. Scoring only subject and object lets a `SUPPLIES` edge receive credit when the source said `COMPETES_WITH`, which preserves the endpoints and reverses the meaning.
+
+For extracted edges, store the supporting span and ask the reviewer whether the span **asserts** the relationship. Co-occurrence is not evidence. "Acme considered acquiring Foo" does not assert `ACQUIRED`.
+
+<Aside type="caution" title="Do not let the extractor grade itself">
+A model that invented an edge can write a persuasive explanation for why the edge is present. Use a human-labeled sample, a different verified source, or a deterministic record check. Self-consistency measures whether the same system repeats its interpretation, not whether the interpretation is true.
+</Aside>
+
+## Path quality
+
+Users ask questions about paths, not isolated edges. A graph with 99% edge accuracy can still return a bad three-hop path because the chance that every edge is correct compounds.
+
+For each important traversal, maintain cases with:
+
+- a known-valid path;
+- a tempting invalid path;
+- no path, where the correct result is empty;
+- a path blocked by authorization;
+- a path that was valid in the past but not at the requested time;
+- a high-degree hub that must not explode the result.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/evals/graph-path.ts"
+export function assertPath(result: PathResult, expected: PathFixture): void {
+  if (result.nodes.length > expected.maxNodes) throw new Error('path_unbounded');
+  if (result.depth > expected.maxDepth) throw new Error('depth_unbounded');
+
+  for (const edge of result.edges) {
+    if (!edge.sourceId) throw new Error(`missing_provenance:${edge.id}`);
+    if (!edge.allowedFor(expected.principal)) throw new Error(`forbidden_edge:${edge.id}`);
+    if (!edge.validAt(expected.asOf)) throw new Error(`invalid_time:${edge.id}`);
+  }
+
+  if (!expected.acceptedPaths.some((path) => samePath(path, result.edgeIds))) {
+    throw new Error(`unexpected_path:${result.edgeIds.join(',')}`);
+  }
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/evals/graph_path.py"
+def assert_path(result: PathResult, expected: PathFixture) -> None:
+    if len(result.nodes) > expected.max_nodes:
+        raise AssertionError("path_unbounded")
+    if result.depth > expected.max_depth:
+        raise AssertionError("depth_unbounded")
+
+    for edge in result.edges:
+        if not edge.source_id:
+            raise AssertionError(f"missing_provenance:{edge.id}")
+        if not edge.allowed_for(expected.principal):
+            raise AssertionError(f"forbidden_edge:{edge.id}")
+        if not edge.valid_at(expected.as_of):
+            raise AssertionError(f"invalid_time:{edge.id}")
+
+    if not any(same_path(path, result.edge_ids) for path in expected.accepted_paths):
+        raise AssertionError(f"unexpected_path:{','.join(result.edge_ids)}")
+```
+
+</Tab>
+</Tabs>
+
+Allow several valid paths when the answer genuinely has alternatives. Requiring one exact path makes the eval brittle. Requiring every edge to be sourced, authorized, time-valid, and within bounds enforces the properties that matter.
+
+## Retrieval quality
+
+The graph query must return enough evidence and no more than the context can use.
+
+Measure:
+
+| Metric | Question |
+| --- | --- |
+| Path recall | Did at least one valid supporting path arrive? |
+| Edge precision | How much of the returned subgraph was relevant? |
+| Bound-hit rate | How often did depth, node, or time limits truncate the search? |
+| Provenance coverage | Can every returned relationship resolve to a source? |
+| Freshness lag | How old was the newest source update not yet reflected? |
+| Authorization violations | Did any forbidden node or edge enter the traversal? Target: zero. |
+
+Report bound hits rather than hiding them. "No relationship found" and "search stopped at 200 nodes" are different answers, and the model needs that distinction to avoid presenting truncation as absence.
+
+## End-to-end value
+
+The decisive experiment compares the graph path against the cheaper architecture it proposes to replace.
+
+<Figure caption="A graph earns its place by improving the target slice after latency, cost, and new failure modes are included." frame={false}>
+
+```text
+same multi-hop dataset
+        │
+        ├── agentic API iteration ──▶ answer · path · cost · latency
+        │
+        └── graph retrieval ────────▶ answer · path · cost · latency
+                                      │
+                                      ▼
+                         compare on the multi-hop slice
+```
+
+</Figure>
+
+Score answer correctness, citation validity, path validity, latency, cost, and abstention when evidence is incomplete. Then repeat on the single-hop slice. A graph that wins multi-hop and loses common lookups may still be useful behind a router. A global average can hide both findings.
+
+GraphRAG adds global questions and community summaries. Evaluate those summaries against the source communities and compare global-answer coverage with a non-graph baseline. A coherent summary built on one false cluster is still a failed index.
+
+## Drift and lifecycle
+
+Graph quality changes when no graph code deploys:
+
+- a source system changes an identifier format;
+- an ingestion mapping stops emitting one edge type;
+- an ontology version introduces a new relation;
+- the entity resolver starts merging a new naming pattern;
+- a queue falls behind and freshness lag grows;
+- a model extractor changes behind a provider alias.
+
+Publish a build manifest with counts by node type, edge type, source, ontology version, and extraction version. Alert on ratios and discontinuities. If `GOVERNED_BY` edges fall 40% overnight, answer quality will fail later. The manifest can catch it before a user asks.
+
+Every graph migration needs a shadow build. Run the old and new graphs against the path suite, compare entity clusters and high-impact edges, then repoint the active build. In-place mutation destroys the evidence you need to explain the difference.
+
+## Security cases belong in the graph suite
+
+For every legitimate path, add the nearest forbidden path:
+
+```text
+Acme account
+   └── shared supplier
+          └── another tenant's order   ← must never enter the frontier
+```
+
+Test the frontier at each hop, not only the returned result. A traversal can leak structure by using a forbidden node to decide where to go even if it removes that node before returning.
+
+False merges get a dedicated security gate. Any merged cluster containing identifiers from incompatible tenants fails the build. Do not average that failure into entity-resolution precision.
+
+## Atlas, concretely
+
+Atlas keeps fifty labeled account-health cases. Each names acceptable supporting paths, forbidden adjacent paths, the `as_of` date, and the expected aggregate. Ten are no-path cases. Ten contain shared suppliers that try to cross a tenant boundary.
+
+The build manifest tracks nodes and edges by type and source, unresolved entities, cluster-size outliers, provenance coverage, and source-to-index lag. The graph route ships only if it beats agentic API iteration on the multi-hop slice without moving the authorization gate or cost-per-resolved-ticket in the wrong direction.
+
+---
+
+Next: [GraphRAG, and When Not To](/book/graphs/graphrag), deriving a graph from prose, where construction quality becomes the whole problem.
+
+## Takeaways
+
+- Test construction, retrieval, answer, and outcome separately. End-to-end scores cannot localize a graph failure.
+- Record-derived and text-extracted graphs have different ground truth. Use the strongest available check.
+- False merges are more dangerous than false splits and may cross authorization boundaries.
+- An edge is correct only when endpoints, type, time, and provenance are correct.
+- Path fixtures need valid, invalid, empty, forbidden, historical, and hub-node cases.
+- Compare graph retrieval with the cheaper baseline on the multi-hop slice and the common single-hop slice.
+- Publish a build manifest and shadow every migration. Never destroy the old graph before measuring the new one.
+- Authorization is evaluated at every hop. A forbidden node must never enter the frontier.

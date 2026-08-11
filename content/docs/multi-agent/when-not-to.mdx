@@ -1,0 +1,149 @@
+---
+title: "When Not To"
+description: "Solve it as a workflow first. Promote to multiple agents only when isolation or ownership demands it."
+---
+
+The largest empirical study of multi-agent failures to date annotated **over 1,600 execution traces across seven open-source frameworks** and found failure rates ranging from **41% to 86.7%**. The resulting taxonomy sorts fourteen distinct failure modes into three families:
+
+| Family | What it is |
+| --- | --- |
+| **System design** | Bad decomposition, ambiguous roles, missing termination conditions |
+| **Inter-agent misalignment** | Agents that stopped agreeing about the task |
+| **Verification** | Nobody checked, or the checker was not independent |
+
+Notice what is *not* on that list. Almost none of it is model capability. The great majority of multi-agent failures are **specification and coordination**: problems you introduced by splitting the work, that would not have existed in a single agent, and that no model upgrade will fix.
+
+That is the case against, stated as evidence rather than opinion. This chapter is about the case for, which is narrower than it looks and real where it applies.
+
+## The tax is not a metaphor
+
+[The coordination tax chapter](/book/multi-agent/the-coordination-tax) priced this in tokens and seconds. The short version, because it drives everything else:
+
+**Context does not cross the boundary; a summary does.** Agent A read four documents and formed a judgment. Agent B receives three sentences. Everything B decides is downstream of a lossy compression that A chose, and B cannot tell what was dropped.
+
+**Errors corroborate instead of cancelling.** The hope is that a second agent catches the first one's mistake. In practice a reviewer reading the previous agent's conclusion is a second vote, not a check. [Part III made this argument about poisoning](/book/context/context-poisoning) and it is the same mechanism here, with an org chart drawn on it.
+
+**Every boundary is a new failure surface.** A handoff can be dropped, duplicated, malformed, or infinitely bounced. None of those exist in a function call.
+
+Which yields the sentence to hold onto, and it is the one the failure data supports:
+
+> **A single agent that can hold the whole task in its context beats a team of agents that has to coordinate. The only honest reason to split is that it cannot.**
+
+## The three legitimate reasons
+
+They are all structural. None of them is about capability.
+
+**1 · Context genuinely does not fit.** Not "the prompt is long": the task involves more material than any single window can hold while still reasoning well, and the [budget chapter's](/book/context/context-as-budget) tools have been exhausted. Auditing four hundred files, or reading two hundred documents to answer one question. Here isolation is a [context-engineering technique](/book/patterns/context/subagent-isolation) that happens to be implemented with agents, and it is the strongest case on the list.
+
+**2 · A trust or authority boundary must be enforced.** The agent reading untrusted content must not be the one holding the tools, which is [the dual-LLM pattern from Part XVII](/book/security/prompt-injection), and it is a security architecture rather than a team of collaborators. The "agents" here do not negotiate; one is quarantined by construction.
+
+**3 · Ownership is genuinely separate.** Two teams ship, version, evaluate, and are on call for two different agents with different release cycles. This is a real reason and it is an *organizational* one: you are paying the coordination tax to buy independent deployability, which is exactly the microservices trade and should be made with the same eyes open.
+
+Everything else on the usual list does not survive examination:
+
+| Stated reason | What it actually is |
+| --- | --- |
+| "Specialist agents perform better" | A prompt and a tool subset. Both are available inside one agent |
+| "It mirrors how our team works" | Conway's law as an architecture decision |
+| "It's more modular" | Function boundaries give you that without the token cost |
+| "The framework supports it" | Not a requirement |
+| "It parallelizes the work" | True only for genuinely independent items, see below |
+| "Each agent is easier to evaluate" | The composition is what users experience, and it is harder to evaluate |
+
+The first row is the common one and worth being blunt about. **A "specialist agent" is usually a system prompt.** If the specialization is a different instruction and a narrower tool list, that is a [routing decision inside one agent](/book/workflows/routing-and-orchestration), which costs one conditional edge instead of a message boundary, a serialization format, a failure mode, and a fresh context.
+
+## The promotion test
+
+Before splitting, four questions. A yes to any of the first three is a reason; a **no** to the fourth is a warning.
+
+<Figure caption="Three gates that justify a split, and one that says you are about to build a distributed version of a bug you already have." frame={false}>
+
+```
+   1. Does the work exceed one context window,
+      after compaction and selective retrieval?          ── yes ▶ split
+                                                              (isolation)
+
+   2. Must some component be denied the tools or
+      the data another component holds?                  ── yes ▶ split
+                                                              (trust)
+
+   3. Do two teams need to deploy and be paged
+      independently?                                     ── yes ▶ split
+                                                              (ownership)
+
+   4. Can you write down, right now, the exact
+      handoff contract and the termination condition?    ── NO  ▶ do not
+                                                              split yet
+
+   All four "no"? It is a workflow. Build the workflow.
+```
+
+</Figure>
+
+Question four is the one that catches most premature splits, because "missing termination condition" and "ambiguous role definition" are named failure modes in the taxonomy above, both in the design-issues family. If you cannot state what each agent is handed, what it must return, and what makes the whole thing stop, you do not have a design; you have a diagram, and the model will improvise the rest at runtime.
+
+## What to build instead
+
+The alternative is not "one giant prompt." It is the thing [Part VI spent a whole part on](/book/workflows/the-determinism-test): a workflow whose control flow you wrote, with model calls at the steps that genuinely need judgment.
+
+| You wanted | Build |
+| --- | --- |
+| A research agent and a writer agent | One graph: retrieve node → draft node → check node |
+| A router agent | [A routing edge](/book/workflows/routing-and-orchestration) |
+| A critic agent | [An evaluator-optimizer loop](/book/workflows/evaluator-optimizer) with a bounded iteration count |
+| A team of specialists | One agent with conditional tool exposure |
+| Parallel document analysis | [Map-reduce over isolated contexts](/book/patterns/scale/mapreduce-tree), same shape, no negotiation |
+
+The last row is the one that resolves the parallelism argument honestly. Fanning out over two hundred documents *is* correct and it *is* faster, and it does not require agents that talk to each other. Each worker gets one document, returns a structured result, and never learns the others exist. The coordination tax is near zero because there is no coordination: the [map-reduce pattern](/book/patterns/context/subagent-isolation) is deterministic orchestration over isolated model calls, and it is what most successful "multi-agent" systems turn out to be underneath.
+
+<Aside type="note" title="Where fan-out genuinely wins">
+Read-heavy, embarrassingly parallel, independent items: searching many sources, analyzing many files, evaluating many candidates. Latency drops, no agent negotiates with another, and the reduce step is code.
+
+The failure modes in the taxonomy cluster around the opposite shape: agents with overlapping responsibilities, shared mutable goals, and conversations. If your design has agents *talking*, you are in the 41–86.7% regime. If it has agents *fanning out over disjoint inputs*, you are not.
+</Aside>
+
+## If you split anyway
+
+Sometimes the answer is genuinely yes. Then the taxonomy is a checklist rather than a warning, and four rules cover most of it:
+
+**Write the contract as a schema.** What each agent receives and returns, [validated](/book/foundations/structured-output), versioned, and tested independently. Prose handoffs are where inter-agent misalignment lives.
+
+**Give every loop a termination condition and a budget.** Maximum turns, maximum cost, and a defined outcome when either is hit. "It should converge" is not a termination condition.
+
+**Make verification independent.** A checker that reads the previous agent's *conclusion* is a second vote. A checker that reads the *source data* is a check. This is the single highest-value structural fix available, and it maps directly onto the taxonomy's verification family.
+
+**Trace across the boundary.** One trace ID spanning every agent, or debugging becomes archaeology across three systems. The [tracing requirements](/book/observability/what-a-trace-must-answer) get strictly harder here, which is another cost in the tax column.
+
+## Where the core path leaves you
+
+This is the last chapter of the shortest route through the book, so it is worth naming what you have.
+
+You can build an agent and know [why it is a loop](/book/first-agent/the-loop-by-hand). You can [budget its context](/book/context/context-as-budget), [put its answer where it belongs](/book/retrieval/where-does-the-answer-live), and [tell when it should not have been an agent at all](/book/workflows/the-determinism-test). You can [design tools that survive a model calling them](/book/tools/tools-are-apis-for-models), make them [safe to repeat](/book/tools/idempotency), [survive a crash mid-run](/book/durable-execution/why-durable-execution), [put a person in the loop without drowning them](/book/human-in-the-loop/risk-tiers), [know whether a change made it better](/book/evals/eval-discipline), [find out what happened afterwards](/book/observability/what-a-trace-must-answer), [contain what a hostile ticket can do](/book/security/prompt-injection), and [pay a bill you can explain](/book/production/cost-engineering).
+
+The thread through all of it is one claim, made in a different register each time: **the model is the part you do not control, so everything around it must be the part you do.** Deterministic control flow, typed state, argument-scoped authority, structural rather than requested constraints, and a record you can reconstruct.
+
+What is left in this book is depth, not filler: the parts that matter when a specific thing gets hard. The capstone builds one system end to end with all of it.
+
+## References
+
+- [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/abs/2503.13657), Cemri et al.: the MAST taxonomy and the failure rates quoted here.
+- [Single-Agent LLMs Outperform Multi-Agent Systems on Multi-Hop Reasoning Under Equal Thinking Token Budgets](https://arxiv.org/abs/2604.02460), the equal-budget control the benchmarks usually lack.
+
+---
+
+Next: [The Brief](/book/capstone/the-brief), one system, built end to end, with every constraint from the preceding twenty parts applied at once.
+
+## Takeaways
+
+- The largest study of multi-agent failures annotated over 1,600 traces across seven frameworks and found 41–86.7% failure rates. The great majority of the causes are specification and coordination, not model capability.
+- Context does not cross an agent boundary. A lossy summary does, chosen by the sender, and the receiver cannot tell what was dropped.
+- Errors corroborate rather than cancel. A reviewer reading the previous agent's conclusion is a second vote, not a check.
+- A single agent that can hold the whole task in context beats a coordinating team. The only honest reason to split is that it cannot.
+- Three legitimate reasons, all structural: context genuinely doesn't fit, a trust boundary must be enforced, or two teams need to deploy and be paged independently.
+- "Specialist agents" are usually a system prompt and a tool subset, both available inside one agent, for the price of one conditional edge.
+- Mirroring the org chart is Conway's law presented as architecture.
+- If you cannot state the handoff contract and the termination condition right now, you do not have a design. Missing termination and ambiguous roles are named failure modes for a reason.
+- Build the workflow instead: routing edges, evaluator-optimizer loops, conditional tool exposure, and map-reduce over isolated contexts.
+- Fan-out over disjoint inputs is genuinely good and is not multi-agent in the risky sense: the workers never negotiate and the reduce step is code.
+- If your design has agents *talking*, you are in the failure regime. If it has agents *fanning out*, you are not.
+- If you split anyway: schema-validated contracts, explicit termination and budget, verification against source data rather than conclusions, and one trace ID across every agent.

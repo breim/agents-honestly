@@ -1,0 +1,181 @@
+---
+title: "Hybrid Fusion"
+description: "Merge lexical and semantic candidate lists into one ranking."
+---
+
+## Problem
+
+Two retrievers, two blind spots.
+
+**Dense retrieval misses exact strings.** `RB-400` embeds to roughly the same place as `RB-420`, so a query naming a specific part number returns the product family and not the part. Identifiers, SKUs, error codes, and version numbers are precisely the tokens embeddings are worst at.
+
+**Lexical retrieval misses paraphrase.** BM25 scores *"can we send it back"* against a document saying *"return authorization"* at approximately zero shared terms.
+
+Running both and concatenating does not fix it, and neither does the obvious weighted sum:
+
+```
+   0.5 × bm25_score + 0.5 × cosine_score
+```
+
+BM25 produces unbounded positive scores whose scale depends on the corpus and the query; cosine similarity is bounded and clusters tightly. Adding them gives BM25 effective dominance by default, and any weight you pick is tuned to one query shape and wrong for the next.
+
+## Forces
+
+- **The two retrievers fail on disjoint query types**, which is exactly why both are worth having.
+- **Their scores are not commensurable** and normalizing them is a per-corpus, per-query-distribution guess.
+- **Rank position is comparable across systems** even when score is not.
+- **Filters are [authorization](/book/retrieval/metadata-and-authorization)**, so where they run in the pipeline is a correctness question, not a performance one.
+- **The best result is often the document ranked moderately by *both***, which neither list has first.
+
+## Solution
+
+Fuse on **rank position**, not score, using Reciprocal Rank Fusion.
+
+<Figure caption="Only positions contribute. The document ranked third by both wins over one ranked first by a single retriever." frame={false}>
+
+```
+                    1
+   RRF(d)  =   Σ  ───────────           k ≈ 60
+              i   k + rank_i(d)
+
+
+   lexical          dense            fused
+   1. c-4410        1. c-9001        1. c-8812   ← 3rd + 2nd
+   2. c-8812        2. c-8812        2. c-4410
+   3. c-2201        3. c-7714        3. c-9001
+   ...              ...
+
+   c-8812 tops neither list and wins the fusion, because agreement
+   across independent retrievers is evidence and a single high score
+   is not.
+```
+
+</Figure>
+
+The formula is from Cormack, Clarke, and Büttcher (SIGIR 2009), and `k ≈ 60` is the empirical constant from that work; subsequent benchmarks find anything in roughly 40–80 performs comparably, which is why most vendors ship 60 and why tuning it is rarely where your gains are.
+
+Three rules:
+
+**Filter inside each retriever, before fusion.** Tenant, trust class, and current-version predicates run in each leg's query. Filtering the fused list afterwards means restricted content was read, logged, and possibly sent to a reranker: [post-filtering is not a security boundary](/book/retrieval/metadata-and-authorization).
+
+**Retrieve wide, fuse, then narrow.** Take 50 from each leg, fuse, and pass the top 50 to a [reranker](/book/patterns/retrieval/two-stage-rerank). Fusion improves the candidate set; it is not a final ranking.
+
+**Add a third leg for exact identifiers.** Where [query rewriting extracted](/book/patterns/retrieval/query-rewriting) `RB-400`, run an exact-match query as its own list. This is the leg that reliably rescues the failure dense retrieval is worst at.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/fuse.ts"
+const K = 60;   // Cormack et al. 2009. Anything in ~40–80 behaves similarly.
+
+export function rrf(lists: string[][], weights?: number[]): string[] {
+  const scores = new Map<string, number>();
+
+  lists.forEach((list, i) => {
+    const w = weights?.[i] ?? 1;
+    list.forEach((id, rank) => {
+      // rank is 0-based here, so +1 to match the published formula.
+      scores.set(id, (scores.get(id) ?? 0) + w / (K + rank + 1));
+    });
+  });
+
+  return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+}
+
+export async function retrieve(q: RewrittenQuery, ctx: RunContext) {
+  // Authorization predicates run INSIDE each leg. Never after the fusion.
+  const filter = { tenantId: ctx.tenantId, trust: ctx.allowedTrust, current: true };
+
+  const [exact, lexical, dense] = await Promise.all([
+    q.identifiers.length
+      ? index.exact(q.identifiers, { filter, k: 50 })
+      : Promise.resolve([]),
+    index.bm25(q.queries, { filter, k: 50 }),
+    index.dense(q.queries, { filter, k: 50 }),
+  ]);
+
+  // The identifier leg is weighted up when identifiers were present:
+  // an explicit routing decision, not a global guess.
+  return rrf([exact, lexical, dense], [1.5, 1, 1]).slice(0, 50);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/fuse.py"
+K = 60   # Cormack et al. 2009. Anything in ~40–80 behaves similarly.
+
+
+def rrf(lists: list[list[str]], weights: list[float] | None = None) -> list[str]:
+    scores: dict[str, float] = {}
+    for i, lst in enumerate(lists):
+        w = weights[i] if weights else 1.0
+        for rank, doc_id in enumerate(lst):
+            # rank is 0-based here, so +1 to match the published formula.
+            scores[doc_id] = scores.get(doc_id, 0.0) + w / (K + rank + 1)
+    return [d for d, _ in sorted(scores.items(), key=lambda kv: -kv[1])]
+
+
+async def retrieve(q, ctx) -> list[str]:
+    # Authorization predicates run INSIDE each leg. Never after the fusion.
+    flt = {"tenant_id": ctx.tenant_id, "trust": ctx.allowed_trust, "current": True}
+
+    exact, lexical, dense = await asyncio.gather(
+        index.exact(q["identifiers"], filter=flt, k=50) if q["identifiers"]
+        else noop_list(),
+        index.bm25(q["queries"], filter=flt, k=50),
+        index.dense(q["queries"], filter=flt, k=50),
+    )
+
+    # Identifier leg weighted up when identifiers were present: an explicit
+    # routing decision, not a global guess.
+    return rrf([exact, lexical, dense], [1.5, 1.0, 1.0])[:50]
+```
+
+</Tab>
+</Tabs>
+
+Note what the weights are and are not. A global weight tuned to make the average query better is the mistake this pattern exists to avoid. A weight applied *because you detected identifiers in the query* is a [routing decision](/book/retrieval/where-does-the-answer-live) expressed as a number, and it is defensible precisely because it is conditional.
+
+## Trade-offs
+
+**Two or three indexes to build and maintain.** Every leg needs its own [ingestion path](/book/retrieval/ingestion-pipeline), its own filters, and its own consistency with the others. A chunk deleted from one and not the others is a leak or a ghost.
+
+**Score information is discarded.** RRF sees only positions, so a document that is a runaway best match and one that is barely ahead of second place contribute identically. This is the trade that makes fusion robust, and it is why fusion feeds a [reranker](/book/patterns/retrieval/two-stage-rerank) rather than answering directly.
+
+**Latency is the slowest leg.** Legs run in parallel, so this is usually acceptable, but a slow lexical index now gates every dense query too.
+
+**Gains read as modest on averages.** Reported comparisons range from a couple of percent to low double digits over the better single method, and they disagree because the answer depends on the corpus. Any of those averages badly understates the case, because the improvement is concentrated in the query types where one leg fails completely, which are exactly the queries a support agent gets.
+
+## When not to use it
+
+**When one retriever is sufficient.** A corpus of natural-language prose with no identifiers may not need a lexical leg; a corpus of structured codes may not need a dense one. [Measure recall@k per query type](/book/retrieval/retrieval-evals) before adding infrastructure.
+
+**When the answer is not in documents at all.** Fusing two retrievers over a corpus that does not contain the answer produces a well-ranked list of irrelevant chunks. [Route first](/book/retrieval/where-does-the-answer-live): aggregations are SQL and relationships are graph traversals.
+
+**When you have not built retrieval evals.** Without recall@k you cannot tell whether fusion helped, which leg is carrying it, or whether `k` matters. Adding a second index on faith is how systems acquire components nobody can justify removing.
+
+**As a fix for bad chunking.** If the answer spans a chunk boundary, no fusion recovers it. [Chunking](/book/retrieval/chunking) and [parent–child retrieval](/book/patterns/retrieval/parent-child-chunks) are the fix.
+
+<Aside type="note" title="Agreement is the signal">
+The reason RRF works is worth stating plainly, because it explains when it will not.
+
+Two *independent* retrievers agreeing that a document is relevant is real evidence: they failed to be wrong in the same way. That is why the moderately-ranked document that both lists contain beats the top hit of one.
+
+Which means fusion pays in proportion to how independent the legs are. Fusing two dense retrievers over similar embedding models buys almost nothing, because their errors are correlated. Lexical and dense are worth fusing precisely because they fail on disjoint inputs, and the same logic is why [diverse verification lenses beat repeated identical checks](/book/multi-agent/when-not-to) elsewhere in this book.
+</Aside>
+
+## Related
+
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): what the fused candidate list feeds into
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): produces the multiple queries and extracts the identifiers
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): why the predicates run inside each leg
+- [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks): the fix fusion cannot provide
+- [Hybrid and Reranking](/book/retrieval/hybrid-and-reranking): the chapter, with the score-incompatibility argument in full
+
+## References
+
+- [Reciprocal rank fusion outperforms Condorcet and individual rank learning methods](https://doi.org/10.1145/1571941.1572114), Cormack, Clarke and Büttcher, SIGIR 2009: the formula and the `k` constant this entry implements.

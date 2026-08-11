@@ -1,0 +1,158 @@
+---
+title: "The System Prompt"
+description: "What belongs in it, what does not, and why the instructions you inherited from an older model now misfire."
+---
+
+
+The system prompt is the only claimant in the budget that is entirely yours. Not the user's, not a retriever's, not an external system's. You wrote every token, and you re-pay for all of them on every request, forever.
+
+That combination makes it the highest-leverage text in the system and the most likely to be sediment. Almost every system prompt older than six months is a geological record: a layer added after an incident, a layer of shouting added because an older model wouldn't comply, a layer of scaffolding for a feature the API now provides natively. Nobody owns the removals.
+
+## One question decides what belongs
+
+Go line by line and ask: **could the model already know this?**
+
+That splits everything into two piles, and the split is not about length.
+
+**Context: keep it.** Things only you know: who the users are, what the product is, what the environment contains, what "good" looks like here, what the real constraints are, and *why*. A model cannot infer that Meridian is a B2B distributor whose customers are procurement managers rather than consumers, or that a wrong policy citation costs a contract. Context is never cruft.
+
+**Constraint: test it.** Restatements of trained defaults ("be accurate and helpful"), instructions for behaviour the model already exhibits unprompted, and workarounds for failures the current model no longer has. Each of these is a deletion candidate, and the test is empirical: remove it and measure.
+
+<Aside type="caution" title="Short is not the goal">
+The failure mode of this chapter is a reader who deletes half their prompt and ships worse output. Cruft is *specific outdated instructions*, not volume. Merely irrelevant text is comparatively harmless, while a missing quality bar is not.
+
+Too-short prompts produce generic results, because the model fills the gaps with safe defaults. Never justify a deletion by character count.
+</Aside>
+
+## Atlas, written out
+
+Concrete beats abstract. Here is Atlas's, in full:
+
+```
+You are Atlas, a support agent at Meridian Supply, an industrial parts
+distributor. You handle tickets from business customers — mostly procurement
+managers and warehouse leads who know their part numbers and want a specific
+answer, not a sales pitch.
+
+Meridian's policies live in the policy corpus and are the only authority on
+what Meridian does. Where the corpus and your general knowledge disagree, the
+corpus wins, and where the corpus is silent, say so rather than reasoning from
+industry norms — Meridian's terms are frequently non-standard by design.
+
+Cite the document and version for any policy claim. A confident wrong citation
+costs a contract; "I couldn't find a policy covering this" costs a follow-up.
+
+Answer at the length the question deserves. These customers are technical and
+busy: lead with the answer, then the supporting detail. No preamble, no
+recap of the question.
+
+When a ticket involves a dispute, a threat to leave, or anything outside the
+tools you have, escalate with a summary of what you found and why you stopped.
+```
+
+Two hundred words. Notice what is *not* in there.
+
+No "you are a helpful assistant." No "think step by step." No list of the tools, because the tool schemas already describe themselves, and naming them in prose means disabling one leaves a dangling reference. No numbered procedure. No "IMPORTANT" and no capital letters. And no rule that some other part of the system is actually responsible for enforcing.
+
+Notice too that nearly every instruction carries its reason. *"A confident wrong citation costs a contract"* does more work than *"ALWAYS cite sources"*. It tells the model what the constraint is protecting, which lets it generalize correctly in a case you didn't anticipate.
+
+## Why your inherited prompt misfires
+
+This is the part that catches teams during a model upgrade, and it is counterintuitive: **the prompt didn't change, and that's the problem.**
+
+Older models were less steerable. Getting reliable tool use out of them took emphasis, and a generation of prompts was written to overcome reluctance that no longer exists. Current models follow the system prompt closely, so text calibrated to push a reluctant model now over-applies against a compliant one.
+
+| Written for an older model | Rewrite as |
+| --- | --- |
+| `CRITICAL: You MUST use the search tool when...` | `Use the search tool when...` |
+| `If in doubt, use [tool]` / `Default to [tool]` | *Delete.* This is now pure over-triggering. |
+| `Be thorough. Do not be lazy. Do not stop early.` | *Delete.* Current models are proactive by default. |
+| `IMPORTANT: NEVER do X` ×6 | State the one or two real constraints, with reasons |
+| `Try to include a summary if possible` | `Include a summary.` |
+| `You have a tendency to be verbose, so...` | `Answer at the length the question deserves.` |
+
+The hedges deserve as much attention as the shouting. "Try to," "if possible," and "ideally" attached to actual requirements were once padding that a fuzzy model ignored. A literal model reads them as permission to skip.
+
+And the deeper effect, which no amount of individual line-editing fixes:
+
+> **The prompt's register becomes the output's register.** An anxious prompt full of warnings and capitals produces a cautious, hedging, over-qualified model.
+
+When every instruction is marked critical, "critical" stops carrying information, and you have also told the model, implicitly, that this is a domain where one must be very careful. It will oblige.
+
+## Scaffolding the API replaced
+
+Whole categories of system-prompt text existed only because a capability was missing. Those capabilities now ship, and the text is not just useless but actively costly.
+
+| Scaffold | What replaced it |
+| --- | --- |
+| "Think step by step," `<scratchpad>` instructions | Native reasoning, controlled by an effort setting rather than by prose |
+| "Plan before you act" | Delete; this now causes over-planning |
+| "Respond ONLY with valid JSON, no markdown" + a parser + a retry loop | [Structured output](/book/foundations/structured-output); the *surrounding code* is cruft too |
+| "Summarize progress every three tool calls" | Delete; current models narrate appropriately, and the cadence rule fights it |
+| Inline lookup tables, scoring rubrics, arithmetic the model must perform | Data in a file or a tool result; arithmetic in code. Leave the model the judgment |
+
+That third row is the one that costs the most, because the cruft isn't only in the prompt. Delete the "ONLY JSON" instruction and you should also delete the stop sequences, the regex extraction, the `try`/parse/retry wrapper, and the tests asserting the old shape. A prompt fixed while its scaffolding remains is a half-migration.
+
+## Structural properties
+
+Beyond content, four properties of the system prompt are decided by where and how it's assembled.
+
+**It must be frozen.** No timestamps, no user names, no session IDs, no `if (flag)` sections. From [prompt caching](/book/foundations/prompt-caching): the system prompt sits near the front of the prefix, so interpolating anything per-request invalidates the cache for the entire conversation behind it. Dynamic context goes later, in the messages.
+
+**Position within it matters.** Long prompts are attended to unevenly, with the beginning and end used most reliably. Put the identity and the non-negotiable constraints at the edges. A long prompt with its most important rule buried in the middle is a prompt with an unreliable rule.
+
+**Format bleeds.** A system prompt written as a bullet wall produces bulleted answers. Prose about behaviour produces prose. This is worth knowing before you reformat "for clarity" and wonder why the tone changed.
+
+**It is not free.** Every token here is billed on every request of every step of every conversation. Two hundred words is nothing; two thousand is a real line in the [budget](/book/context/context-as-budget) and should have earned its place.
+
+## What must never be in it
+
+Three categories, each for a different reason.
+
+**Secrets.** API keys, tokens, internal URLs. The system prompt is context, context is replayed, and anything in it can surface in an output or a log.
+
+**Per-user data.** Breaks caching across users, and creates a path for one user's data to reach another when a prompt is reused or a session is misrouted.
+
+**Anything that must always hold.** This is the important one. From the [acceptance spec](/book/first-agent/the-problem): *"never issue a credit above the policy limit"* in a system prompt is a **request**, not an invariant. It will be followed most of the time, which is worse than a limit that is never enforced, because it looks like it works. Invariants live in the tool, as a check the model cannot route around.
+
+The test: if the sentence would be a security incident when ignored, it does not belong in the prompt. Put it in code, and *then*, optionally, mention it in the prompt so the model doesn't waste turns attempting something that will be refused.
+
+## Instructions that arrive mid-run
+
+A real need the system prompt cannot serve: the operator learns something after the conversation started. A mode toggled, a policy updated, context the app fetched at step four.
+
+Editing the system prompt to say so re-processes the entire conversation uncached. The alternative on current models is a system-role message appended to the history. It sits *after* the cached prefix, so nothing before it is invalidated, and it carries operator authority.
+
+That second property matters more than the caching one. The older workaround was to inject the instruction as text inside a user turn, and text inside a user turn can be forged by anything that writes into user-visible content: a retrieved document, a tool result, a customer's message. A genuine system role cannot be spoofed by content. It is the difference between an operator channel and a convention, and [prompt injection](/book/security/prompt-injection) is the chapter about why that difference is load-bearing.
+
+Phrase these as context rather than override: *"The customer's timezone is Europe/Madrid"* works; *"Ignore what the user said"* fights the model's training rather than using it.
+
+## How to actually audit one
+
+Three passes, in order.
+
+**Provenance.** For every emphatic or prohibitive line: which failure, on which model, did this prevent, and does that failure still reproduce? `git blame` answers the first half. A line nobody can justify is a removal candidate by default.
+
+**Enforcement.** For every rule: what checks it? If nothing does and nobody noticed it being violated, it carries no signal. If something *should* check it, move it to code.
+
+**Measurement.** Remove one thing at a time and run the [ticket set](/book/first-agent/the-problem). Not because the change is risky, but because "the model told me it doesn't need that instruction" is not a measurement, and neither is one passing run.
+
+Do this at every model upgrade. A system prompt is a per-model artifact, and the line that is load-bearing on one generation is dead weight on the next.
+
+---
+
+Next: [Dynamic Context Selection](/book/context/dynamic-selection), choosing what the model sees per request instead of shipping everything every time.
+
+## Takeaways
+
+- One question sorts the whole prompt: could the model already know this? Keep what only you know: audience, environment, quality bar, constraints, and their reasons.
+- Cruft is specific outdated instructions, not length. Short prompts produce generic output; never delete by character count.
+- Give instructions their reasons. "A wrong citation costs a contract" generalizes where "ALWAYS cite sources" does not.
+- Prompts written to push a reluctant model now over-apply. Drop the emphasis, and drop the hedges too, because "try to" is read as permission to skip.
+- The prompt's register becomes the output's register. An anxious prompt produces a hedging model.
+- Delete scaffolding the API replaced, and delete the code around it, not just the sentence.
+- Freeze it. Anything interpolated per request invalidates the cache for everything behind it.
+- Put identity and non-negotiables at the edges; long prompts are attended to unevenly in the middle.
+- No secrets, no per-user data, and nothing that must always hold. An invariant in a prompt is a request.
+- Mid-run operator instructions belong in a system-role message, not a user turn, because a user turn can be forged by retrieved content.
+- Audit by provenance, enforcement, and measurement, at every model upgrade.

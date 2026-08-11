@@ -1,0 +1,171 @@
+---
+title: "Sliding Window"
+description: "Keep N items in flight continuously instead of processing in waves."
+---
+
+## Problem
+
+A batch of twenty tickets is dispatched, and the code waits for all twenty before starting the next twenty.
+
+Nineteen finish in four seconds. One takes ninety: a long completion, a slow tool, a retry. For eighty-six seconds, nineteen of your twenty concurrency slots sit empty while the whole batch waits on its slowest member.
+
+The pattern repeats every wave. Utilization sawtooths between 100% and 5%, throughput is governed by the *tail* of each batch rather than by capacity, and adding concurrency does not help: a window of fifty has the same problem with more idle slots.
+
+The same shape appears with continuous arrival. Tickets do not come in waves of twenty; they arrive whenever customers write them. A wave-based processor either waits to fill a batch, adding latency for no reason, or dispatches partial batches and gets the utilization problem anyway.
+
+## Forces
+
+- **Item duration is highly variable**, and model calls have a long tail by nature.
+- **A barrier makes every item wait for the slowest** in its group.
+- **Capacity is finite**, so the number in flight must be bounded.
+- **Work may arrive continuously**, with no natural batch boundary.
+- **Backpressure has to propagate**: when the window is full, upstream must be told, not silently queued.
+- **Ordering guarantees are lost** when items complete out of order.
+
+## Solution
+
+Keep exactly **N in flight at all times**: the moment one completes, admit the next. No barrier, no waves.
+
+<Figure caption="Wave processing idles on the tail of every batch. A sliding window refills the slot the instant it opens." frame={false}>
+
+```
+   WAVES (barrier per batch)
+   slots │████████████████████│        │████████████████████│
+         │███████████         │        │████████            │
+         │█                   │        │██                  │
+         └────────────────────┴────────┴────────────────────┘
+          all 20 start    19 done, 1 slow    next 20 start
+                          ── 86s of idle capacity ──
+
+   SLIDING WINDOW (no barrier)
+   slots │████████████████████████████████████████████████████
+         │████████████████████████████████████████████████████
+         │████████████████████████████████████████████████████
+         └────────────────────────────────────────────────────
+          one finishes ──▶ next admitted, same instant
+          the slow item occupies ONE slot, not the whole window
+```
+
+</Figure>
+
+Four rules:
+
+**Admit on completion, not on a barrier.** Race the in-flight set, handle whichever finishes, admit one more. The slow item holds one slot for ninety seconds instead of stalling nineteen others.
+
+**Size the window from the [token budget](/book/reliability/backpressure), not from a thread count.** The binding constraint is input tokens per minute, and the arithmetic yields tens rather than thousands. A window sized by CPU is a window sized by the wrong resource.
+
+**Propagate backpressure at the door.** When the window is full and the source is a stream, stop pulling, do not buffer internally. An unbounded internal queue converts a capacity problem into a memory problem plus [a fleet of runs you cannot finish](/book/reliability/backpressure).
+
+**Accept out-of-order completion, or do not use this.** Results arrive in whatever order they finish. If downstream needs ordering, the window must write to a store that reorders, and that is a real cost worth naming before adopting the pattern.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/scale/sliding-window.ts"
+export async function slidingWindow<T, R>(
+  source: AsyncIterable<T>,
+  windowSize: number,               // from the TOKEN budget, not thread count
+  handle: (item: T) => Promise<R>,
+  onResult: (r: R | Error) => void,
+): Promise<void> {
+  const inFlight = new Set<Promise<void>>();
+
+  for await (const item of source) {
+    // Full: wait for ONE to finish, then admit ONE. No barrier, no wave.
+    // Backpressure propagates here — we stop pulling from the source
+    // rather than buffering internally.
+    if (inFlight.size >= windowSize) await Promise.race(inFlight);
+
+    const p = handle(item)
+      .then(onResult, (err: Error) => onResult(err))   // isolate per item
+      .finally(() => { inFlight.delete(p); });
+
+    inFlight.add(p);
+  }
+
+  // Drain: the only barrier in the whole pattern, and it is at the end.
+  await Promise.all(inFlight);
+}
+
+// The slow item occupies one slot. Everything else keeps moving.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/scale/sliding_window.py"
+async def sliding_window(source, window_size: int, handle, on_result) -> None:
+    """window_size comes from the TOKEN budget, not from a thread count."""
+    in_flight: set[asyncio.Task] = set()
+
+    async for item in source:
+        # Reap first. Unlike a JS promise, a finished Task stays in the set
+        # until someone removes it — and it would occupy a slot it no longer
+        # needs, quietly shrinking the window this pattern exists to keep full.
+        finished = {t for t in in_flight if t.done()}
+        for t in finished:
+            on_result(_settle(t))              # isolate per item
+        in_flight -= finished
+
+        # Full: wait for ONE to finish, then admit ONE. No barrier, no wave.
+        # Backpressure propagates here — we stop pulling from the source
+        # rather than buffering internally.
+        if len(in_flight) >= window_size:
+            done, in_flight = await asyncio.wait(
+                in_flight, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                on_result(_settle(t))
+
+        in_flight.add(asyncio.create_task(handle(item)))
+
+    # Drain: the only barrier in the whole pattern, and it is at the end.
+    for t in await asyncio.gather(*in_flight, return_exceptions=True):
+        on_result(t)
+
+
+def _settle(task):
+    return task.exception() or task.result()
+```
+
+</Tab>
+</Tabs>
+
+`Promise.race` / `FIRST_COMPLETED` is the entire difference from a [fan-out with a barrier](/book/patterns/scale/fan-out). One line, and it changes utilization from sawtooth to flat.
+
+## Trade-offs
+
+**Out-of-order results.** Items complete in duration order, not arrival order. Fine for independent classification; wrong for anything the downstream consumer expects sequenced.
+
+**Harder to reason about progress.** A wave has a clean "batch 12 of 40." A sliding window has a continuously changing set, so progress means counters: admitted, completed, failed, in flight, emitted as it goes.
+
+**A stuck item silently reduces capacity.** An item that hangs forever occupies its slot permanently, and a few of those shrink an effective window of 20 to 14 with no error anywhere. Every handler needs a [timeout](/book/reliability/timeouts-and-retries), and in-flight age is worth a metric: this is the failure that shows up as "throughput degraded and nothing is broken."
+
+**Errors need a policy at admission time.** With no barrier there is no natural place to check the failure rate. Track it in a rolling window and stop admitting when it crosses a threshold, or a systemic failure processes the entire stream into errors at full speed.
+
+## When not to use it
+
+**When the set is small.** A dozen items with similar durations gain nothing measurable.
+
+**When ordering is required.** Any sequential dependency between items rules this out. Use [a batch iterator](/book/patterns/scale/batch-iterator).
+
+**When durations are uniform.** The pattern's value is proportional to the variance in item duration. If everything takes four seconds, waves are simpler and just as fast.
+
+**When you need a barrier for correctness.** If a reduce step must see all results, a global ranking, an aggregate that cannot be computed incrementally, you need the barrier. Use the window to *feed* it, then wait once at the end.
+
+<Aside type="note" title="The same fix, at three altitudes">
+This is one idea appearing three times in this book, and noticing that makes each easier to apply.
+
+In [retrieval](/book/patterns/retrieval/two-stage-rerank): do not wait for the slow exact scorer over everything, score cheaply and wide, then expensively and narrow. In [the workflow layer](/book/patterns/scale/fan-out): do not synchronize on a barrier when the items are independent. Here: do not let the slowest item in a group gate the rest.
+
+The general form is that **a barrier is a coordination cost you pay whether or not the coordination buys anything.** It buys something exactly when a later stage needs all the results together: a dedup, a global ranking, an early exit on zero findings. Everywhere else it is idle capacity with a clean-looking control flow, and the fix is to stop waiting for the group.
+</Aside>
+
+## Related
+
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): the same bounded parallelism with a barrier at the end
+- [Batch Iterator](/book/patterns/scale/batch-iterator): when order matters and the set is walked
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): where the window size comes from, and why admission beats queueing
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): bounding the window by a quota you do not control
+- [Priority Task Queues](/book/patterns/scale/priority-queues): separate windows per class, so bulk cannot fill the interactive one

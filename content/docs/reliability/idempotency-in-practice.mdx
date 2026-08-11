@@ -1,0 +1,278 @@
+---
+title: "Idempotency in Practice"
+description: "Keys, dedup windows, and the exactly-once illusion you are actually building."
+---
+
+[Part VIII designed the key](/book/tools/idempotency): derived in your code from the run ID, the tool name, and a canonical hash of the arguments, never supplied by the model. That chapter deferred three things: where the keys live, how long they live, and what "exactly once" is actually promising. This is that chapter, and it exists because the deferred parts are where the money gets lost.
+
+Start with the sentence the whole thing turns on:
+
+> **Exactly-once delivery does not exist. Exactly-once *effect* does, and you build it out of at-least-once delivery plus a deduplication store you own.**
+
+Everything below is the engineering of that store: its key, its window, its consistency, and its failure modes. It is unglamorous infrastructure, it is roughly two hundred lines of code, and skipping it is how a retry policy becomes a double refund.
+
+## Where the record lives, and why not in the tool
+
+The dedup record has to be written somewhere. There are three places, and only one of them is right in the general case.
+
+| Location | Works when | Fails when |
+| --- | --- | --- |
+| **The downstream API's own dedup** | The API accepts an idempotency key | It doesn't, which is most internal services |
+| **Your dispatcher's dedup table** | Always | Nothing; this is the fallback you own |
+| The agent's state / checkpoint | Never | It is the thing that gets replayed |
+
+The third row is the mistake worth naming. Recording "I already issued this credit" in the graph state feels natural and is circular: the state is exactly what a [replay](/book/langgraph/persistence) reconstructs, and a crash between the effect and the state write leaves you with the effect and no record of it. **The dedup record must be more durable than the thing that would repeat the call.**
+
+When the downstream API does support keys, use it. The deduplication then lives on the same side of the network as the effect, which closes a gap your own table cannot. When it does not, your dispatcher owns a table, and the table's job is to make the write and the record atomic enough that no crash can separate them.
+
+## Three states, and the middle one is the whole design
+
+The naive table has one row per key with a result. The correct one has a state machine, because the interesting moment is *while the call is in flight*.
+
+<Figure caption="The in-flight state is what makes a concurrent duplicate wait rather than double-execute. A table with only two states has a race in it." frame={false}>
+
+```
+        ┌──────────────┐
+        │  (no row)    │  first caller inserts, atomically
+        └──────┬───────┘
+               │ INSERT ... ON CONFLICT DO NOTHING
+               ▼
+        ┌──────────────┐   a concurrent duplicate lands HERE
+        │  IN_FLIGHT   │   and must WAIT, not proceed
+        │  + lease_exp │
+        └──┬────────┬──┘
+           │        │
+   success │        │ failure / lease expiry
+           ▼        ▼
+   ┌────────────┐  ┌────────────┐
+   │  COMPLETED │  │   FAILED   │  eligible for a genuine retry
+   │  + result  │  │  + reason  │  (only if the failure was
+   └────────────┘  └────────────┘   provably before the effect)
+```
+
+</Figure>
+
+The `IN_FLIGHT` row is what distinguishes a real implementation from a decorative one. Two workers processing the same logical operation at the same instant, which happens whenever a [retry fires while the original is still running](/book/reliability/timeouts-and-retries), must not both proceed. The insert has to be atomic, and the second caller has to block or return "in progress," never fall through.
+
+The **lease** on that row is what stops it from being a deadlock. A worker that dies mid-call leaves `IN_FLIGHT` forever unless the row expires; the lease says *this claim is valid until T*, after which another worker may take it over. Setting that lease is a judgment call with teeth: it must be longer than the slowest legitimate call, because expiring early means a duplicate effect, which is the exact failure the table exists to prevent.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/reliability/dedup.ts"
+// One table, in the same database as your business writes — see below
+// on why that matters more than any other decision here.
+//
+//   CREATE TABLE idempotency (
+//     key          text PRIMARY KEY,
+//     state        text NOT NULL,          -- in_flight | completed | failed
+//     args_hash    text NOT NULL,          -- reuse-with-different-args check
+//     result       jsonb,
+//     lease_expiry timestamptz,
+//     created_at   timestamptz NOT NULL DEFAULT now()
+//   );
+
+export async function once<T>(
+  key: string,
+  argsHash: string,
+  leaseMs: number,
+  effect: (tx: Tx) => Promise<T>,
+): Promise<{ result: T; replayed: boolean }> {
+  return db.transaction(async (tx) => {
+    const claimed = await tx.execute(
+      `INSERT INTO idempotency (key, state, args_hash, lease_expiry)
+       VALUES ($1, 'in_flight', $2, now() + ($3 || ' milliseconds')::interval)
+       ON CONFLICT (key) DO UPDATE
+         SET lease_expiry = now() + ($3 || ' milliseconds')::interval
+         WHERE idempotency.state = 'in_flight'
+           AND idempotency.lease_expiry < now()
+       RETURNING key`,
+      [key, argsHash, leaseMs],
+    );
+
+    if (claimed.rowCount === 0) {
+      const row = await tx.one(`SELECT * FROM idempotency WHERE key = $1`, [key]);
+      // A reused key with different arguments is a bug, not a replay.
+      if (row.args_hash !== argsHash) throw new IdempotencyKeyReuse(key);
+      if (row.state === 'in_flight') throw new StillInFlight(key);
+      return { result: row.result as T, replayed: true };
+    }
+
+    // The effect and the record commit together. A crash between them
+    // is not a state this code can reach.
+    const result = await effect(tx);
+    await tx.execute(
+      `UPDATE idempotency SET state = 'completed', result = $2 WHERE key = $1`,
+      [key, JSON.stringify(result)],
+    );
+    return { result, replayed: false };
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/reliability/dedup.py"
+# One table, in the same database as your business writes — see below on
+# why that matters more than any other decision here.
+#
+#   CREATE TABLE idempotency (
+#     key          text PRIMARY KEY,
+#     state        text NOT NULL,        -- in_flight | completed | failed
+#     args_hash    text NOT NULL,        -- reuse-with-different-args check
+#     result       jsonb,
+#     lease_expiry timestamptz,
+#     created_at   timestamptz NOT NULL DEFAULT now()
+#   );
+
+import json
+
+CLAIM = """
+INSERT INTO idempotency (key, state, args_hash, lease_expiry)
+VALUES ($1, 'in_flight', $2, now() + ($3 || ' milliseconds')::interval)
+ON CONFLICT (key) DO UPDATE
+  SET lease_expiry = now() + ($3 || ' milliseconds')::interval
+  WHERE idempotency.state = 'in_flight'
+    AND idempotency.lease_expiry < now()
+RETURNING key
+"""
+
+
+async def once(key, args_hash, lease_ms, effect):
+    async with db.transaction() as tx:
+        claimed = await tx.fetch(CLAIM, key, args_hash, lease_ms)
+
+        if not claimed:
+            row = await tx.fetchrow("SELECT * FROM idempotency WHERE key = $1", key)
+            # A reused key with different arguments is a bug, not a replay.
+            if row["args_hash"] != args_hash:
+                raise IdempotencyKeyReuse(key)
+            if row["state"] == "in_flight":
+                raise StillInFlight(key)
+            return row["result"], True
+
+        # The effect and the record commit together. A crash between them
+        # is not a state this code can reach.
+        result = await effect(tx)
+        await tx.execute(
+            "UPDATE idempotency SET state='completed', result=$2 WHERE key=$1",
+            key, json.dumps(result),      # explicit: the column is jsonb
+        )
+        return result, False
+```
+
+</Tab>
+</Tabs>
+
+The single most consequential line is the one that does not appear: there is **no separate connection for the dedup store**. The effect and the record commit in one transaction, which is the only arrangement where a crash cannot land between them. Putting the dedup table in Redis and the effect in Postgres reintroduces the exact problem: a crash after the write and before the marker, and you are back to guessing.
+
+When the effect is genuinely external and cannot join your transaction, as with a payment API or an email send, you cannot have atomicity, and you fall back to the [transactional outbox](/book/durability/compensation): commit the *intent* with the record, and let a separate process perform the effect with the key attached. That converts "did it happen" into "has the outbox row been processed," which is a question your database can answer.
+
+## The window is the bug
+
+Every dedup mechanism has a retention window, and the window is where correct implementations quietly break.
+
+The industry convention is roughly **24 hours**, long enough for any plausible client retry, short enough that the table does not grow without bound. Newer API generations have extended it substantially, some to a month. Whatever the number, the rule is the same, and it is the reason this chapter exists:
+
+> **The window must exceed the longest interval over which the same logical operation could be attempted again.**
+
+For a web request, that is minutes and 24 hours is generous. For an agent, walk the list honestly:
+
+| Repetition source | Interval |
+| --- | --- |
+| SDK retry | Seconds |
+| Node retry | Seconds |
+| Worker crash and workflow replay | Minutes to hours |
+| **A run paused on [human approval](/book/human-in-the-loop/approval-gates)** | **Hours to days** |
+| A [scheduled retry of a failed run](/book/reliability/fallbacks-and-breakers) | Days |
+| An operator manually re-running a stuck run | Whenever they get to it |
+
+The fourth row is the one that breaks the default. A run that pauses on Friday for an approval, resumes Monday, and re-attempts `issue_credit` is *outside a 24-hour window*, so the key is gone, so the dedup layer sees a brand-new operation, so the credit is issued a second time. Every component behaved correctly. The window was a business decision made by a default.
+
+Three practical consequences:
+
+**Size the window from your longest pause, not from your retry policy.** If runs can wait a week for approval, the window is longer than a week.
+
+**Prefer natural keys where the domain has one.** A key derived from `(order_id, 'delayed_shipment_credit')` never expires because it is not stored in a TTL'd table at all. The uniqueness constraint on the credits table is the dedup, and it is permanent. [Natural idempotency beats the synthetic kind](/book/tools/idempotency) here for a second reason: it has no window to get wrong.
+
+**Make expiry visible.** When a key is pruned, the operation becomes repeatable again. That transition deserves a metric, and an alert if it happens to keys belonging to runs that are still alive.
+
+## Retry a failure only when you know it happened before the effect
+
+The `FAILED` state is more dangerous than it looks, and mishandling it is the second common way a real implementation goes wrong.
+
+Recall [the three outcomes](/book/tools/idempotency): succeeded, failed, and unknown. Unknown skews toward *it happened*, because most timeouts occur on the response. So a row marked `FAILED` is only safe to retry if the failure was **provably before** the effect:
+
+| Failure | Effect could have happened? | Retryable |
+| --- | --- | --- |
+| Connection refused | No, never reached the server | Yes |
+| 4xx validation from the API | No, rejected before processing | Yes, after fixing |
+| **Timeout with no response** | **Yes** | **No.** Confirm first |
+| 5xx after the request was accepted | Yes | No. Confirm first |
+| Worker killed mid-call | Yes | No. Confirm first |
+
+For the bottom three, the resolution is the [paired read every irreversible write was required to ship with](/book/tools/idempotency): call `get_credit(reference)` and find out. If the read says it happened, mark `COMPLETED` with the real result. If it says it did not, the retry is safe. If the read itself is unavailable, the correct action is to escalate, not to guess. An unresolvable unknown is exactly the class of thing a [human should decide](/book/human-in-the-loop/escalation-and-audit).
+
+Marking `FAILED` and blindly retrying is how a system with a full idempotency implementation still issues two credits.
+
+## What you are actually promising
+
+Three phrases get used interchangeably and mean different things. Say the right one, because someone will eventually hold you to it.
+
+**At-least-once** is what your infrastructure delivers. Retries, replays, and durable re-execution all guarantee the operation is attempted; none of them guarantees it is attempted once.
+
+**Exactly-once delivery** is not achievable over an unreliable network, and no product claiming it is doing anything other than the next line.
+
+**Effectively-once**, at-least-once delivery plus idempotent processing, is what you build, and it is indistinguishable from exactly-once to anyone observing the data. It is also **bounded by the dedup window**: outside it, the guarantee stops. That caveat is the honest part, and it is what the phrase "exactly-once" hides.
+
+<Aside type="caution" title="Where the illusion leaks, in order of likelihood">
+Every one of these is a real system with a real idempotency implementation.
+
+**The window expired.** The approval pause outlived the key. The most common, by a wide margin.
+
+**The key changed.** An argument was normalized differently on the second attempt, or a serialization was unsorted, so the same operation hashed to a new key. [Canonicalization is load-bearing](/book/tools/idempotency).
+
+**The dedup store and the effect were not atomic.** Redis for the marker, Postgres for the write, a crash in between.
+
+**The dedup store lost data.** An in-memory or non-durable store failed over and started clean. A dedup table is a system of record, and it needs the durability of one.
+
+**The model changed the arguments slightly.** `$420.00` versus `42000` cents. A different key, a different operation, a second credit. This one is not a bug in your table; it is the reason the schema should have had one representation.
+</Aside>
+
+## Atlas, concretely
+
+| Decision | Choice |
+| --- | --- |
+| Key derivation | `hash(run_id + tool + canonical(args))`, in the dispatcher |
+| Store | The application Postgres, same transaction as the effect |
+| `issue_credit` | Natural key on `(order_id, reason)`, no window at all |
+| `send_reply` | Synthetic key, outbox pattern; the send is the outbox worker's job |
+| Window | 30 days, sized from the longest approval SLA plus margin |
+| In-flight lease | 2× the tool's p99 latency, minimum 60 s |
+| Concurrent duplicate | Blocks on `IN_FLIGHT`, then returns the recorded result |
+| Replay result | `already_applied`, never a fresh-looking success |
+| Timeout / 5xx | Never auto-retried. Paired read first; escalate if unavailable |
+| Key expiry | Metered; alerts if a key expires while its run is still alive |
+
+The `issue_credit` row is the one to copy. It has no dedup window because it has no dedup table. A unique constraint on the credits table does the work, permanently, and no approval pause can outlive it. The synthetic machinery in this chapter is the fallback for operations whose domain refused to give you a natural key, and every operation you can move to the first row is one fewer window to size correctly.
+
+---
+
+Next: [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers). Degrading to a smaller model, another provider, or a human, instead of failing.
+
+## Takeaways
+
+- Exactly-once delivery does not exist. Exactly-once *effect* does: at-least-once delivery plus a deduplication store you own.
+- The dedup record must be more durable than whatever would repeat the call, which rules out the agent's own state, since replaying that state is the thing being defended against.
+- Three states, not two. The `IN_FLIGHT` row is what makes a concurrent duplicate wait instead of double-executing.
+- Lease the in-flight row so a dead worker does not deadlock the key, and set the lease longer than the slowest legitimate call. Expiring early causes the exact duplicate you are preventing.
+- Commit the effect and the record in one transaction. A dedup marker in Redis and a write in Postgres reintroduces the crash gap.
+- When the effect is external and cannot join the transaction, use an outbox: commit the intent with the record, let a worker perform the effect with the key.
+- The window is the bug. It must exceed the longest interval over which the same operation could be attempted, which for agents is the human approval pause, not the retry policy.
+- The 24-hour convention is sized for web requests. A run that pauses Friday and resumes Monday is outside it, and every component behaves correctly while issuing a second credit.
+- Prefer natural keys. A uniqueness constraint in the domain has no window to get wrong.
+- Alert when a key expires while its run is still alive.
+- A `FAILED` row is only retryable when the failure was provably before the effect. Timeouts and post-acceptance 5xxs are not. Use the paired read, and escalate if the read is unavailable.
+- Say "effectively-once," and say that it is bounded by the window. That caveat is exactly what "exactly-once" hides.
+- The illusion leaks, in order: the window expired, the key changed, the store was not atomic, the store was not durable, the model reformatted an argument.

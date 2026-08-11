@@ -1,0 +1,202 @@
+---
+title: "Deterministic Rails"
+description: "Let code own the control flow and the model own only the judgment calls."
+---
+
+## Problem
+
+A first draft of an agent puts everything in the model's hands. It decides whether to look up the order, whether to check the policy, whether the amount is within the limit, whether to escalate, and what to say.
+
+Five decisions. Exactly one of them requires judgment.
+
+*Should I look up the order?* The ticket names an order; always look it up. *Is the amount within the limit?* A comparison. *Should this escalate?* [A tier lookup](/book/human-in-the-loop/risk-tiers) from the arguments. *Did the customer ask about policy?* A classification, which is a model call but a closed one.
+
+Only *"does this damage description qualify under the policy"* is a genuine judgment call. The other four were delegated to a nondeterministic, expensive, unauditable component because they happened to be in the same paragraph as the one that needed it.
+
+The cost is not only tokens. Every delegated decision is a decision that can differ between runs, cannot be unit-tested, does not appear in a diff, and can be [influenced by a retrieved document](/book/security/prompt-injection).
+
+## Forces
+
+- **Models are good at judgment and unreliable at bookkeeping.** Comparisons, lookups, and sequencing are things code does perfectly.
+- **Every model decision is a branch you cannot test deterministically.**
+- **Control flow in code is inspectable, diffable, and reviewable**; control flow in a prompt is none of those.
+- **Over-constraining removes the adaptivity you needed the model for.**
+- **The boundary is not obvious in a first draft.** Judgment and bookkeeping arrive interleaved.
+- **Each rail is code someone maintains.**
+
+## Solution
+
+Draw the line explicitly: **code owns sequencing, gating, and arithmetic; the model owns classification, extraction, and judgment.**
+
+<Figure caption="The test is whether you could write down the right answer in advance. If yes, write it in code." frame={false}>
+
+```
+   CODE OWNS                          THE MODEL OWNS
+   ─────────────────────────          ───────────────────────────────
+   what happens next                  which of N labels applies
+   whether a gate fires               whether prose satisfies a rule
+   arithmetic and comparisons         extracting a value from text
+   retries, timeouts, budgets         what to say
+   authorization and scope            which tool, when the sequence
+   idempotency keys                     genuinely cannot be fixed
+   when to stop
+
+   THE TEST
+   ────────
+   "Could I write down the right answer for every input, in advance?"
+        yes ──▶ code.   it is a rule, and a model will get it wrong
+                        some fraction of the time for no benefit
+        no  ──▶ model.  and constrain the OUTPUT with a schema
+```
+
+</Figure>
+
+Four rules:
+
+**Apply the determinism test per decision, not per feature.** The unit is not "should this be an agent" but "should *this branch* be a model call." Most agents have four or five decisions and one or two that need judgment.
+
+**Constrain the model's output even where judgment is required.** A closed label set, a [validated schema](/book/foundations/structured-output), a bounded numeric range. The model decides *which*; code decides *what happens as a result of which*.
+
+**Never let the model own a safety property.** [Authorization, tier computation, idempotency, and budget checks](/book/capstone/building-it) are code that runs regardless of what the model concluded. If it must always hold, it cannot be a prompt instruction. [A prompt that says never exceed the limit is a request](/book/first-agent/the-problem).
+
+**Leave the genuinely open decisions open.** The rails exist so the model spends its judgment where judgment is needed. An agent railed down to a decision tree is a workflow with a token bill.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/rails.ts"
+export async function handleDamageClaim(ticket: Ticket, ctx: RunContext) {
+  // ── CODE: the ticket names an order. There is no decision here. ──
+  const order = await getOrder(ticket.orderId, ctx);
+  if (!order) return promote(ctx.state, 'unroutable');
+
+  // ── CODE: which policy applies is a lookup, not a judgement. ──
+  const policy = await currentPolicy(order.category, ctx);
+
+  // ── MODEL: the one genuine judgement in this workflow. Output is a
+  //    closed schema, so the model decides WHICH and code decides what
+  //    happens as a result.
+  const assessment = await model.structured({
+    schema: z.object({
+      qualifies: z.boolean(),
+      severity: z.enum(['none', 'partial', 'total']),
+      rationale: z.string(),
+    }),
+    system: ASSESS_PROMPT,
+    input: { description: ticket.body, policyText: policy.text },
+  });
+
+  if (!assessment.qualifies) return draftDecline(assessment, ctx);
+
+  // ── CODE: arithmetic. A model computing this is a model that will be
+  //    wrong some fraction of the time, for no benefit whatsoever. ──
+  const cents = Math.min(
+    order.lineTotalCents * SEVERITY_FRACTION[assessment.severity],
+    policy.capCents,
+  );
+
+  // ── CODE: the tier, the scope check, and the gate. Safety properties
+  //    never depend on what the model concluded. ──
+  const tier = riskTier('issue_credit', { amount_cents: cents }, ctx);
+  if (tier > ctx.autonomousTier) return promote(ctx.state, `tier_${tier}`);
+
+  // The tier needed the amount; the tool does not get it. issue_credit
+  // re-derives from the order server-side — see /capstone/building-it/.
+  await dispatch({ tool: 'issue_credit', args: { orderId: order.id } }, ctx);
+
+  // ── MODEL: what to say. Judgement again, and bounded by a guardrail. ──
+  return draftReply({ order, policy, assessment, cents }, ctx);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/rails.py"
+class Assessment(BaseModel):
+    qualifies: bool
+    severity: Literal["none", "partial", "total"]
+    rationale: str
+
+
+async def handle_damage_claim(ticket: Ticket, ctx):
+    # ── CODE: the ticket names an order. There is no decision here. ──
+    order = await get_order(ticket.order_id, ctx)
+    if order is None:
+        return promote(ctx.state, "unroutable")
+
+    # ── CODE: which policy applies is a lookup, not a judgement. ──
+    policy = await current_policy(order.category, ctx)
+
+    # ── MODEL: the one genuine judgement. Closed schema, so the model
+    #    decides WHICH and code decides what follows. ──
+    assessment = await model.structured(
+        schema=Assessment, system=ASSESS_PROMPT,
+        input={"description": ticket.body, "policy_text": policy.text},
+    )
+    if not assessment.qualifies:
+        return await draft_decline(assessment, ctx)
+
+    # ── CODE: arithmetic. A model computing this is wrong some fraction
+    #    of the time, for no benefit whatsoever. ──
+    cents = min(
+        int(order.line_total_cents * SEVERITY_FRACTION[assessment.severity]),
+        policy.cap_cents,
+    )
+
+    # ── CODE: tier, scope, gate. Safety properties never depend on what
+    #    the model concluded. ──
+    tier = risk_tier("issue_credit", {"amount_cents": cents}, ctx)
+    if tier > ctx.autonomous_tier:
+        return promote(ctx.state, f"tier_{tier}")
+
+    # The tier needed the amount; the tool does not get it. issue_credit
+    # re-derives from the order server-side — see /capstone/building-it/.
+    await dispatch("issue_credit", {"order_id": order.id}, ctx)
+
+    # ── MODEL: what to say. Judgement again, bounded by a guardrail. ──
+    return await draft_reply(order, policy, assessment, cents, ctx)
+```
+
+</Tab>
+</Tabs>
+
+Two model calls in a workflow that a first draft would have made entirely agentic. Everything else is a function you can unit-test, read in a diff, and reason about without running it, and the two model calls are exactly the two places the answer genuinely depends on reading prose.
+
+## Trade-offs
+
+**Rails are code, and code is maintenance.** A policy change that a prompt would have absorbed now needs a deploy. That is usually the right trade, the change is visible, reviewable, and versioned, and it is a real cost that grows with the number of paths.
+
+**Over-railing produces a bad workflow.** If every branch is coded, you have written a state machine and are paying a model to fill in adjectives. [The determinism test](/book/workflows/the-determinism-test) runs both directions: a decision you *cannot* write down in advance belongs to the model, and coding it produces a system that fails on every case you did not anticipate.
+
+**The boundary moves.** A decision that needed judgment at ten cases becomes a lookup table at a thousand, once you know the distribution. Revisit it, the [rung and route distributions](/book/patterns/control/escalation-ladder) are where the evidence shows up.
+
+**Each rail needs its own tests.** That is the benefit stated as a cost: the code is testable, so someone has to test it. A rail with no test is a branch you have moved from unauditable to untested.
+
+## When not to use it
+
+**When the sequence genuinely cannot be fixed.** Open-ended investigation where the next question depends on the last answer. That is [a ReAct loop](/book/patterns/control/react-loop), and railing it removes the adaptivity that was the point.
+
+**When the case distribution is unknown.** Early on, an agent that handles the long tail badly still teaches you what the tail contains. Rail it *after* you have the distribution, not before.
+
+**When the rules change faster than you can deploy.** If policy shifts weekly and deploys are monthly, a prompt loaded from a [versioned config bundle](/book/production/versioning) is more honest than a rail that will be stale.
+
+**For anything where the answer is genuinely contested.** Encoding a judgment as a rule when reasonable people disagree does not remove the disagreement; it hides it in a constant.
+
+<Aside type="note" title="This is the pattern the whole part reduces to">
+[Router](/book/patterns/control/router) is deterministic rails on the path. [Plan-then-execute](/book/patterns/control/plan-then-execute) is deterministic rails on the sequence. [Bounded autonomy](/book/patterns/control/bounded-autonomy) is deterministic rails on the stopping condition. [The dispatcher's eight checks](/book/capstone/building-it) are deterministic rails on authority.
+
+Same move each time: identify a decision the model was making by default, notice it has a knowable right answer, and move it into code, leaving the model with the decisions that genuinely need reading comprehension.
+
+Which is the claim the book has been making in a different register in every part: **the model is the part you do not control, so everything around it must be the part you do.** Deterministic rails is that sentence as an implementation instruction.
+</Aside>
+
+## Related
+
+- [The Determinism Test](/book/workflows/the-determinism-test): the chapter, and the test applied at the system level
+- [Router](/book/patterns/control/router): rails on which path a request takes
+- [Plan Then Execute](/book/patterns/control/plan-then-execute): rails on the order of operations
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): rails on when to stop
+- [Building It](/book/capstone/building-it): the dispatcher, where the safety rails all land

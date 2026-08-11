@@ -1,0 +1,184 @@
+---
+title: "Tool Permission Boundary"
+description: "Scope each tool to the smallest credential that still works."
+---
+
+## Problem
+
+The agent has nine tools and one credential. The credential is the one the support-platform integration was created with, and it holds forty-seven permissions because someone in 2023 wanted the integration to work on the first try.
+
+Six of the nine tools need read access. Two need to write one table. One moves money. All nine get all forty-seven.
+
+That was survivable when the caller was deterministic code that could only ever hit the endpoints someone wrote calls for. It is not survivable now, because the caller decides at runtime from text a stranger wrote, so every unused permission has gone from latent to **reachable**.
+
+And the fix teams reach for first does not close it. A tool-level allowlist, such as *this agent may call `issue_credit`*, says nothing about *which account* or *how much*. An injected instruction does not need a new tool. It needs your existing tool pointed somewhere else.
+
+## Forces
+
+- **Credentials are provisioned per integration**, not per operation, so they are always broader than any single tool.
+- **The interesting permissions are argument-scoped.** "May issue credits" is a role; "may issue credits up to X on accounts named by this ticket" is a sentence about attributes.
+- **The model supplies the arguments**, and under injection the arguments are the attacker's leverage.
+- **Enforcement must sit outside the model.** A model that has read the payload is the component whose judgment is in question.
+- **Too-tight controls get disabled.** A refusal that presents as an error is a control operators route around.
+- **The catalogue can change at runtime** via dynamic tool loading, invalidating a point-in-time audit.
+
+## Solution
+
+Give each tool its **own credential and its own scope**, and enforce argument-level bounds in the dispatcher from state the model never touched.
+
+<Figure caption="Four axes below the tool level. Only the second and third bound what an injected instruction can actually do." frame={false}>
+
+```
+   TOOL         which verbs                get_order · issue_credit
+     │          ── where most stop
+     ▼
+   CREDENTIAL   as what, on what           read-only role vs. one
+     │          ── per tool, not per        stored procedure
+     ▼           integration
+   ARGUMENT     on which entity, how much  account ∈ run scope
+     │          ── where injection's        amount ≤ tier-0 cap
+     ▼             leverage lives
+   AGGREGATE    how much in total          run spend ≤ ticket value
+                ── stops the slow attack    20 × $900 also denied
+```
+
+</Figure>
+
+Four rules:
+
+**One credential per tool, scoped to that tool's operation.** `get_order` gets a read-only role. `issue_credit` gets a role whose only write is one stored procedure. A shared credential means the blast radius of any tool is the union of all of them.
+
+**Bind every write to entities already in scope for the run.** The run's `accountIds` and `orderIds` come from the ticket record: your data, not the model's arguments. `issue_credit` restricted to *this ticket's account* is a tool an attacker can reach and cannot meaningfully use.
+
+**Cap in aggregate as well as per call.** Twenty credits of nine hundred dollars each are all under Atlas's thousand-dollar per-call cap. The run-level counter is what stops the patient version of the attack.
+
+**Deny by escalating, never by erroring.** A refusal carrying *"account 9917 is not in scope for this run"* is a well-formed [approval request](/book/human-in-the-loop/approval-gates). A stack trace is a control someone turns off during an incident.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/security/scope.ts"
+// Established when the run starts, from the ticket record.
+// Not from anything the model said.
+export interface RunScope {
+  runId: string;
+  accountIds: Set<string>;
+  orderIds: Set<string>;
+  creditCapCents: number;     // per call
+  runCapCents: number;        // aggregate, from the ticket's value
+  spentCents: number;
+}
+
+export function authorize(
+  call: { tool: string; args: Record<string, unknown> },
+  scope: RunScope,
+): { ok: true } | { ok: false; reason: string } {
+  // Entity binding — the leverage an injected instruction would need.
+  const acct = call.args.account_id as string | undefined;
+  if (acct && !scope.accountIds.has(acct)) {
+    return { ok: false, reason: `account ${acct} is not in scope for this run` };
+  }
+
+  if (call.tool === 'issue_credit') {
+    const cents = Number(call.args.amount_cents ?? 0);
+    if (cents > scope.creditCapCents) {
+      return { ok: false, reason: `${cents} exceeds the per-call cap` };
+    }
+    // Aggregate: twenty small credits are also denied.
+    if (scope.spentCents + cents > scope.runCapCents) {
+      return { ok: false, reason: 'run credit budget exhausted' };
+    }
+  }
+  return { ok: true };
+}
+
+// Per-tool credentials, minted with only that tool's scope.
+export const CREDENTIALS: Record<string, string[]> = {
+  get_order:      ['orders:read'],
+  query_warehouse:   ['warehouse:read'],
+  issue_credit:   ['credits:write'],           // one stored procedure
+  send_reply:     ['mail:send'],               // no recipient argument exists
+  escalate:       ['tickets:write:status'],
+};
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/security/scope.py"
+@dataclass
+class RunScope:
+    """Established at run start, from the ticket record — never from the model."""
+    run_id: str
+    account_ids: set[str] = field(default_factory=set)
+    order_ids: set[str] = field(default_factory=set)
+    credit_cap_cents: int = 0     # per call
+    run_cap_cents: int = 0        # aggregate, from the ticket's value
+    spent_cents: int = 0
+
+
+def authorize(tool: str, args: dict, scope: RunScope) -> tuple[bool, str | None]:
+    # Entity binding — the leverage an injected instruction would need.
+    account_id = args.get("account_id")
+    if account_id and account_id not in scope.account_ids:
+        return False, f"account {account_id} is not in scope for this run"
+
+    if tool == "issue_credit":
+        cents = int(args.get("amount_cents", 0))
+        if cents > scope.credit_cap_cents:
+            return False, f"{cents} exceeds the per-call cap"
+        # Aggregate: twenty small credits are also denied.
+        if scope.spent_cents + cents > scope.run_cap_cents:
+            return False, "run credit budget exhausted"
+
+    return True, None
+
+
+# Per-tool credentials, minted with only that tool's scope.
+CREDENTIALS = {
+    "get_order": ("orders:read",),
+    "query_warehouse": ("warehouse:read",),
+    "issue_credit": ("credits:write",),         # one stored procedure
+    "send_reply": ("mail:send",),               # no recipient argument exists
+    "escalate": ("tickets:write:status",),
+}
+```
+
+</Tab>
+</Tabs>
+
+The `send_reply` comment names the strongest form of this pattern, and it is the one worth reaching for whenever it is available: **removing a parameter beats validating one.** There is no recipient argument, so no recipient policy has to be written, tested, or kept correct as the code changes, and no injected instruction can express the attack.
+
+## Trade-offs
+
+**More credentials to provision, rotate, and audit.** Nine scoped roles instead of one broad one is real operational work, and it is the reason this gets skipped. Do the class ④–⑤ tools first; the reads can share a read-only role for a long time.
+
+**Argument bounds produce false denials.** A legitimate $1,200 refund on a $1,000 cap routes a customer to a queue. Size the caps from data: [query which amounts were historically approved unchanged](/book/capstone/operating-it) rather than from a guess, and expect to move them.
+
+**The scope has to be derived, and deriving it is domain work.** Which accounts a ticket legitimately concerns is a question about your business, not a library call. It is also where the pattern gets its value, so it is not skippable.
+
+**A dynamic catalogue invalidates the audit.** If [MCP servers or runtime tool loading](/book/security/least-privilege) can add tools, "we reviewed the permissions" is a claim about a moment. Pin the servers, hash the definitions, and let the dispatcher's allowlist be authoritative over whatever the catalogue advertises.
+
+## When not to use it
+
+**When every tool is a pure read over the same data.** A read-only assistant against one corpus does not need nine credentials. It still needs [identity propagation](/book/patterns/security/identity-propagation), which is the control that actually matters there.
+
+**When the backend already enforces it.** If row-level security and a delegated token make the over-broad call return nothing, the dispatcher check is defence in depth rather than the boundary. Keep it, since it produces a better message, but do not treat the backend's enforcement as redundant.
+
+**Before you know the real usage.** Mining the minimum from ninety days of traces beats guessing, and enforcing a guessed policy breaks the rare legitimate path at the worst moment. Run it in [shadow mode](/book/evals/online-evals) first: log what *would* have been denied for a week.
+
+<Aside type="note" title="This is where the security part converges">
+Almost every control in [Part XVII](/book/security/threat-model) lands on the same function. [Taint](/book/security/prompt-injection) sets the ceiling, [delegation](/book/patterns/security/identity-propagation) says as whom, argument scoping says on what and how much, [risk tiers](/book/human-in-the-loop/risk-tiers) say whether a person signs, and [idempotency](/book/tools/idempotency) says whether repeating is safe.
+
+That convergence is the argument for [one dispatcher](/book/production/reference-architecture), and it is the cheapest structural decision in this book. Four dispatch sites means implementing five controls four times, and you will implement them in three, which is how a system ends up with a security model that is correct in the paths people remembered.
+</Aside>
+
+## Related
+
+- [Excessive Agency and Least Privilege](/book/security/least-privilege): the chapter, with the six scoping axes and trace-based permission mining
+- [Identity Propagation](/book/patterns/security/identity-propagation): the credential says *as whom*; this says *to do what*
+- [Dual Control](/book/patterns/security/dual-control): what happens above the cap this pattern enforces
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): computing blast radius from the arguments, at call time
+- [Sandboxing](/book/security/sandboxing): the broker, which routes generated code through this same check

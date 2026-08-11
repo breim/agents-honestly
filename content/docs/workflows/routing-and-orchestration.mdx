@@ -1,0 +1,144 @@
+---
+title: "Routing and Orchestration"
+description: "Classify first, then dispatch. Orchestrator/worker without handing control flow to a model."
+---
+
+Routing has quietly been in this book since [Atlas v0](/book/first-agent/one-call): a classification, then a `switch`. It reappeared as the [context selection](/book/context/dynamic-selection) mechanism, and it will reappear again as a cost mechanism in a moment.
+
+That persistence is the point. **The model decides *which*; you decide *what happens*.** One bounded call producing a typed value, and branches you wrote. Enumerable, testable, reviewable in a diff.
+
+This chapter is about doing that well, and about the shape one level up: an orchestrator that dispatches work to specialized workers, which is where the line between workflow and agent gets genuinely blurry.
+
+## The branch that matters is the one you didn't plan
+
+Most teams design a router by listing the categories they can think of. Four tidy branches, each with a handler. Then production arrives with a fifth thing.
+
+> **The `unknown` route is the most important branch in the router**, and it is the one that gets least design attention.
+
+Two failure modes when it's missing or lazy. If your router has no unknown category, the classifier is *forced* to pick one of the four. And it will, confidently, because that's what the schema demands. (This is exactly the [honest-null problem](/book/foundations/structured-output) from Part I: a schema with no way to say "I don't know" guarantees you will never be told.) If the unknown route exists but silently drops the ticket, you have built a quiet hole in your queue.
+
+Design it deliberately. `unknown` should route to a human, with the ticket, the classification attempt, and the reason. And you should **count** it. A rising unknown rate is the single most informative metric a router produces: it means the world changed and your categories didn't.
+
+## Route on confidence, not just class
+
+Ask the classifier for a category *and* a confidence, and branch on both:
+
+```
+   high confidence + known category  ──▶  the handler
+   low confidence                    ──▶  human, or the safe default
+   known category, but risky action  ──▶  human regardless of confidence
+```
+
+There is a caveat about when that confidence means anything, and it decides where several patterns in this chapter are safe:
+
+<Aside type="caution" title="Confidence is usable for classification, not for generation">
+For **structured tasks**, say deciding whether a ticket is a policy question or an order status question, a model's self-reported confidence is a reasonably reliable signal. The task has a right answer from a known set, and the model has a usable sense of whether it knows.
+
+For **open-ended generation**, it isn't. Models are confidently wrong at a steady rate, and asking "how sure are you that this reply is correct?" produces a number with little relationship to correctness.
+
+So gate on confidence where the output is a choice. Where the output is prose, a self-report won't do. You need an actual [quality check](/book/workflows/evaluator-optimizer): a judge, a verifier, a grounding assertion.
+</Aside>
+
+## Routing is also the cost lever
+
+The same mechanism, pointed at model selection rather than at handlers.
+
+Most systems send every request to their best model. But the work isn't uniform: classifying a ticket, extracting an order ID, and formatting a reply are not the same difficulty as reasoning about a contract dispute. Per-token costs between tiers differ by roughly an order of magnitude, and in a typical multi-step turn a large majority of the sub-steps are easy.
+
+Published results put the savings at roughly **35–45% at matched quality**, and **past 85% if you will accept around 95%** of the strong model's performance. Read those as two different offers rather than one range, because they are measured against different bars. The headline number in every routing write-up is the second one, and the five points it spends are not free on a route where a wrong answer reaches a customer. Either end is still a bigger lever than most prompt optimization, and it costs one classification.
+
+Two ways to spend it:
+
+**Route up front.** Classify the difficulty, dispatch to the appropriate tier. Cheapest, and it commits before seeing any output.
+
+**Cascade.** Try the small model; if the result fails a check, escalate to the larger one. More accurate, and it costs the small call on every escalation.
+
+The cascade's viability rests entirely on that check, which brings back the caveat above. Cascading works cleanly when the output is **verifiable**: a classification you can validate against a schema, a SQL query you can run, an extraction you can check against the source. It works badly on open-ended prose, where "did the small model do well enough" needs a judge, and the judge may cost more than the escalation it was meant to avoid.
+
+<Aside type="tip" title="Layer the cheap stuff first">
+The routing structure that keeps appearing: **rules → classifier → model.** Deterministic patterns catch the obvious cases (a ticket matching a known template, an email from a known automated sender), a cheap classifier handles the ambiguous middle, and a model handles the rest.
+
+That is the same three-band shape as the [entity-resolution review queue](/book/graphs/entity-resolution) and the same cheap-wide-then-expensive-narrow structure as [reranking](/book/retrieval/hybrid-and-reranking). At this point in the book it should be a reflex: never spend the expensive operation on cases a cheap one settles.
+</Aside>
+
+## Orchestrator and workers
+
+One level up: a central step decomposes a task into subtasks and dispatches each to a specialized handler.
+
+<Figure caption="The same picture describes a workflow and an agent. The difference is not in the diagram." frame={false}>
+
+```
+              ┌──────────────┐
+              │ ORCHESTRATOR │
+              └──────┬───────┘
+          ┌──────────┼──────────┐
+          ▼          ▼          ▼
+      worker A   worker B   worker C
+          │          │          │
+          └──────────┼──────────┘
+                     ▼
+                   join
+```
+
+</Figure>
+
+The question that decides which one you've built:
+
+| | Workflow version | Agent version |
+| --- | --- | --- |
+| Worker set | Fixed, known at write time | Model picks from a catalogue |
+| Decomposition | Structured output from a **bounded schema** | Free-form list the model invents |
+| Dispatch | Your code | The model, via tool calls |
+| Iteration | One pass, then join | Loops until it decides to stop |
+| Path space | Enumerable | Not |
+
+The workflow version is genuinely useful and under-built. The orchestrator emits something like `{ subtasks: [{worker: "policy_lookup", args: {...}}, {worker: "order_lookup", args: {...}}] }`, a typed value drawn from an enum of workers you defined. Your code validates it, dispatches, and joins. The model contributed *judgment about what's needed*; it did not contribute control flow.
+
+The agent version is fine too, when [the determinism test](/book/workflows/the-determinism-test) says so. The failure is building the second while believing you built the first, which happens because the diagram is identical and the terminology is shared.
+
+## Workers get their own context
+
+The property that makes orchestration worth the complexity, beyond parallelism.
+
+Each worker runs with a **fresh, narrow context**: its task, its tools, and nothing else. It does not see the orchestrator's reasoning, the other workers' work, or the whole ticket history. Then it returns a **structured value**, not a transcript.
+
+Two things follow. The [context budget](/book/context/context-as-budget) stays small in every window, including the orchestrator's, which only ever sees conclusions. And confusion is contained: whatever mess a worker got into while searching stays in the worker's discarded window rather than [poisoning](/book/context/context-poisoning) the main thread. That's [sub-agent isolation](/book/patterns/context/subagent-isolation), and it is a correctness mechanism at least as much as a scaling one.
+
+The corollary is a rule: **workers return values, not narratives.** A worker that returns three paragraphs describing what it did has handed the orchestrator a summarization problem and re-imported the noise you isolated it to avoid.
+
+## Four anti-patterns
+
+**The router that grew to fourteen branches.** Three added last month, each a small PR. That is the [demotion signal](/book/workflows/the-determinism-test): your input space isn't enumerable and you're hand-maintaining a classification. Collapse the branches into a broader category and let a model handle the variety inside it.
+
+**Routing on the wrong feature.** Routing by ticket *source* when behaviour actually depends on ticket *intent* produces branches that all do nearly the same thing, plus a maintenance burden. If two branches share most of their handler, the split is in the wrong place.
+
+**The orchestrator that's really a chain.** If the "subtasks" always run in the same order and each needs the previous one's output, you wrote a chain with extra dispatch machinery. Orchestration earns its cost when the subtask *set* varies.
+
+**The router with no measurement.** A classifier is a component with a confusion matrix. Without one you cannot tell a routing failure from a handler failure. And routing failures present as "the agent gave a weird answer," which sends the investigation to entirely the wrong place.
+
+## Atlas, concretely
+
+**The router:** five categories including `unknown`, with confidence. Known category and high confidence dispatches to the handler profile. Low confidence, or `unknown`, goes to a human with the classification attempt attached. Unknown rate is on the dashboard, and a week-over-week rise opens a ticket.
+
+**The cascade:** classification, entity extraction, and reply formatting run on a small model; the reasoning steps and the final policy judgment run on the large one. Verified cheaply: the classification against the enum, the extraction against the ticket text. A bad small-model result escalates rather than propagating.
+
+**The orchestrator:** for `action_required` tickets, a bounded decomposition into at most four workers from a fixed set of six, dispatched by code, each returning a typed value, joined structurally. Any worker failure blocks the action and routes to a human, because the action moves money.
+
+One classification, one bounded decomposition, and everything else is code. The intelligence is real and it is on a short leash.
+
+---
+
+Next: [Evaluator–Optimizer Loops](/book/workflows/evaluator-optimizer). Generate, critique, revise: the loop that improves output without becoming an open-ended agent.
+
+## Takeaways
+
+- Routing is one bounded call plus a `switch` you wrote. The model decides which; your code decides what happens.
+- The `unknown` route is the most important branch. Without it, the schema forces a confident wrong choice; with it silently dropping work, you have a hole in your queue. Count it. A rising unknown rate means the world changed.
+- Branch on confidence as well as class, but know that confidence is reliable for classification and not for open-ended generation.
+- Routing is a cost lever worth 35–45% at matched quality, or past 85% if you accept about 95% of the strong model's performance. Those are two offers against different bars, not one range. Most sub-steps in a turn are easy, which is why either end is available.
+- Cascades work when the output is cheaply verifiable and badly when it's prose, where the judge may cost more than the escalation.
+- Layer rules, then a cheap classifier, then the model. Never spend the expensive operation on cases a cheap one settles.
+- Orchestrator/worker is a workflow when the worker set and decomposition schema are fixed, and an agent when the model picks freely. The diagrams are identical; the path space isn't.
+- Workers get fresh narrow contexts and return typed values, not narratives. That contains confusion as well as tokens.
+- A fourteen-branch router is your input space telling you it isn't enumerable.
+- A router is a classifier: measure it with a confusion matrix, or you will misdiagnose routing failures as agent failures.

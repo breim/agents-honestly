@@ -1,0 +1,243 @@
+---
+title: "Replay-Driven Debugging"
+description: "Event histories as ground truth: re-running a real failure against new code."
+---
+
+Ticket #9063, last Tuesday. Atlas escalated a straightforward refund that it should have handled, and the customer waited two days for a person to do something the agent was built to do.
+
+You have the trace. It has all eight answers [the trace chapter](/book/observability/what-a-trace-must-answer) demanded: the prompt, the model, the tools, the tokens, the money, the timing, and where it went sideways. That was step nine, where the agent read a policy chunk and concluded it lacked authority.
+
+You form a hypothesis and write a fix. Now the actual question:
+
+> **How do you find out whether the fix would have handled ticket #9063?**
+
+Running it again gives you a fresh conversation with a nondeterministic component, which either reproduces the bug or doesn't, and neither outcome tells you much. This chapter is about the alternative, and it starts with a distinction that most teams never draw.
+
+## Replay and re-run are different tools
+
+They get used interchangeably and they answer opposite questions.
+
+<Figure caption="Replay holds the model constant to test your code. Re-run holds your code constant to test the model. Confusing them produces confident wrong conclusions." frame={false}>
+
+```
+   REPLAY                              RE-RUN
+   recorded model responses            fresh model calls
+   + your new code                     + the same inputs
+
+   deterministic                       nondeterministic
+   fast, free                          slow, costs money
+   ─────────────────────────────       ─────────────────────────
+   answers:                            answers:
+   "does my CODE handle this           "does the MODEL do the
+    sequence correctly now?"            right thing with this
+                                        prompt now?"
+
+   catches: parsing, routing,          catches: prompt regressions,
+   state, guards, dispatch,            model upgrades, retrieval
+   idempotency, error handling         quality, judgment
+```
+
+</Figure>
+
+Ticket #9063 needs both, in order. **Replay** tells you whether the retrieval filter you fixed now returns the policy chunk it should have. That is a deterministic question about your code, answered in milliseconds with the recorded model responses standing in for the model. Then **re-run** tells you whether the model, given the corrected context, actually reaches the right conclusion. That is a probabilistic question that costs money and needs several runs.
+
+The mistake that wastes weeks is using re-run for the first question. You change a parser, re-run, get a different answer, and cannot tell whether your fix worked or the model simply sampled differently.
+
+## What has to be recorded
+
+Replay only works if every nondeterministic input to the run was captured. [Durable execution](/book/durable-execution/determinism-and-retries) already forces this discipline for its own reasons: the event history records every activity's arguments and results so that re-execution converges. Replay-driven debugging is that machinery pointed at a different problem.
+
+The list of boundaries to capture:
+
+| Boundary | Record | Why it is nondeterministic |
+| --- | --- | --- |
+| Model call | Request **and** full response, including tool calls | Sampling |
+| Tool call | Arguments and result | The world changed |
+| Retrieval | Query **and the chunk IDs plus text returned** | The index changed |
+| Clock | The timestamp used | Obviously |
+| Randomness, IDs | The values generated | Obviously |
+| Human decision | What was shown, what was chosen, when | People |
+
+The retrieval row is the one most often half-done. Recording "we retrieved 5 chunks" makes the run unreplayable, because the corpus has since been re-indexed and the same query now returns different text. Record the IDs *and* the content, and note that this is the same instrumentation [incident scoping needed](/book/security/untrusted-retrieval) to answer "which runs saw the poisoned document." Two requirements, one field.
+
+<Aside type="note" title="If you are not on durable execution">
+You do not need Temporal for this. A `run_events` table with `(run_id, seq, kind, request, response)` appended by the [dispatcher and the model gateway](/book/production/reference-architecture) gives you the same capability, and it is a day of work.
+
+What you cannot do is reconstruct it later. This is the [tracing argument](/book/production/reference-architecture) again: last Tuesday's run either recorded its boundaries or it is permanently unreplayable, and no deploy today changes that.
+</Aside>
+
+## The replay harness
+
+The mechanism is a client that reads from the recording instead of the network, and it is smaller than people expect.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/replay/harness.ts"
+export class RecordedModelClient implements ModelClient {
+  private i = 0;
+  constructor(
+    private readonly events: RecordedEvent[],
+    recorded: ServingConfig,  // model + sampling, off the recorded run's bundle
+    current: ServingConfig,   // the same slice of the bundle under test
+  ) {
+    // Check ONE, per run, exact. This is the part of the request that
+    // promptDelta below cannot see: a model upgrade or a temperature change
+    // alters no prompt text and makes every recorded response stale at once.
+    // Not the whole bundle — shadow replay varies code and policy on purpose.
+    if (!sameServing(recorded, current)) throw new ReplayStale(recorded, current);
+  }
+
+  async call(req: ModelRequest): Promise<ModelResponse> {
+    const ev = this.events.filter(e => e.kind === 'model')[this.i++];
+    if (!ev) throw new ReplayExhausted(
+      'code requested more model calls than the recording contains',
+    );
+
+    // Check TWO, per step, tolerant: under one configuration, did the code
+    // change build a materially different prompt? If so the recorded
+    // response answers a question nobody asked — report, do not return it.
+    const drift = promptDelta(ev.request, req);
+    if (drift > 0.15) throw new ReplayDiverged(this.i, drift);
+
+    return ev.response;
+  }
+}
+
+// Same shape for tools and retrieval. Then:
+//
+//   const outcome = await runAgent(recordedInputs, {
+//     model: new RecordedModelClient(events, run.serving, bundle.serving),
+//     tools: new RecordedToolClient(events),
+//   });
+//   expect(outcome.status).toBe('resolved');   // it escalated, before the fix
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/replay/harness.py"
+class RecordedModelClient:
+    def __init__(self, events, recorded: ServingConfig, current: ServingConfig):
+        # Check ONE, per run, exact. This is the part of the request that
+        # prompt_delta below cannot see: a model upgrade or a temperature
+        # change alters no prompt text and makes every recorded response
+        # stale. Not the whole bundle — shadow replay varies code on purpose.
+        if recorded != current:
+            raise ReplayStale(recorded, current)
+        self._events = [e for e in events if e.kind == "model"]
+        self._i = 0
+
+    async def call(self, req):
+        if self._i >= len(self._events):
+            raise ReplayExhausted(
+                "code requested more model calls than the recording contains"
+            )
+        ev = self._events[self._i]
+        self._i += 1
+
+        # Check TWO, per step, tolerant: under one configuration, did the
+        # code change build a materially different prompt? If so the
+        # recorded response answers a question nobody asked.
+        drift = prompt_delta(ev.request, req)
+        if drift > 0.15:
+            raise ReplayDiverged(self._i, drift)
+
+        return ev.response
+
+
+# Same shape for tools and retrieval, then run the agent against them
+# and assert the outcome you wanted: resolved, not escalated.
+```
+
+</Tab>
+</Tabs>
+
+**Divergence detection is the part that makes this trustworthy**, and it is what separates a replay harness from a mock. If your fix changes the prompt, whether by adding a tool to the catalogue, swapping the system prompt, or reordering the context, the recorded response was generated for a different question, and replaying it produces a result that looks valid and means nothing. Better to fail loudly and move that case to re-run.
+
+**Two checks, because neither can see the other's failure.** `promptDelta` compares prompts, so it catches the code change that rebuilt the question. It is blind to a model upgrade, or to a change in whatever knob shapes generation on that model, which alter no prompt text at all and make every recorded response stale at once. On current frontier models that knob is [`effort` rather than temperature](/book/foundations/nondeterminism), which changes what you compare and not whether you have to. A harness that only compares prompts will replay last month's recording against a new model and report a clean pass. That is why the harness checks the serving slice separately, once, and exactly: [the `config_hash` on the run row](/book/production/versioning) is what turns that check into a lookup rather than an archaeology exercise.
+
+Which gives the honest boundary of the technique: **replay is valid as long as the prompt, the model, and its sampling parameters are unchanged.** Fix a parser, a router, a guard, an idempotency key, a post-retrieval filter, an error handler, then replay. Change the question or who answers it, then re-run.
+
+## From an incident to a regression test
+
+The workflow that makes this compound, rather than being a one-off debugging trick:
+
+**1 · Capture.** You export the failing run's recording as a fixture, with the reported symptom and the expected outcome.
+
+**2 · Minimize.** Trim to the shortest prefix that still reproduces. A forty-step recording is a bad test; the six steps around the bad decision are a good one.
+
+**3 · Reproduce.** Replay against current code. It fails, and that is the proof you understand the bug. Skipping this step is how people fix the wrong thing.
+
+**4 · Fix, and replay again.** Milliseconds per iteration, deterministic, free.
+
+**5 · Promote.** The fixture joins the [regression corpus](/book/evals/datasets), and every future commit replays it.
+
+Step five is where this stops being debugging and becomes the bridge between Part XV and Part XIV. **Your production failures are the best eval dataset you will ever have.** They are real, they are distributed like your actual traffic, and each one is a bug that genuinely happened. A team that promotes every incident into the corpus accumulates a suite that no synthetic dataset matches, at the rate their system actually breaks.
+
+The [dataset chapter's](/book/evals/datasets) caveats apply on the way in: these fixtures contain customer data, so scrub and pseudonymize at extraction. The [eval-set row](/book/security/pii-and-compliance) in the compliance table is exactly this pipeline.
+
+## Shadow replay: testing a change against last week
+
+The same machinery, pointed forward instead of backward.
+
+Take a thousand recorded production runs, replay each against both the current and the candidate configuration, and diff the outcomes. Not the text, but the **decisions**: which tools were called, whether the run resolved or escalated, the cost, the turn count.
+
+| Change | Replay or re-run | What the diff shows |
+| --- | --- | --- |
+| Refactor the dispatcher | Replay | Any behavior change is a bug, so expect zero diffs |
+| Add a guard or a policy check | Replay | Exactly which historical runs it would have blocked |
+| Tighten [argument scoping](/book/security/least-privilege) | Replay | The false-positive rate on real traffic, before enforcing |
+| Change the prompt | **Re-run** | Replay is invalid; the recorded responses are stale |
+| Upgrade the model | **Re-run** | Same |
+
+Row three is the single most useful application in this chapter. [The least-privilege chapter](/book/security/least-privilege) asked for shadow mode before enforcing a mined policy; replay is how you get that answer in an afternoon instead of a week, against traffic that already happened, with no risk to anyone.
+
+And row one is the quiet one: for a pure refactor, the correct expected diff is **zero**, which turns "I don't think I changed behavior" into an assertion.
+
+## What replay cannot do
+
+Three limits, stated plainly, because a technique this useful invites over-trust.
+
+**It does not test the model.** A replayed run proves your code handles that sequence of model outputs. It says nothing about whether the model would produce that sequence today, from a different model version, or on the second sample.
+
+**It goes stale.** Recorded tool results describe a world that has moved. A fixture asserting an escalation because an account was delinquent is testing that account's state in March. Fixtures need the same review as any test, and the same willingness to delete.
+
+**It cannot show you the counterfactual.** Replay tells you what your code does with the responses the model gave. It cannot tell you what the model would have done with a better prompt. That is a re-run, and it is why the two tools sit next to each other rather than one replacing the other.
+
+## Atlas, concretely
+
+| Practice | Implementation |
+| --- | --- |
+| Recording | Temporal history plus a `run_events` table; model, tool, and retrieval boundaries |
+| Retrieval capture | Chunk IDs **and** text, shared with incident scoping |
+| Harness | Recorded clients for model, tools, retrieval; divergence throws |
+| Divergence threshold | 15% prompt delta routes the case to re-run instead |
+| Incident workflow | Capture → minimize → reproduce → fix → promote |
+| Regression corpus | Every promoted incident, scrubbed at extraction, replayed in CI |
+| Shadow replay | 1,000 recent runs against every dispatcher or policy change |
+| Refactor gate | Zero-diff assertion on the shadow set |
+| Retention | Recordings 30 days; promoted fixtures indefinitely, pseudonymized |
+
+The zero-diff gate on refactors is the row that pays for itself fastest. Most changes to a dispatcher are meant to be behavior-preserving, and until you can assert that against a thousand real runs, "behavior-preserving" is a claim in a pull request description.
+
+---
+
+Next: [Token and Cost Accounting](/book/observability/cost-accounting), per-request, per-user, per-tenant, per-feature, and the dashboard that stops a bad deploy becoming a bad invoice.
+
+## Takeaways
+
+- Replay and re-run answer opposite questions. Replay holds the model constant to test your code; re-run holds your code constant to test the model.
+- Using re-run to test a code fix wastes weeks. You cannot tell whether your change worked or the model sampled differently.
+- Replay requires every nondeterministic boundary recorded: model requests and responses, tool arguments and results, retrieval queries with chunk IDs *and* text, clocks, randomness, and human decisions.
+- Recording retrieval content is one field that serves two requirements: replay and incident scoping.
+- You do not need durable execution for this; a `run_events` table is a day of work. But you cannot reconstruct last Tuesday's run later.
+- Divergence detection is what separates a replay harness from a mock. If the new code builds a materially different prompt, fail loudly rather than return a stale answer.
+- Replay is valid as long as the prompt, the model, and its sampling parameters are unchanged. Parsers, routers, guards, keys, post-retrieval filters, error handling: replay. Prompt, model, or sampling changes: re-run.
+- Two divergence checks, because neither sees the other's failure: prompts compared per step with a tolerance, and the serving slice compared once and exactly. A model upgrade alters no prompt text, so a harness that only compares prompts passes a recording it should have rejected.
+- The workflow that compounds: capture, minimize, reproduce, fix, promote. Reproducing before fixing is the step people skip and the one that proves you understand the bug.
+- Production failures are the best eval dataset you will ever have: real, correctly distributed, and each one a bug that actually happened. Scrub at extraction.
+- Shadow replay tests a candidate change against a thousand runs that already happened, diffing decisions rather than text.
+- It is the fastest way to get shadow-mode numbers for a new policy: the real false-positive rate, in an afternoon, with no risk.
+- For a pure refactor the expected diff is zero, which converts "I don't think I changed behavior" into an assertion.
+- Replay does not test the model, goes stale as the world moves, and cannot show you the counterfactual.

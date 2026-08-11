@@ -1,0 +1,181 @@
+---
+title: "The Atlas Lab Environment"
+description: "Run the companion system, seed its data, and prove that both language tracks implement the same contracts."
+---
+
+Reading about an ambiguous timeout is useful. Watching an effect occur, losing the response, retrying, and proving that only one ledger entry exists changes how you design the next tool.
+
+The companion lives in `labs/atlas/`. It has two modes:
+
+1. a no-key deterministic kernel that runs anywhere and proves the invariants;
+2. optional Postgres and Temporal services for replacing the in-memory boundaries with the real ones.
+
+The no-key mode comes first because authorization, idempotency, taint, event deduplication, and hard bounds must not depend on a model provider being available.
+
+## What the lab contains
+
+```text
+labs/atlas/
+├── compose.yaml                 Postgres + pgvector
+├── shared/
+│   ├── cases.json               fixtures used by both tracks
+│   └── seed.sql                 two tenants, orders, policy chunks
+├── ts/
+│   └── src/
+│       ├── core.ts              deterministic Atlas kernel
+│       └── labs.test.ts         six executable failures
+└── py/
+    ├── atlas/core.py            the same contracts in Python
+    └── tests/test_labs.py       the same six failures
+```
+
+The implementations are siblings. Neither is generated from the other. They share inputs and expected properties, which makes drift visible without pretending two languages will have identical internal code.
+
+## Run it before reading the implementation
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```bash
+cd labs/atlas/ts
+npm test
+```
+
+</Tab>
+<Tab value="Python">
+
+```bash
+cd labs/atlas/py
+python3.11 -m unittest discover -s tests -v
+```
+
+</Tab>
+</Tabs>
+
+Six tests should pass:
+
+```text
+effect succeeds and response is lost       one credit
+webhook arrives twice                      one inbox event
+retrieval includes another tenant          forbidden chunk absent
+external document contains instructions    write denied by taint ceiling
+approval expires during the wait           effect denied
+model never chooses to stop                loop bounded at eight steps
+```
+
+These are the laboratory's contracts. The exact return prose is irrelevant.
+
+## Read the shared fixture
+
+`shared/cases.json` contains two tenants, one permitted account, one forbidden account, a reviewed policy chunk, and an external hostile chunk.
+
+The hostile chunk is intentionally obvious. The test is not whether the model recognizes clever prose. No model runs. The test is whether retrieving content marked `external` sets a taint value that the dispatcher enforces before an effect.
+
+That separation matters:
+
+```text
+model behavior test     "does it try the attack?"
+system invariant        "can the attempt reach the effect?"
+```
+
+The first belongs in [Adversarial Evals](/book/security/adversarial-evals). The second should pass on every commit with no network access.
+
+## The kernel boundary
+
+The lab implements the part of Atlas that remains exact across frameworks:
+
+| Contract | In-memory implementation | Production replacement |
+| --- | --- | --- |
+| Credit ledger | `Map` / `dict` | ERP plus idempotency table and paired read |
+| Event inbox | `Map` / `dict` | Transactional inbox table |
+| Retrieval filter | Array predicate | SQL/RLS plus vector filter |
+| Taint | Derived from chunk trust | Propagated run state |
+| Approval | Signed action hash and expiry fields | Durable approval record plus workflow update |
+| Loop bound | `for` loop | Agent runtime and workflow budget |
+
+Replacing an adapter must not change the test's assertion. If moving to Temporal makes the duplicate-credit test disappear, the migration removed coverage rather than adding durability.
+
+## Optional Postgres
+
+The compose file starts Postgres with pgvector and loads the same two-tenant scenario.
+
+```bash
+cd labs/atlas
+docker compose up -d
+docker compose exec -T db psql -U atlas -d atlas -c \
+  "select tenant_id, chunk_id, trust from policy_chunks order by tenant_id, chunk_id"
+```
+
+You should see three chunks. The production retrieval query still needs a tenant predicate. Seed data containing two tenants is what makes forgetting it observable.
+
+The database is optional for the first pass. When you add a Postgres adapter, keep the in-memory contract tests and add integration tests that prove row-level security, transactions, and vector filters. One layer cannot substitute for the other.
+
+## Optional Temporal
+
+Start a persistent local server:
+
+```bash
+cd labs/atlas
+mkdir -p .temporal
+temporal server start-dev --db-filename .temporal/atlas.db
+```
+
+The first durable exercise is not "make the tests green." They already are. It is to replace the credit attempt with an Activity and preserve the same one-effect invariant after killing the worker between acceptance and response.
+
+Use a dedicated development namespace if you share a local cluster with another project. Workflow IDs and task queues are part of the isolation model even on a laptop.
+
+## The parity contract
+
+Both tracks must agree on:
+
+- canonical action bytes used by an approval;
+- idempotency-key inputs;
+- denial reason codes;
+- taint propagation;
+- terminal outcomes;
+- shared fixture semantics.
+
+They do not need byte-identical internal state. Python may use dataclasses and TypeScript readonly interfaces. Temporal SDK details differ. The observable contract is the book's portable asset.
+
+Add a case to `shared/cases.json` when a failure depends on business data. Add equivalent assertions in both tracks. If a failure depends on one SDK, keep the shared expected outcome and put the SDK-specific setup in that track.
+
+## Checkpoints while reading
+
+The lab grows by replacing boundaries, not by rewriting the whole project:
+
+| After part | Replace or add | Invariant that stays |
+| --- | --- | --- |
+| IV, Retrieval | Array filter with Postgres/pgvector | No cross-tenant chunk |
+| VII, LangGraph | Hand loop with explicit graph | Hard bound and typed state |
+| X, Temporal | In-memory call with Activity/Workflow | One effect after crash |
+| XII, HITL | Approval fields with signal/update | Exact action, fresh policy, expiry |
+| XIV, Evals | Six cases with growing dataset | Invariants gate, rates report |
+| XVII, Security | Obvious hostile chunk with varied attack corpus | Taint ceiling cannot be bypassed |
+| XVIII, Production | Local output with traces and manifests | Every run reconstructible |
+
+Commit or tag your own checkpoints if you build along. The book does not hide a finished implementation behind the final chapter. The point is to see each boundary acquire its production behavior while its contract stays fixed.
+
+<Aside type="tip" title="No model key is a feature">
+The fastest tests in an agentic system should run when the model provider is down. If every assertion needs a remote completion, the deterministic part of the architecture has no independent test boundary.
+</Aside>
+
+## What this lab does not claim
+
+The deterministic kernel does not validate model quality, provider compatibility, Postgres behavior, Temporal replay, UI streaming, or production capacity. Each requires its own layer from [The Testing Pyramid](/book/evals/testing-pyramid).
+
+The kernel proves narrower and more important properties: a model cannot widen scope, untrusted evidence cannot reach a write path, a duplicate trigger does not duplicate work, approval is checked at effect time, and the system terminates even when the model would not.
+
+---
+
+Next: [Building It](/book/capstone/building-it), replacing each laboratory boundary with the production architecture while keeping its contracts.
+
+## Takeaways
+
+- The companion has a no-key deterministic kernel and optional real services.
+- TypeScript and Python share fixtures and expected properties, not generated implementation code.
+- Run the six failures before reading the implementation.
+- Keep exact system invariants separate from model-behavior evals.
+- Replace adapters without changing assertions. Durability and frameworks add coverage; they do not retire contracts.
+- Seed multiple tenants so a missing isolation predicate becomes observable.
+- Pin approval bytes, idempotency inputs, reason codes, taint, and outcomes across language tracks.
+- A test suite that runs while the provider is down is evidence that deterministic software still has a boundary.

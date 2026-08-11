@@ -1,11 +1,15 @@
-export const appName = 'My App';
-export const docsRoute = '/docs';
+export const appName = 'Agents Honestly';
+export const appTagline = 'A handbook for agentic systems in production.';
+export const authorName = 'Henrique Breim';
+export const authorUrl = 'https://www.linkedin.com/in/henrique-breim/';
+export const docsRoute = '/book';
 export const docsImageRoute = '/og/docs';
 export const docsContentRoute = '/llms.mdx/docs';
 
-// fill this with your actual GitHub info, for example:
 export const gitConfig = {
-  user: 'fuma-nama',
-  repo: 'fumadocs',
+  user: 'breim',
+  repo: 'agents-honestly',
   branch: 'main',
 };
+
+export const githubUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;

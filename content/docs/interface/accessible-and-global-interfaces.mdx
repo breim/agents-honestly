@@ -1,0 +1,205 @@
+---
+title: "Accessible and Global Agent Interfaces"
+description: "Screen readers, keyboard flow, live regions, language, locale, money, time, and testing an agent UI beyond the default user."
+---
+
+Token streaming looks smooth on a screen. Through a screen reader, announcing every fragment can produce a stream of half-words that interrupts the user dozens of times. A tool approval card may look obvious and still be unreachable without a mouse. A date that says `03/04/26` may mean March or April.
+
+An agent interface changes while the user is reading it. Accessibility and internationalization have to shape that state model, not decorate the final response.
+
+## Stream state, not every token
+
+The visual transcript may update on each token. Assistive technology needs calmer events.
+
+Use separate regions:
+
+- transcript content, readable on demand;
+- a polite status region for meaningful phase changes;
+- an assertive region only for errors that block the current action;
+- stable controls for cancel, approve, reject, and edit.
+
+```tsx title="src/components/AgentRun.tsx"
+export function AgentRun({ run }: { run: RunView }) {
+  const status = accessibleStatus(run);
+
+  return (
+    <section aria-labelledby={`run-${run.id}-title`}>
+      <h2 id={`run-${run.id}-title`}>Support investigation</h2>
+
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {status}
+      </div>
+
+      <div aria-busy={run.phase !== 'complete'}>
+        <Transcript messages={run.messages} />
+      </div>
+
+      {run.approval && <ApprovalCard approval={run.approval} />}
+    </section>
+  );
+}
+```
+
+`accessibleStatus()` emits transitions such as "Searching current policy", "Waiting for manager approval", and "Reply ready". It does not echo generated tokens.
+
+WAI-ARIA defines live regions for asynchronous updates and provides `aria-live`, `aria-relevant`, `aria-atomic`, and `aria-busy` to describe how assistive technology should process them. [WAI-ARIA live regions](https://www.w3.org/TR/wai-aria/#dfn-live-region)
+
+## Keep focus under the user's control
+
+New tool frames, streamed messages, and approval cards must not steal focus. Move focus only after a user action that logically opens a new task, such as activating "Review credit".
+
+An approval dialog needs:
+
+- a programmatic name and description;
+- initial focus on the heading or safest control;
+- complete keyboard navigation;
+- visible focus;
+- Escape behavior that does not accidentally approve;
+- focus restored to the invoking control after close;
+- no timeout that expires while a user is reading without warning.
+
+Button order should not make the risky action easiest by accident. "Approve" and "Reject" need concrete labels when several cards are present, such as "Approve EUR 420 credit for Acme".
+
+<Aside type="caution" title="Do not use generated text as the only accessible name">
+An agent may produce a long, ambiguous, or hostile string. Build accessible names from validated fields and fixed interface copy. Render generated rationale as content, not as the control's identity.
+</Aside>
+
+## Preserve a stable reading model
+
+When streaming inserts content above the user's position, the page can move under a magnifier or keyboard user. Keep these rules:
+
+- append transcript events in chronological order;
+- do not reorder completed tool frames after rendering;
+- pause auto-scroll when the user scrolls away from the end;
+- provide "Jump to latest" rather than forcing position;
+- preserve approval state across refresh and reconnect;
+- expose errors next to the action and in a summary;
+- never encode status with color alone.
+
+WCAG 2.2 covers keyboard access, focus visibility, predictable operation, input assistance, status messages, target size, and accessible authentication. The W3C recommends using the latest WCAG 2.2 standard for current work. [WCAG 2.2 overview](https://www.w3.org/WAI/standards-guidelines/wcag/)
+
+## Language and locale are separate fields
+
+The user may write Portuguese, work in Spain, prefer English interface text, and manage a Brazilian account. One `language` string cannot express that.
+
+```ts
+type InteractionLocale = {
+  uiLanguage: 'en' | 'es' | 'pt-BR';
+  contentLanguage: string;
+  userTimeZone: string;
+  accountTimeZone: string;
+  currency: string;
+  numberLocale: string;
+};
+```
+
+Carry canonical values through tools and format them at the interface boundary:
+
+```json
+{
+  "amount_minor": 42000,
+  "currency": "EUR",
+  "effective_at": "2026-08-09T14:00:00Z",
+  "account_time_zone": "Europe/Madrid"
+}
+```
+
+The tool does not accept `€420`, `420,00`, or "tomorrow afternoon". Those are presentation and interpretation. The deterministic layer resolves them before any effect.
+
+## Tag generated and retrieved language
+
+Correct language metadata helps screen readers choose pronunciation. It also lets search, translation, and evaluation slice behavior accurately.
+
+```tsx
+<article lang={message.language} dir={directionFor(message.language)}>
+  {message.content}
+</article>
+```
+
+Do not infer right-to-left layout from the interface locale alone. Individual messages and retrieved passages can use another script. The W3C internationalization guidance treats language, script direction, names, dates, numbers, and cultural formats as design inputs, not string-translation cleanup. [W3C Internationalization](https://www.w3.org/mission/internationalization/)
+
+## Translation cannot change authority
+
+A localized tool description may improve selection, but the executable contract stays canonical. Keep tool names, enums, permission rules, amounts, timestamps, and IDs language-neutral.
+
+```text
+user says: "devolver cuatrocientos veinte euros"
+       |
+       v
+validated interpretation: 42000 EUR
+       |
+       v
+risk tier and approval policy
+       |
+       v
+localized confirmation: "Reembolsar 420,00 EUR"
+```
+
+Require the confirmation to display the canonical value after formatting. A translation model must not silently convert units, currencies, identities, or policy meaning.
+
+Evaluate each supported language as its own route. Translation quality alone does not prove retrieval recall, tool selection, entity extraction, safety, or escalation quality in that language.
+
+## Test the state transitions
+
+Static accessibility scans catch missing labels and contrast. Agent UIs fail during transitions.
+
+Test:
+
+- token streaming with a screen reader's announcement log;
+- keyboard-only start, cancel, approve, reject, edit, and reconnect;
+- focus after new messages and dialogs;
+- reduced motion;
+- zoom and reflow at narrow widths;
+- delayed and duplicated stream events;
+- approval expiry while the card is open;
+- right-to-left messages inside a left-to-right interface;
+- long translated labels and tool results;
+- locale changes between start and resume;
+- dates around daylight-saving transitions;
+- ambiguous numbers, currencies, and units.
+
+Use semantic snapshots and end-to-end keyboard tests in CI. Playwright can assert the accessibility tree through ARIA snapshots, which complements browser-based testing with real assistive technology. [Playwright ARIA snapshots](https://playwright.dev/docs/aria-snapshots)
+
+<Figure caption="The interface formats canonical state for a user. It never sends localized display strings back as authority." frame={false}>
+
+```text
+canonical run state
+      |
+      +--> formatter --> visual interface
+      |
+      +--> announcer --> assistive technology
+      |
+      +--> translator --> localized explanation
+      |
+      +--> audit record keeps canonical values
+```
+
+</Figure>
+
+## Atlas, concretely
+
+Atlas ships English and Spanish UI first. Portuguese tickets route to a human until retrieval and trajectory sets reach their thresholds. Every message stores a language tag. Amounts use minor units and ISO currency codes. Every business timestamp uses UTC plus the account time zone.
+
+The console announces phase changes, not tokens. Approval cards support keyboard review, preserve focus through reconnects, and name the account, action, and formatted amount. Meridian tests the complete credit flow with screen readers before enabling tier-1 approvals.
+
+## References
+
+- [Web Content Accessibility Guidelines 2.2](https://www.w3.org/TR/WCAG22/), normative W3C accessibility requirements.
+- [WCAG 2 overview](https://www.w3.org/WAI/standards-guidelines/wcag/), current status, supporting material, and adoption guidance.
+- [WAI-ARIA 1.2](https://www.w3.org/TR/wai-aria/), roles, states, properties, and live regions for dynamic interfaces.
+- [W3C Internationalization](https://www.w3.org/mission/internationalization/), language, scripts, direction, names, dates, and cultural formats.
+- [Playwright ARIA snapshots](https://playwright.dev/docs/aria-snapshots), accessibility-tree assertions for automated tests.
+
+---
+
+Next: [Realtime Voice Agents](/book/interface/realtime-voice-agents), applying the same state, authority, and accessibility rules when the interface is a live conversation.
+
+## Takeaways
+
+- Do not announce every streamed token. Announce meaningful state transitions.
+- Keep keyboard focus under the user's control and restore it after modal work.
+- Build accessible control names from validated fields, not generated prose.
+- Store language, locale, time zone, currency, and direction as distinct facts.
+- Keep canonical values and authority rules independent of translation and formatting.
+- Evaluate every supported language across retrieval, tool choice, safety, and escalation.
+- Test dynamic transitions, reconnects, expiry, zoom, keyboard flow, screen readers, and locale edge cases.

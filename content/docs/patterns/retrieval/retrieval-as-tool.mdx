@@ -1,0 +1,184 @@
+---
+title: "Retrieval as a Tool"
+description: "Let the agent decide whether to search at all. Agentic RAG."
+---
+
+## Problem
+
+[Retrieval on demand](/book/patterns/context/retrieval-on-demand) establishes *that* the agent should pull context rather than have it pre-loaded. This entry is about the harder question that immediately follows: **what does the retrieval catalogue look like?**
+
+The naive answer is one tool called `search`. It fails in a specific way. Meridian has four systems, a policy corpus, a SQL warehouse, a CRM graph, and a live ERP, and an agent holding a single `search` tool will use it for all four, because the tool's name says it searches and the question is a question. It semantically searches for *"total tonnage shipped to Iberia in Q2"*, retrieves five policy documents about freight terms, and answers with a number that appears in none of them.
+
+The opposite failure is equally real: eleven retrieval tools with overlapping descriptions, and the agent picks by coin flip.
+
+## Forces
+
+- **Different sources need different access strategies**, and no single interface covers semantic, aggregate, relational, and live-state lookups.
+- **The routing decision must happen before retrieval**, and the model is the thing making it.
+- **A tool description is prompt text.** It is where the routing rule is actually enforced at runtime.
+- **Every tool costs context on every turn**, so the catalogue cannot enumerate every source.
+- **The agent may decline to search**, which is sometimes right and sometimes a confident wrong answer.
+- **Unbounded searching is a real failure**, and the agent has no natural stopping rule.
+
+## Solution
+
+**One tool per retrieval strategy, named for what it retrieves**, with descriptions that say when *not* to call them.
+
+<Figure caption="Four tools, four strategies, and the routing lives in the descriptions. Not one search tool, and not one per source." frame={false}>
+
+```
+   search_policies      semantic over documents
+                        "what does the policy say about X"
+                        NOT for quantities, dates, or status
+
+   query_warehouse      SQL over the warehouse
+                        "how much / how many / total by"
+                        NOT for policy language
+
+   get_account_graph    traversal over the CRM
+                        "why is this account at risk" — relationships
+                        NOT for single-record lookups
+
+   get_order            live API
+                        "where is order 4921 right now"
+                        NOT for historical aggregates
+
+   ── four strategies, not eleven sources. Two policy corpora sit
+      behind ONE tool, routed internally by trust class.
+```
+
+</Figure>
+
+Four rules:
+
+**Name the tool for the question shape, not the system.** `search_policies` rather than `vector_index_query`, `get_account_graph` rather than `crm_api_call`. The model is choosing based on what it is trying to find out, not on your infrastructure diagram, and a name that describes your architecture asks it to know something it does not.
+
+`query_warehouse` is the catalogue's own exception, and it is worth naming as one: it is called after its store rather than its question. It earns that because [its whole job is to not be `get_order`](/book/first-agent/first-tools): the two overlap on *"what did we ship,"* and a sibling it must be told apart from is the one case where the system name carries more information than the subject would.
+
+**Put the negative case in the description.** *"Do NOT use for order status, quantities, or dates: those are in the warehouse; call `query_warehouse` instead."* The positive description alone is not enough: an agent with a search tool and a SQL tool will reach for search on a quantity question unless told plainly not to. This is the single highest-leverage sentence in a retrieval catalogue.
+
+**Collapse sources behind strategies.** Two policy indexes split by [trust class](/book/security/untrusted-retrieval) are one tool with an internal routing rule, not two tools. The model should not be choosing which corpus is trustworthy: that is [an authorization decision your code makes](/book/patterns/retrieval/filtered-retrieval).
+
+**Bound the searching, and make the bound an instruction.** Cap searches per run and return the limit as a [message the model can act on](/book/tools/errors-as-instructions), not an error. An agent that has searched four times without finding it should escalate, and the fifth search is almost never the one that works.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/retrieval-catalogue.ts"
+// One entry per STRATEGY. Sources hide behind them.
+export const retrievalTools: ToolDef[] = [
+  {
+    name: 'search_policies',
+    description:
+      'Search Meridian policy and contract documents. Use for questions ' +
+      'about returns, warranties, freight terms, or contract language. ' +
+      'Do NOT use for order status, quantities, dates, or account history.',
+    schema: z.object({ query: z.string(), k: z.number().max(10).default(5) }),
+    execute: searchPolicies,     // routes across trust-split indexes internally
+  },
+  {
+    name: 'query_warehouse',
+    description:
+      'Aggregate over shipment and order records: totals, counts, and ' +
+      'breakdowns by region, period, or product family. Use whenever the ' +
+      'answer is a NUMBER computed from many records. ' +
+      'Do NOT use to look up one order — call get_order.',
+    schema: OrdersQuerySchema,   // typed dimensions, never free-form SQL
+    execute: queryWarehouse,
+  },
+  // get_account_graph, get_order …
+];
+
+// Shared across the catalogue: the stopping rule is an instruction.
+export function searchBudgetGuard(ctx: RunContext) {
+  if (ctx.searchCount < MAX_SEARCHES) return null;
+  return errorForModel(
+    'search_limit',
+    `Searched ${MAX_SEARCHES} times already. If the answer has not been ` +
+    `found, escalate with what you have rather than searching again.`,
+  );
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/retrieval_catalogue.py"
+# One entry per STRATEGY. Sources hide behind them.
+RETRIEVAL_TOOLS = [
+    ToolDef(
+        name="search_policies",
+        description=(
+            "Search Meridian policy and contract documents. Use for questions "
+            "about returns, warranties, freight terms, or contract language. "
+            "Do NOT use for order status, quantities, dates, or account history."
+        ),
+        schema=SearchPolicy,
+        execute=search_policies,   # routes across trust-split indexes internally
+    ),
+    ToolDef(
+        name="query_warehouse",
+        description=(
+            "Aggregate over shipment and order records: totals, counts, and "
+            "breakdowns by region, period, or product family. Use whenever the "
+            "answer is a NUMBER computed from many records. "
+            "Do NOT use to look up one order — call get_order."
+        ),
+        schema=OrdersQuery,      # typed dimensions, never free-form SQL
+        execute=query_warehouse,
+    ),
+    # get_account_graph, get_order …
+]
+
+
+def search_budget_guard(ctx):
+    # The stopping rule is an instruction, not an exception.
+    if ctx.search_count < MAX_SEARCHES:
+        return None
+    return error_for_model(
+        "search_limit",
+        f"Searched {MAX_SEARCHES} times already. If the answer has not been "
+        f"found, escalate with what you have rather than searching again.",
+    )
+```
+
+</Tab>
+</Tabs>
+
+`OrdersQuerySchema` taking typed dimensions rather than free-form SQL is the [granularity decision](/book/tools/schema-and-granularity) that keeps this safe. A `run_sql` tool is a retrieval tool in the same sense that a shell is a file browser.
+
+## Trade-offs
+
+**Routing errors are now a model decision.** A pipeline that always retrieves the same way cannot mis-route; this can. The mitigation is evals per question type: a fixture set where the assertion is *which tool was called*, which is a rare deterministic check in this field and worth having.
+
+**Descriptions are prompt text you pay for every turn.** Four retrieval tools with careful negative cases is several hundred tokens on every request. That is worth it and it is a real cost, and it is why the answer is four strategies rather than eleven sources.
+
+**A tool description edit is a behavior change.** Tightening a description to fix one mis-route can break another. This is why the [tool catalogue hash belongs in the config bundle](/book/production/versioning) and why description changes should run the eval gate.
+
+**The agent can decline to search.** It answers a policy question from parametric knowledge, confidently. The defenses are a mandatory-citation rule and an eval case that fails any policy answer citing nothing: [grounding checks](/book/patterns/retrieval/grounded-citations) catch this class directly.
+
+## When not to use it
+
+**When there is one source and one strategy.** A single documentation corpus does not need a catalogue. Pre-load or expose one tool and move on.
+
+**When the routing is knowable from the request.** If a form field already says the user is asking about billing, route in code. [The determinism test](/book/workflows/the-determinism-test) applies: a decision you can make deterministically should not be delegated to a model.
+
+**When latency forbids the extra turn.** Tool-choosing costs a round trip before any retrieval happens. Interactive paths with a sub-second budget should pre-load and accept the imprecision.
+
+**When the agent routes badly and evals show it.** If tool-selection accuracy is poor, the fix order is: sharpen descriptions, then merge overlapping tools, then move the routing into code. Three tools the agent picks correctly beat six it picks by coin flip.
+
+<Aside type="note" title="The catalogue is where routing actually lives">
+[Where does the answer live](/book/retrieval/where-does-the-answer-live) is the most consequential decision in retrieval, and it is easy to read that chapter as being about architecture. At runtime it is not architecture. It is four tool descriptions.
+
+Which means the routing rule is subject to everything true of prompts: it is versioned, it drifts, it needs evals, and someone will edit it for clarity in a PR reviewed as a code change. Treat the descriptions as the load-bearing artifact they are: [they are the prompt](/book/tools/tool-discovery), and they are the only place your routing decision exists when a real question arrives.
+</Aside>
+
+## Related
+
+- [Retrieval on Demand](/book/patterns/context/retrieval-on-demand): the same decision framed from the context side
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): what each retrieval tool should do to the agent's query
+- [Freshness Routing](/book/patterns/retrieval/freshness-routing): the volatility axis of the same routing decision
+- [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live): the chapter the catalogue encodes
+- [Tool Discovery](/book/tools/tool-discovery): why the catalogue must stay small

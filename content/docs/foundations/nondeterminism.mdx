@@ -1,0 +1,179 @@
+---
+title: "Why Your Agent Is Flaky"
+description: "Sampling, reproducibility you can and cannot buy, and what it does to your idea of a test."
+---
+
+
+The [last chapter](/book/foundations/structured-output) bought you a guarantee about shape. This one takes away the guarantee you actually wanted: that the same input produces the same output.
+
+It does not, it cannot be made to on a hosted API, and the reasons are more interesting, and more actionable, than "it's random."
+
+## Three sources, and the famous one is the least important
+
+When an agent behaves differently on two identical runs, exactly three things can be responsible. Engineers reach for the first, the second is the one they don't know about, and the third is usually the actual culprit.
+
+### 1 · Sampling: the one everyone names
+
+The model doesn't emit a token; it emits a score for every token in the vocabulary, and something picks one. That picker is stochastic by default, and it is where "temperature" lives: flatten the distribution and you get variety, sharpen it and you get the model's favorite token every time.
+
+This is the knob everyone reaches for. Two things are worth knowing about it.
+
+**On current frontier models, the knob is gone.** `temperature`, `top_p`, and `top_k` are no longer accepted on the latest Anthropic models: sending one is a 400, not a no-op. The intended lever for shaping behavior is now the prompt, plus an effort setting that controls how much the model thinks. Code that carries `temperature=0` forward from an older model doesn't get ignored; it breaks.
+
+**And it never bought determinism anyway.** Greedy decoding removes the dice from the *sampler*. It does not remove them from the arithmetic underneath, which is the next section, and which is the reason the `temperature=0` folk remedy has always half-worked.
+
+<Aside type="caution" title="What temperature=0 was actually for">
+If you set it for reproducibility, you were buying something that was never on sale. Replace it with the testing discipline below. If you set it because you wanted the model's most-likely answer rather than a creative one, that intent is still valid; express it in the prompt, and check whether your model still accepts the parameter at all.
+</Aside>
+
+### 2 · The arithmetic: the one nobody mentions
+
+Here is the part that surprises people, and it is worth stating precisely because the folk version ("floating point is fuzzy on GPUs") is wrong in a way that hides the fix.
+
+A forward pass is a huge pile of floating-point reductions, which is to say summing many numbers. Floating-point addition is not associative: `(a + b) + c` and `a + (b + c)` can differ in the last bits. Which order the GPU sums in depends on how the kernel splits the work, and **that split depends on the batch size**.
+
+Now recall that you are one request on a shared inference server. The batch you land in is assembled from whatever traffic arrived in the same few milliseconds. So:
+
+<Figure caption="The same prompt, twice. Nothing about your request changed; the other traffic did." frame={false}>
+
+```
+   10:04:01                              10:04:02
+   ┌───────────────────────┐             ┌───────────────────────┐
+   │  your request         │             │  your request         │
+   │  + 3 others in flight │             │  + 47 others in flight│
+   └───────────┬───────────┘             └───────────┬───────────┘
+               │ batch of 4                          │ batch of 48
+               ▼                                     ▼
+     different kernel split                different kernel split
+               │                                     │
+               ▼                                     ▼
+     ...0.4213891                          ...0.4213887
+               │                                     │
+               └──────── one token differs ──────────┘
+                              │
+                              ▼
+                  the rest of the answer diverges
+```
+
+</Figure>
+
+**Your output depends on other people's traffic.** Not on randomness in any meaningful sense: the computation is fully deterministic given the batch, and you simply don't control the batch. This property has a name, *batch invariance*, and production inference kernels generally lack it.
+
+The magnitude is not academic. Researchers ran 1,000 identical requests against one open model and got **80 distinct completions**. Changing GPU count or batch size alone has been measured to swing accuracy by up to 9% and output length by thousands of tokens on reasoning-heavy tasks.
+
+The good news is that this is a solvable engineering problem rather than a law of nature: batch-invariant kernels exist, ship in open inference stacks, and produce bit-identical output across a thousand runs. The bad news is that they cost throughput, and you are not the one choosing kernels on a hosted API. Treat bit-level reproducibility as something you can have if you run the model yourself and pay for it, and not otherwise.
+
+### 3 · Your own inputs: the actual culprit
+
+Before blaming either of the above, check whether the input really was identical. In an agent it usually wasn't:
+
+| Looks like model flakiness | Is actually |
+| --- | --- |
+| "Same question, different answer" | Different retrieved chunks; the index changed, or ANN search returned a different neighborhood |
+| "It worked yesterday" | The provider moved the alias to a new model version |
+| "Only fails in production" | A timestamp, session ID, or A/B flag in the system prompt |
+| "Fails on long conversations" | Different history; compaction fired, or the context grew past where attention holds |
+| "Fails intermittently under load" | A tool timed out and returned an error the model reasoned from |
+
+Every row is a bug you can fix, and none of them is the model being moody. **Diagnose before you blame the dice.** This is what [tracing](/book/observability/what-a-trace-must-answer) is for, and the single most common outcome of adding it is discovering that your "nondeterministic" agent was deterministically receiving different inputs.
+
+## Why one flipped token becomes a different run
+
+For a single completion, variance is cosmetic: a synonym, a reordered clause. In [the loop](/book/foundations/what-is-an-agent) it is structural, because the model's output is not the answer. It is the **control flow**.
+
+A token that changes `get_order` to `search_orders` doesn't change the wording of a reply. It changes which tool ran, which result entered the context, and therefore every decision after it. The two runs are no longer the same run with different prose; they are different programs.
+
+```
+        run A                          run B
+        ─────                          ─────
+   get_order(4921)             search_orders("4921")
+        │                              │
+   get_shipment_status            get_customer
+        │                              │                ← divergence compounds
+   reply                          check_policy
+                                       │
+                                  escalate
+```
+
+Both may be correct. They cost different amounts, take different numbers of steps, and touch different systems, and one of them issued a refund. This is why "flaky agent" is a category error: the agent is doing exactly what it is designed to do, which is decide at run time. Variance in a decision-making component is not a defect to be eliminated. It is the operating condition.
+
+Two engineering consequences follow immediately, and both get their own parts of this book. Repeated steps must be safe to repeat, because a retried run may take a different path through the same side effects. That's [idempotency](/book/tools/idempotency). And a run that dies at step six must not restart at step one and take a *different* path. That's [durable execution](/book/durable-execution/why-durable-execution).
+
+## What this does to testing
+
+Here is the part that breaks people's habits.
+
+**You cannot assert equality.** `expect(reply).toBe("Your order ships Tuesday.")` is not a test; it is a snapshot of one sample from a distribution, and it will fail for reasons that have nothing to do with your code. Deleting these tests is progress.
+
+**A single run tells you almost nothing.** Passing once is compatible with a 60% success rate. So is failing once. The unit of measurement is not a run, it is a rate over runs, which means the question "is this test flaky or is the system broken?" has a real answer: run it twenty times and read the number. A case that passes eighteen times out of twenty is not a flaky test. It is a 90% feature, and whether that ships is a product decision you now get to make with a number in hand.
+
+**Assert invariants, not outputs.** The properties worth testing are the ones that must hold across every valid run:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="agent.test.ts"
+const runs = await Promise.all(
+  Array.from({ length: 20 }, () => runAgent('Where is order 4921?')),
+);
+
+for (const run of runs) {
+  expect(run.toolsCalled).toContain('get_order');   // it looked it up
+  expect(run.toolsCalled).not.toContain('issue_credit'); // no side effects
+  expect(run.reply).toContain('4921');                  // grounded in the ask
+  expect(run.steps).toBeLessThan(10);                   // it terminated sanely
+}
+
+const grounded = runs.filter((r) => r.citesRealShipment).length;
+expect(grounded / runs.length).toBeGreaterThan(0.95);   // a rate, not a value
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="test_agent.py"
+runs = [run_agent("Where is order 4921?") for _ in range(20)]
+
+for run in runs:
+    assert "get_order" in run.tools_called        # it looked it up
+    assert "issue_credit" not in run.tools_called    # no side effects
+    assert "4921" in run.reply                       # grounded in the ask
+    assert run.steps < 10                            # it terminated sanely
+
+grounded = sum(r.cites_real_shipment for r in runs)
+assert grounded / len(runs) > 0.95                   # a rate, not a value
+```
+
+</Tab>
+</Tabs>
+
+Note the shape of those assertions. Three kinds, and they are the whole vocabulary:
+
+- **Must always hold.** No unauthorized tool, no unbounded loop, output parses. These are hard failures at any rate below 100%, and most of them belong in the harness rather than the test, because they are safety properties you should be *enforcing*, not merely observing.
+- **Must hold often enough.** Correctness, grounding, tone. Measured as a rate against a threshold you chose deliberately. This is [scoring](/book/evals/scoring), and it is a different discipline from unit testing.
+- **Must not regress.** Today's rate against last week's. The only version of this that survives contact with a nondeterministic system.
+
+That last one is why [evals](/book/evals/eval-discipline) exist as a separate practice rather than a folder of tests. A test suite answers "did I break it?" with a boolean. An eval suite answers it with a number and a confidence interval, and for a probabilistic component that is the only honest answer available.
+
+## The reframe
+
+The instinct on meeting all this is to hunt for determinism: pin the version, freeze the seed, cache aggressively, find the setting that makes it stop moving. Some of that is worth doing (pin your model version; you should know when it changes). Most of it is chasing a property the architecture does not offer.
+
+The productive move is the opposite one: **stop trying to make the model deterministic and make the system tolerant of the fact that it isn't.** Repeated actions are safe. State survives a restart. Bad paths are bounded and observable. Quality is a measured rate with a threshold rather than an assumed constant.
+
+Every one of those is ordinary distributed-systems engineering, applied to a component that fails in a new way. Which is the thesis of this book, arriving on schedule, and it leads directly to the cheapest way to avoid all of it, which is not to use an agent where you didn't need one.
+
+---
+
+Next: [Choosing and Adapting Models](/book/foundations/choosing-and-adapting-models), choosing by measured task fit, and knowing when a model change is the wrong fix.
+
+## Takeaways
+
+- Three sources of variance: the sampler, the arithmetic, and your own inputs. The third is the most common and the only one that is straightforwardly a bug.
+- `temperature` / `top_p` / `top_k` are removed on current frontier models and now return an error. They never bought reproducibility regardless.
+- Greedy decoding does not make inference deterministic. Floating-point reductions vary with batch size, and your batch is assembled from other people's concurrent traffic.
+- The effect is measurable, not theoretical: a thousand identical requests can produce dozens of distinct completions, with accuracy swings of several percent.
+- Bit-identical output is achievable with batch-invariant kernels, if you run the model yourself and accept the throughput cost. Not on a hosted API.
+- In an agent, token variance becomes *path* variance. Two runs are different programs, touching different systems. Design for repeated and resumed steps.
+- Delete equality assertions. Assert invariants that must always hold, rates that must hold often enough, and regressions against last week.
+- A case passing 18 of 20 times is not a flaky test. It is a 90% feature, and now you can decide about it on purpose.

@@ -1,0 +1,158 @@
+---
+title: "Compaction and Summarization"
+description: "Rewriting history so the agent can keep going, without losing the thing it needed."
+---
+
+
+History is the claimant that always wins. Every other row in the [budget](/book/context/context-as-budget) is bounded by something: a constant, a `k`, a truncation at the tool boundary. History just grows, and on a long enough run it consumes the window regardless of how disciplined everything else is.
+
+So at some point you rewrite it. That operation is **lossy compression of your own program's state**, performed by a probabilistic component, on data you will need later. Every compaction is a bet about what won't be needed again, and losing the bet is, as usual in this book, silent.
+
+## The characteristic symptom
+
+Compaction failures have a recognizable shape, and once you know it you'll spot it in a transcript immediately:
+
+**The agent works flawlessly for twenty steps and then falls off a cliff.** Not degradation but a discontinuity, at the compaction event. Three presentations:
+
+- It asks a question that was answered fifteen steps ago.
+- It re-runs work it already did, sometimes in a loop.
+- It declares the task complete when it isn't.
+
+That third one is the most damaging and the least obvious, because it doesn't look like a failure. The agent lost track of the *goal*, retained enough to sound coherent, and wrapped up. In a support queue that is a ticket marked resolved that wasn't, precisely the outcome the [acceptance spec](/book/first-agent/the-problem) forbade.
+
+## Four operations, cheapest first
+
+"Compaction" gets used for all of these, and they are not interchangeable.
+
+| Operation | What it does | Cost | Lossiness |
+| --- | --- | --- | --- |
+| **Drop** | Remove old tool results entirely | Free | Total, but usually fine |
+| **Truncate** | Bound each item at the boundary it enters | Free | Blunt; cuts by size, not relevance |
+| **Summarize** | Rewrite a span of turns as prose | A model call | Subtle and unpredictable |
+| **Externalize** | Write to a store, keep a pointer | Some plumbing | None, if you write the right thing |
+
+One content type is not yours to rewrite. On a reasoning model the assistant's turns contain **thinking blocks, and they come back signed**. The provider rejects a request whose latest assistant message carries thinking that has been altered, with an error saying those blocks must remain as they were in the original response. Summarizing across them, re-serializing them, or running them through anything that normalizes text invalidates the signature, and the failure lands on the *next* call rather than on the compaction that caused it. Older turns are advisory rather than enforced, so compacting history is fine; the boundary is what matters. Removing thinking wholesale is available and supported: that is context editing, below, and it is the provider doing it rather than you.
+
+Most teams reach straight for summarize, because it's the one that sounds like the answer. It is the most expensive, the most lossy, and the hardest to test. Work up from the top.
+
+**Target the source of the bloat, not the whole context.** This is the rule that saves the most pain, and it requires the per-request breakdown from the budget chapter. If seventy percent of the window is raw tool output, summarizing the *conversation* is the wrong operation performed on the wrong data. You paid a model call, degraded the reasoning trace, and left the actual problem in place. Clear the old tool results instead and the conversation stays intact.
+
+<Figure caption="Same window pressure, two different causes, two different fixes. Measure before choosing." frame={false}>
+
+```
+   bloat is tool output                bloat is conversation
+   ┌──────────────────┐                ┌──────────────────┐
+   │ system      █    │                │ system      █    │
+   │ schemas     █    │                │ schemas     █    │
+   │ results ████████ │  ← clear these │ history ████████ │  ← summarize
+   │ history     ██   │                │ results     ██   │     these
+   └──────────────────┘                └──────────────────┘
+     drop / mask                          rolling summary
+     no model call                        one model call
+```
+
+</Figure>
+
+## Keep the decision, not the evidence
+
+When you do summarize, one principle covers most of the judgment:
+
+> **The agent needs to remember what it decided, not the full output that informed the decision.**
+
+A 4,000-token warehouse result that led to the conclusion "Iberia Q2 shipments were down 38%" can become that sentence. The evidence did its work; the conclusion is what the next step reasons from. This is why raw tool output is the safest thing to compress and the reasoning trace is the least safe.
+
+What must survive, in order of how badly it hurts to lose:
+
+| Must survive | Why |
+| --- | --- |
+| The task and its constraints | Lose this and the agent declares victory early |
+| Decisions already made, with their reasons | Otherwise it re-litigates settled questions |
+| **What was tried and failed** | Otherwise it retries, forever |
+| Exact identifiers and amounts | `4921`, `$1,845.00`, `POL-114 v7` |
+| Commitments made to the user | "I've credited your account" must not evaporate |
+| Open questions | What we still need in order to finish |
+
+Two of those deserve emphasis because they are the ones summarizers reliably drop.
+
+**Negative knowledge.** Summaries are written as narratives of what happened, and "we checked the CRM and it had nothing" reads like a non-event. Delete it and the agent checks the CRM again. This is the direct cause of the compaction-induced loop, and it is fixed by asking the summary for failed attempts explicitly rather than hoping.
+
+**Exact values.** Anything mentioned once in passing gets absorbed into prose and loses precision: thresholds, IDs, version pins, amounts. "The customer's order" is not `4921`. This is the single most common concrete compaction bug, and the fix is structural rather than better prompting: **don't let identifiers live only in the transcript.**
+
+## Write before you compact
+
+Which brings us to the mechanism that makes the rest of this manageable, and it is the payoff of the [last chapter](/book/context/memory).
+
+The typed scratchpad is not in the transcript. Compaction rewrites the transcript. Therefore **compaction cannot take what's in the scratchpad**, and the discipline follows directly:
+
+```
+   before compacting:
+     ① flush verified facts from the transcript → scratchpad
+        (order 4921, total $1,845.00 ← get_order
+         policy POL-114 v7          ← search_policies)
+     ② flush failed attempts → scratchpad
+        (crm lookup: empty; shipment API: 404)
+     ③ then compact the transcript freely
+     ④ re-inject the scratchpad after the summary
+```
+
+**Notice what is not on that list.** The credit Atlas computed does not get flushed, and the omission is the whole discipline. *Verified* means a tool produced it: the flush moves `get_order`'s total and `search_policies`' version, both of which are exactly what they were when the tool returned them. A computed amount is a model-derived value, and [step four of the poisoning chapter](/book/context/context-poisoning) is the case that matters: flush it and you have promoted a wrong number out of the transcript, where a later check could still overturn it, into the lossless store, where nothing will. Compaction is the recovery from a poisoned run only while it draws from what the model did not write.
+
+Write-before-compaction turns a lossy operation into a mostly-safe one, because the things that hurt to lose were moved somewhere lossless first. It also makes compaction *testable*: the scratchpad is a typed object you can assert on, whereas "did the summary keep the important bits" is a judgment call.
+
+## Trigger before the wall
+
+Compact on a soft threshold, say 60% of your working budget, not when a request fails. Three reasons, in increasing order of importance.
+
+You need room to *perform* the compaction, which itself needs the content in context. You want the choice made under normal conditions rather than in a retry path. And most importantly: a compaction triggered by overflow happens at an arbitrary point in the reasoning, whereas one triggered early can wait for a **natural boundary**: after a sub-task completes, not in the middle of a three-call investigation.
+
+Compacting mid-investigation is how the agent loses the thread. Compacting after it has concluded something is how it stays coherent.
+
+## Five specific hazards
+
+**Summarizing a summary.** The obvious implementation compacts the compacted history, and each pass re-encodes prose that was already lossy. Drift compounds. Keep the original span pinned somewhere retrievable and summarize from source, or accept the horizon and externalize aggressively.
+
+**Breaking tool pairing.** A `tool_use` block whose matching `tool_result` was compacted away is a malformed conversation, and the API will tell you so. Compact in complete turns; never mid-exchange.
+
+**Invalidating the cache.** Rewriting history changes the prefix, so everything behind it is uncached. The very operation you performed to save money produces a cost spike on the next request. Expected and acceptable, but budget for it, and don't compact more often than you need to.
+
+**Compacting the system prompt's job.** Summaries that include "the assistant should cite policies" are re-stating the system prompt into history, where it now costs tokens twice and can drift from the actual prompt.
+
+**Losing tenancy.** If your compaction is a model call, it sees the whole conversation. Make sure the summarizer is subject to the same [authorization](/book/security/tenant-isolation) as everything else, and that the summary can't carry another customer's data forward.
+
+## Server-side and clearing
+
+Two API-level mechanisms worth knowing, because they cover a lot of ground with no code.
+
+**Context editing** *clears* rather than summarizes: old tool results, or thinking blocks, removed on a threshold you configure. This is the "drop" row of the table, implemented for you, and it is the right first move when tool output is the bloat. It is also the only sanctioned way to get rid of thinking blocks, for the signature reason above: dropping them is offered, editing them is not.
+
+**Server-side compaction** summarizes earlier context automatically as the conversation approaches a trigger. It has one gotcha that is worth stating loudly: **append the full response content back to your messages, not just the text.** The response carries compaction blocks that the API uses to replace compacted history on the next request. Extracting the text and appending that silently loses the compaction state, the exact failure this chapter is about, introduced by the tool meant to prevent it.
+
+## Test it deliberately
+
+Compaction is the one context mechanism you can test directly, and almost nobody does.
+
+**The resumability test.** Take a real run, compact at step *n*, and let it finish from the compacted state. Compare against the uncompacted run: same outcome, same tools called, same identifiers in the reply? Do it at several values of *n*, including mid-investigation, because that's where it breaks.
+
+**Watch for the loop signature.** In production, a tool called with identical arguments twice in one run is close to a proof that compaction dropped a failed attempt. Alert on it, because it's cheap to detect and it points at the bug precisely.
+
+Both belong in the eval suite. A compaction policy that has never been tested is a compression algorithm nobody has decompressed.
+
+---
+
+Next: [Context Poisoning](/book/context/context-poisoning), where the agent wrote something false into its own history and now every turn reasons from it.
+
+## Takeaways
+
+- History is the claimant nothing else bounds. Eventually you rewrite it, and that rewrite is lossy compression of your own state.
+- Compaction failures are discontinuities, not gradual: the agent asks an answered question, repeats work, or declares the task done. The third is the expensive one.
+- Drop, truncate, summarize, externalize, in that order of preference. Summarizing is the most expensive and least testable, and it's where most teams start.
+- Target the source of the bloat. Summarizing the conversation when the bloat is tool output fixes nothing and degrades the reasoning trace.
+- Keep what was decided, not the evidence behind it. Raw tool output is the safest thing to compress.
+- Negative knowledge and exact identifiers are what summarizers drop, and they cause loops and wrong answers respectively.
+- Write state to a typed scratchpad *before* compacting. Compaction can't take what isn't in the transcript, and a typed object is assertable.
+- Flush tool-sourced values, not model-derived ones. Promoting a computed number into the lossless store is how a wrong value stops being correctable. Compaction recovers a poisoned run only while it draws from what the model did not write.
+- Trigger on a soft threshold at a natural boundary, never on overflow mid-investigation.
+- Expect a cache-cost spike after compaction, and keep the summarizer inside the same authorization boundary as everything else.
+- With server-side compaction, append the full response content, because dropping the compaction blocks silently loses the state.
+- Thinking blocks are signed and cannot be rewritten. Drop them via context editing if you must, but summarizing across the latest assistant turn invalidates the signature and fails the *next* call, not the compaction.
+- Test resumability at several cut points, and alert on identical repeated tool calls.

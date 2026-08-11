@@ -1,0 +1,173 @@
+---
+title: "Graph Topologies"
+description: "Pipeline, router, loop, fan-out/fan-in, supervisor, human gate, subgraph: the shapes and what each one costs."
+---
+
+[Part VI catalogued composition shapes](/book/workflows/composition-patterns) as ordinary program structure. This chapter is the same seven shapes as **graph topologies**, and the reason it isn't a repeat is that a graph gives each one a distinct bill.
+
+Every topology has consequences along the four axes Part VII established: what it does to your **state schema**, what happens on **checkpoint and replay**, what it costs to **stream**, and how you **bound** it. Those costs are what should decide the shape, and they're invisible in a diagram.
+
+## 1 · Pipeline
+
+```
+   START ──▶ a ──▶ b ──▶ c ──▶ END
+```
+
+Linear. The default shape and the right one more often than people admit.
+
+**State:** trivial. No concurrent writes, so no reducers beyond append.
+**Checkpoint:** one write per node. If your nodes are one-liners, that's write amplification for nothing; merge them.
+**Stream:** the cleanest progress feed you'll get. One step, one event.
+**Bound:** none needed. It terminates by construction.
+
+**The cost to watch:** a pipeline in a graph is a function in a heavier notation. If every edge is unconditional and nothing pauses, you have paid for checkpointing you aren't using. That's [the next chapter's question](/book/langgraph/node-or-function).
+
+## 2 · Router
+
+```
+   START ──▶ triage ──┬──▶ path_a ──┐
+                      ├──▶ path_b ──┼──▶ END
+                      └──▶ path_c ──┘
+```
+
+One classification, several exclusive paths.
+
+**State:** the routing key must be in decision state, not the transcript, or your edge function isn't testable.
+**Checkpoint:** unremarkable. One path runs.
+**Stream:** you now need to tell the user *which* path, or the progress feed looks like it skipped steps.
+**Bound:** none, but every path needs its own tests, and `compile()` will catch a path that can't reach `END`.
+
+**The cost to watch:** the destination list must be declared and exhaustive. Every branch is also a code path someone has to maintain, and [fourteen branches](/book/workflows/the-determinism-test) is a signal, not an achievement.
+
+## 3 · Loop
+
+```
+   ┌─────────────┐
+   ▼             │
+   work ──(more?)┘ ──▶ END
+```
+
+A self-edge with a conditional. The agent step.
+
+**State:** grows every iteration. `messages` accumulates, and if you also accumulate findings or tool results, the growth multiplies.
+**Checkpoint:** written every iteration, containing all that accumulated state. **Checkpoint storage is state size × iterations**, and both terms grow. This is the shape that makes checkpoint tables surprising.
+**Stream:** repeated identical node names look like a stall. Emit a custom event with the iteration number and what it's doing, or your progress feed reads as frozen.
+**Bound:** mandatory, and [two of them](/book/langgraph/routing-and-subgraphs). The semantic one producing a `halted` outcome, plus the framework backstop.
+
+**The cost to watch:** any side effect inside the loop is a side effect that can happen N times, and [replay re-runs the node from the top](/book/langgraph/persistence). Effects belong outside the loop, or behind an idempotency key.
+
+## 4 · Fan-out / fan-in
+
+```
+             ┌──▶ x ──┐
+   split ────┼──▶ y ──┼──▶ join
+             └──▶ z ──┘
+```
+
+Parallel branches, then a merge.
+
+**State:** every key those branches write **needs a commutative reducer**. That's the [`InvalidUpdateError`](/book/langgraph/reducers-and-state) if you forget, and a silent race if you get the reducer wrong.
+**Checkpoint:** the superstep's checkpoint contains all branches' output. Wide fan-outs make big checkpoints.
+**Stream:** events arrive interleaved from all branches. A progress UI must attribute each event to its branch or it reads as noise.
+**Bound:** a concurrency cap, and an explicit partial-failure policy chosen from [all-or-nothing, best-effort with disclosure, or retry the stragglers](/book/workflows/composition-patterns).
+
+**The cost to watch:** parallel calls sharing a prompt prefix all miss the [cache](/book/foundations/prompt-caching). Fire one, await its first token, release the rest.
+
+## 5 · Supervisor
+
+```
+   ┌──────────────┐
+   │  supervisor  │◀────────────┐
+   └──────┬───────┘             │
+     ┌────┼────┐                │
+     ▼    ▼    ▼                │
+    w1   w2   w3 ───────────────┘
+```
+
+A node that decides which worker runs next, in a loop, until it decides it's done.
+
+This is the topology to be careful with, because it is **an agent whose actions are "call worker X."** The [orchestrator/worker distinction from Part VI](/book/workflows/routing-and-orchestration) applies exactly. A bounded one-pass decomposition is a workflow; a loop where the model keeps choosing the next worker is a multi-agent system, and the diagram looks the same either way.
+
+**State:** the supervisor accumulates every worker's output.
+**Checkpoint:** grows with round trips, containing all of it.
+**Stream:** two levels, supervisor decisions and worker internals. Decide which the user sees.
+**Bound:** round-trip cap, and a real one.
+
+<Aside type="caution" title="The supervisor degrades at 8–12 round trips, for a reason you already know">
+Reported behaviour: routing accuracy drops after roughly **8–12 worker round trips**, because accumulated history crowds out the current task state.
+
+That is [dilution](/book/foundations/context-window) from Part I, arriving as a topology limit. The supervisor's context fills with a transcript of everything every worker did, and the instruction it most needs to follow, *what am I deciding right now*, ends up buried in the middle of a long prompt.
+
+It also **roughly doubles token spend**, because every handoff pays a routing call on top of the work.
+
+The mitigations are the ones you'd expect: workers return typed conclusions rather than narratives, the supervisor's state holds decisions rather than transcripts, and you cap the round trips well below where the degradation starts.
+</Aside>
+
+The alternative, direct agent-to-agent handoff with no central router, trades that for a combinatorial failure surface: four agents give you six interaction pairs, ten give you forty-five, and past about eight the surface exceeds what end-to-end tests can cover. The reasonable sequencing is **supervisor first, and only move off it with data showing routing latency is your bottleneck**. That's the same "measure before escalating" discipline as everywhere else in this book, and [Part XIX](/book/multi-agent/when-not-to) argues most systems never get there.
+
+## 6 · Human gate
+
+```
+   ... ──▶ prepare ──▶ ⏸ approve ──▶ execute ──▶ ...
+                        interrupt
+```
+
+Pause, wait for a person, resume.
+
+**State:** must contain everything the human needs to decide, because the process that resumes may not be the one that paused.
+**Checkpoint:** the whole point. The run persists while nothing holds a thread.
+**Stream:** the pause must be visible as a *state*, not an absence. "Waiting for approval since 14:02," not silence.
+**Bound:** a deadline. A gate with no timeout is a ticket that waits forever.
+
+**The cost to watch, and it's the sharpest one in this chapter:** on resume, [the node re-executes from the top](/book/langgraph/persistence). So the approval node must contain **exactly one side-effecting call and nothing else**, or the non-approval work in that node runs twice. This topology is where that rule earns its keep.
+
+## 7 · Subgraph
+
+```
+   parent ──▶ [ ══ subgraph ══ ] ──▶ ...
+```
+
+A compiled graph as a node.
+
+**State:** shared schema is zero-ceremony and coupled; transformed schema is a typed contract and reusable.
+**Checkpoint:** nests. Size compounds, and the replay view gains a level.
+**Stream:** needs explicit opt-in for nesting, and turning it on **changes the shape of every chunk** your consumer handles. Decide early.
+**Bound:** the subgraph needs its own, and they don't inherit.
+
+**The cost to watch:** a single-use subgraph sharing all state is a section header with a checkpointing cost and an extra layer in every trace.
+
+## At a glance
+
+| Topology | State growth | Checkpoint cost | Needs a bound | Main hazard |
+| --- | --- | --- | --- | --- |
+| Pipeline | flat | 1 per node | no | it's a function |
+| Router | flat | 1 per path | no | unmaintainable branch count |
+| Loop | **linear** | **× iterations** | **yes, two** | effects repeat on replay |
+| Fan-out/in | branch sum | wide | concurrency cap | missing/wrong reducer |
+| Supervisor | **accumulates** | **× round trips** | **yes** | dilution past ~10 hops; 2× tokens |
+| Human gate | flat | long-lived | deadline | double execution on resume |
+| Subgraph | nested | compounds | its own | one-use subgraphs |
+
+Read the bolded rows: **the two topologies whose state grows without a natural end are the loop and the supervisor**, and they are also the two that most need bounding. That's not a coincidence. They're the shapes where the model, not your code, decides how many times something happens.
+
+## Atlas, concretely
+
+Pipeline as the spine. One router at triage. One loop, wrapped in a transformed subgraph so its accumulating state stays out of the parent. One fan-out for the three verify checks, with a commutative reducer and an all-or-nothing join because a failed check must block a send. One human gate before `issue_credit`, containing exactly that one call. No supervisor.
+
+That last item is a decision, not an omission. Atlas has one open-ended step; a supervisor would add a routing call per hop, double the token cost, and introduce a dilution ceiling, all to coordinate workers that a single conditional edge already dispatches correctly.
+
+---
+
+Next: [Node or Function?](/book/langgraph/node-or-function). When a node earns its overhead, and when you should have written a plain function.
+
+## Takeaways
+
+- The same seven shapes as Part VI, but in a graph each carries a bill in state growth, checkpoint size, streaming complexity, and bounding requirements.
+- A pipeline whose edges are all unconditional is a function paying for checkpointing it doesn't use.
+- Loops multiply checkpoint storage by iteration count, and any side effect inside one can happen N times, plus again on replay.
+- Fan-out requires commutative reducers, a concurrency cap, an explicit partial-failure policy, and a fix for the shared-prefix cache miss.
+- A supervisor is an agent whose actions are "call worker X." Routing accuracy degrades after roughly 8–12 round trips as history crowds out task state, and it roughly doubles token spend.
+- Direct agent-to-agent handoff trades that for a combinatorial failure surface, 45 pairs at ten agents. Start with a supervisor and move only on data.
+- A human gate's node must contain exactly one side-effecting call, because resume re-runs the node from the top.
+- Subgraph streaming needs an early decision: nesting changes the shape of every chunk.
+- The two topologies whose state grows without a natural end, loop and supervisor, are the two where the model decides how many times something happens. Bound both.

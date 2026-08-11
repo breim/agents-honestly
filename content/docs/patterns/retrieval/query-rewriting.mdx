@@ -1,0 +1,176 @@
+---
+title: "Query Rewriting"
+description: "Turn a conversational question into something a retriever can actually match."
+---
+
+## Problem
+
+Three turns into a ticket about RB-400 relays, the customer writes:
+
+> *"What about the opened ones?"*
+
+Sent to the retriever verbatim, that string matches nothing useful. It contains no product, no policy area, and no noun that appears in any document. Its meaning lives entirely in the two turns before it.
+
+The same failure has three other shapes. **Vocabulary mismatch**: the customer writes *"can we send it back"* and the policy says *"return authorization."* **Multi-part questions**: *"can we return them and how long does the credit take"* is two retrievals wearing one sentence. **Under-specification**: *"is this covered"* has no retrievable content at all.
+
+In every case the retriever is working correctly. The query is the problem.
+
+## Forces
+
+- **Users write conversationally**; corpora are written formally. The two vocabularies differ systematically.
+- **Meaning is distributed across turns**, and the retriever sees one string.
+- **Rewriting costs a model call** before every search, on the critical path.
+- **A rewrite can destroy information**, particularly exact identifiers, which are the tokens [lexical search](/book/retrieval/lexical-search) most depends on.
+- **The user's intent is authoritative** and a rewrite is a guess about it.
+- **More queries retrieve more**, but multiply cost and can drown the good result in near-misses.
+
+## Solution
+
+Rewrite the query before it reaches the retriever, with **three distinct operations** that solve three distinct failures.
+
+<Figure caption="Three operations, applied in order. Each fixes a different failure, and only the first is always needed." frame={false}>
+
+```
+   "what about the opened ones?"
+        │
+   ①  DECONTEXTUALIZE   resolve pronouns and ellipsis against the
+        │               recent turns — the only always-necessary step
+        ▼
+   "can RB-400 relays be returned if the box was opened?"
+        │
+   ②  NORMALIZE         map user vocabulary onto corpus vocabulary
+        │               "send back" → "return authorization"
+        ▼
+   "RB-400 relay return authorization, packaging opened,
+    components uninstalled"
+        │
+   ③  DECOMPOSE         split genuinely multi-part questions into
+        │               separate retrievals
+        ▼
+   ["RB-400 return eligibility opened packaging",
+    "credit processing time after return authorization"]
+```
+
+</Figure>
+
+Four rules:
+
+**Decontextualization is the one you always need.** In any multi-turn system, most queries are unresolvable alone. The other two are optional refinements; this one is the difference between retrieving and not.
+
+**Preserve identifiers verbatim.** This is the guard on normalization. Mapping user vocabulary onto corpus vocabulary is the second operation's whole job, and it is also the one that can destroy a query, because it cannot tell a phrase worth translating from a token that must not move. Extract `RB-400`, order numbers, SKUs, and invoice IDs *before* rewriting and carry them through untouched. A rewrite that paraphrases `RB-400` into "the relay product" has destroyed the exact token that would have matched, which is the most common way this pattern makes retrieval worse instead of better.
+
+**Search the original too.** Keep the user's literal string as one of the candidate queries and [fuse the result lists](/book/patterns/retrieval/hybrid-fusion). The rewrite is a hypothesis, and a bad rewrite should not be able to lose a result the original would have found.
+
+**Decompose only when genuinely multi-part.** Splitting a single question into three produces three mediocre retrievals and a fused list dominated by near-misses. The test is whether the parts have *different answers in different documents*.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/rewrite.ts"
+const IDENTIFIER = /\b([A-Z]{2,}-\d{3,}|\d{4,})\b/g;
+
+export interface RewrittenQuery {
+  queries: string[];       // always includes the original
+  identifiers: string[];   // extracted before rewriting, never paraphrased
+}
+
+export async function rewrite(
+  question: string, recentTurns: Turn[],
+): Promise<RewrittenQuery> {
+  // Extract first. These are the tokens lexical search depends on and the
+  // ones a paraphrase is most likely to destroy.
+  const identifiers = [...question.matchAll(IDENTIFIER)].map(m => m[0]);
+
+  // Only the last few turns — decontextualization needs recency, not history.
+  const { resolved, parts } = await model.structured({
+    schema: RewriteSchema,
+    system: REWRITE_PROMPT,        // "resolve references; keep IDs verbatim"
+    input: { question, context: recentTurns.slice(-3) },
+  });
+
+  return {
+    // The original is always a candidate: a bad rewrite must not be able
+    // to lose a result the literal string would have found.
+    queries: dedupe([question, resolved, ...parts]),
+    identifiers,
+  };
+}
+
+// Used by the retriever: identifiers go to the lexical leg as exact
+// filters, the queries go to both legs, and the lists are fused.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/rewrite.py"
+import re
+
+IDENTIFIER = re.compile(r"\b([A-Z]{2,}-\d{3,}|\d{4,})\b")
+
+
+class Rewritten(BaseModel):
+    resolved: str
+    parts: list[str] = []
+
+
+async def rewrite(question: str, recent_turns: list[Turn]) -> dict:
+    # Extract first. These are the tokens lexical search depends on and the
+    # ones a paraphrase is most likely to destroy.
+    identifiers = IDENTIFIER.findall(question)
+
+    # Only the last few turns — decontextualization needs recency.
+    out = await model.structured(
+        schema=Rewritten,
+        system=REWRITE_PROMPT,       # "resolve references; keep IDs verbatim"
+        input={"question": question, "context": recent_turns[-3:]},
+    )
+
+    return {
+        # The original is always a candidate: a bad rewrite must not lose
+        # a result the literal string would have found.
+        "queries": dedupe([question, out.resolved, *out.parts]),
+        "identifiers": identifiers,
+    }
+```
+
+</Tab>
+</Tabs>
+
+Use a small, fast model with low temperature. Rewriting needs faithfulness rather than judgment, and it sits on the latency path of every search.
+
+## Trade-offs
+
+**Latency on every retrieval.** A model call before the search, before the answer. On an [on-demand retrieval](/book/patterns/context/retrieval-on-demand) path this stacks with the search turn itself. A small model keeps it to a few hundred milliseconds; skipping it on the first turn of a conversation, where there is no context to resolve, is a cheap optimization.
+
+**The rewrite can be wrong.** It resolves "the opened ones" to the wrong antecedent and retrieves confidently about something else. Keeping the original query in the candidate set bounds this: the fused list still contains whatever the literal string found.
+
+**Multi-query multiplies cost.** Three queries mean three retrievals and a fusion step. The recall gain is real and the precision cost is also real. [Measure it](/book/retrieval/retrieval-evals) rather than assuming more queries is better.
+
+**It is another place personal data flows.** The rewritten query is sent to a model and logged in your traces. If the question contains customer information, so does the rewrite, [handles, not values](/book/security/pii-and-compliance), applies here too.
+
+## When not to use it
+
+**Single-turn search.** With no conversation, there are no references to resolve, and the remaining two operations are worth much less. A search box does not need this.
+
+**When the query is already keyword-rich.** *"RB-400 return policy"* is a good query. Rewriting it risks losing `RB-400` and gains nothing, which is why an identifier-heavy query is a reasonable trigger to skip the rewrite entirely.
+
+**When latency is the binding constraint.** Autocomplete, type-ahead, anything sub-second. Rewriting doubles the round trips before the first result.
+
+**When the retriever already handles it.** Some systems do query understanding internally. Rewriting on top of that is two guesses stacked, and the second one cannot see what the first did.
+
+<Aside type="caution" title="A rewrite is not a search-quality substitute">
+When retrieval is bad, rewriting is the tempting fix because it is a prompt change rather than an infrastructure change. It is frequently the wrong fix.
+
+If the right chunk is not in the index, is chunked so the answer spans a boundary, or is outranked by a superseded version, no query phrasing recovers it. Check [recall@k with the ideal query](/book/retrieval/retrieval-evals) first: if a hand-written perfect query still misses, the problem is [chunking](/book/retrieval/chunking), [filtering](/book/retrieval/metadata-and-authorization), or the corpus, and rewriting will just make the failure harder to diagnose.
+</Aside>
+
+## Related
+
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): how the original and rewritten queries' result lists get merged
+- [Retrieval on Demand](/book/patterns/context/retrieval-on-demand): where the rewrite runs when the agent drives the search
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): fixing precision after retrieval instead of before
+- [Lexical Search](/book/retrieval/lexical-search): why preserving identifiers verbatim matters
+- [Retrieval Evals](/book/retrieval/retrieval-evals): how to tell whether the rewrite helped

@@ -1,0 +1,174 @@
+---
+title: "Freshness Routing"
+description: "Send time-sensitive questions to the live system, not the index."
+---
+
+## Problem
+
+A customer asks where order 4921 is. The agent retrieves from the index, finds a shipment record, and answers: *"It shipped on the 12th and is in transit."*
+
+It was delivered yesterday. The index was built at 02:00 and the delivery scan came in at 14:30.
+
+Nothing errored. Retrieval returned a genuinely relevant, genuinely indexed document, and the answer was wrong in the way that costs a customer: confidently, specifically, and with no hedge. The failure is not retrieval quality. **It is that the question had a freshness requirement the retrieval path could not meet, and nothing checked.**
+
+The same shape appears on the document side. The returns policy was superseded at 09:00; the index still serves v6 alongside v7, and [the two disagree](/book/first-agent/the-problem).
+
+## Forces
+
+- **Indexes lag by construction.** Embedding and ingestion take time, and the lag is measured in hours for most corpora.
+- **Staleness tolerance varies enormously by data type**: a warranty policy is stable for years, a shipment status for minutes.
+- **The live system is authoritative and expensive**: rate-limited, slower, and sometimes down.
+- **The question, not the data, determines the requirement.** *"What is our standard delivery window"* and *"where is my order"* both touch shipping.
+- **Staleness is invisible in the result.** An indexed record does not announce its age unless you make it.
+
+## Solution
+
+Classify every source by **volatility**, and route the question to a path that can meet its freshness requirement.
+
+<Figure caption="Volatility is a property of the data. The freshness requirement is a property of the question. Route where they meet." frame={false}>
+
+```
+   VOLATILITY OF THE SOURCE          FRESHNESS THE QUESTION NEEDS
+   ────────────────────────          ────────────────────────────
+   static      policy, contracts     "what does the policy say"
+   ~years      ─────────────────▶    index is fine, always
+
+   slow        product specs,        "what is the lead time on
+   ~weeks      standard terms         this line"
+                                     ─▶ index, with as-of stamp
+
+   fast        pricing, inventory    "is this in stock"
+   ~hours      ─────────────────▶    index only if fresher than
+                                        the tolerance; else live
+
+   live        order status,         "where is order 4921"
+   ~seconds    balances, tickets     ─▶ ALWAYS live. never indexed
+```
+
+</Figure>
+
+Four rules:
+
+**Never index live-state data for question-answering.** Order status, balances, open ticket state, current inventory. If it is in the index at all it is for *finding* records, never for *reporting* their state, and the tool that reports state must be a live call. This is the rule that fixes the opening scene.
+
+**Stamp everything with as-of.** Every retrieved chunk carries `indexed_at` and every live result carries `fetched_at`, and both reach the model. A model told *"as of 02:00 today"* will hedge appropriately; a model told nothing will not.
+
+**Route on the question, and put the rule in the tool description.** *"Use `get_order` for current status. `query_warehouse` reports historical shipments and is current as of the last nightly build."* This is the same mechanism as [retrieval-as-tool routing](/book/patterns/retrieval/retrieval-as-tool): at runtime the routing rule is a sentence in a tool description.
+
+**Filter superseded versions at the source.** `current: true` in the [predicate](/book/patterns/retrieval/filtered-retrieval), not a post-hoc preference for the newest hit. A superseded document that never enters the candidate set cannot be cited, and the alternative, hoping the ranker prefers v7, fails silently.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/retrieval/freshness.ts"
+export type Volatility = 'static' | 'slow' | 'fast' | 'live';
+
+export interface SourceSpec {
+  volatility: Volatility;
+  maxStalenessMs: number;    // beyond this, the index must not answer
+  liveFallback?: string;     // the tool to call instead
+}
+
+export async function retrieveWithFreshness(
+  query: string, spec: SourceSpec, ctx: RunContext,
+): Promise<Passage[]> {
+  // Live data is never answered from the index, whatever its age.
+  if (spec.volatility === 'live') {
+    throw new WrongPathForLiveData(spec.liveFallback!);
+  }
+
+  const hits = await search(query, ctx.principal, 50);
+  const oldest = Math.max(...hits.map(h => Date.now() - h.indexedAt));
+
+  if (oldest > spec.maxStalenessMs && spec.liveFallback) {
+    // The index is too stale for this question. Say so as an instruction.
+    ctx.trace.inc('retrieval.staleness_fallback');
+    return [{
+      text: `The index is ${Math.round(oldest / 3_600_000)}h old, older than ` +
+            `this question tolerates. Call ${spec.liveFallback} instead.`,
+      asOf: null,
+    }];
+  }
+
+  // Staleness is invisible unless you make it visible.
+  return hits.map(h => ({ ...h, asOf: new Date(h.indexedAt).toISOString() }));
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/retrieval/freshness.py"
+Volatility = Literal["static", "slow", "fast", "live"]
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    volatility: Volatility
+    max_staleness_s: float     # beyond this, the index must not answer
+    live_fallback: str | None = None
+
+
+async def retrieve_with_freshness(query: str, spec: SourceSpec, ctx) -> list[Passage]:
+    # Live data is never answered from the index, whatever its age.
+    if spec.volatility == "live":
+        raise WrongPathForLiveData(spec.live_fallback)
+
+    hits = await search(query, ctx.principal, 50)
+    oldest = max(time.time() - h.indexed_at for h in hits)
+
+    if oldest > spec.max_staleness_s and spec.live_fallback:
+        # The index is too stale for this question. Say so as an instruction.
+        ctx.trace_inc("retrieval.staleness_fallback")
+        return [Passage(
+            text=(f"The index is {oldest / 3600:.0f}h old, older than this "
+                  f"question tolerates. Call {spec.live_fallback} instead."),
+            as_of=None,
+        )]
+
+    # Staleness is invisible unless you make it visible.
+    return [replace(h, as_of=iso(h.indexed_at)) for h in hits]
+```
+
+</Tab>
+</Tabs>
+
+`staleness_fallback` is a metric worth an alert. It rising means either the ingestion pipeline is falling behind or the traffic mix has shifted toward questions the index cannot serve: two different problems, both worth knowing about before a customer finds them.
+
+## Trade-offs
+
+**Live calls are slower, rate-limited, and can be down.** Routing to live improves correctness and adds a dependency to the request path, with the [breaker and fallback](/book/reliability/fallbacks-and-breakers) treatment that implies. The honest fallback for a failed live call is usually *"I can't check that right now"*, not the stale indexed value, which is the thing you were avoiding.
+
+**Volatility classification is manual and drifts.** Someone decides that pricing is `fast` and inventory is `live`, and then the business changes. Review it when sources change, and treat a source with no classification as `live`: deny by default, in the freshness dimension.
+
+**As-of stamps cost tokens and can confuse.** A timestamp on every chunk is a few tokens each and occasionally makes the model hedge when it should not. Worth it: over-hedging is a much cheaper failure than a confidently stale answer.
+
+**Two paths to the same data can disagree.** The index says one thing, the live call another, and both reach the model in a long run. Prefer the live value explicitly and record the disagreement: a run where they diverge is a [poisoning](/book/context/context-poisoning) risk and a signal about ingestion lag.
+
+## When not to use it
+
+**When everything is static.** A documentation corpus with quarterly updates does not need volatility routing. Index it and say so.
+
+**When there is no live system.** If the index *is* the system of record, there is nothing to route to. Report the as-of stamp and set expectations honestly.
+
+**When the index is fresher than the tolerance for every question.** Near-real-time ingestion that lands within seconds makes the distinction moot for most sources, though `live` data should still bypass it, because "usually fresh" is not a guarantee and the failure is silent.
+
+**When the cost of a stale answer is low.** A search-suggestions feature does not need this. Reserve it for the paths where a wrong answer is expensive, which is the same [risk-tier](/book/human-in-the-loop/risk-tiers) instinct applied to reads.
+
+<Aside type="caution" title="Freshness is a retrieval failure that recall@k cannot see">
+Your [retrieval evals](/book/retrieval/retrieval-evals) measure whether the right chunk was found. A stale chunk *is* the right chunk: it is the correct document about the correct order, and recall@k scores it as a hit.
+
+So this failure passes every retrieval metric you have and shows up only in answer-level correctness, usually via a customer. Two things catch it: fixture cases whose correct answer changed after the fixture's index build, and the `staleness_fallback` counter. Both are cheap; neither is standard.
+
+The general lesson recurs across this book: a metric that grades the stage rather than the outcome will report success on a system that is failing, and the fix is to grade at the outcome.
+</Aside>
+
+## Related
+
+- [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool): where the routing rule lives at runtime
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): the `current: true` predicate that excludes superseded versions
+- [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live): the freshness axis of the routing decision
+- [Ingestion Pipeline](/book/retrieval/ingestion-pipeline): change detection, and why the lag exists
+- [Detecting Drift](/book/observability/drift): a rising staleness fallback rate as an early corpus signal

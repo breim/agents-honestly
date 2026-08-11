@@ -1,0 +1,203 @@
+---
+title: "Context as an Allocation Problem"
+description: "Every claimant competes for the same space. Deciding who gets it is an engineering decision, not a default."
+---
+
+
+[Part I](/book/foundations/context-window) established that the context window is a budget you re-spend on every request. This part is about spending it on purpose.
+
+Because right now you aren't. In Atlas v0, the allocation is whatever falls out of the code: the system prompt is however long someone wrote it, the tool schemas are however long their descriptions ended up, retrieval returns however many chunks the default was, and tool results are however much JSON the warehouse felt like returning. Nobody decided any of that. **The default allocation policy is "whoever appends last wins,"** and it is the reason agents get slower, dumber, and more expensive as they run.
+
+Fixing it starts with naming who is competing.
+
+## The claimants
+
+Every request Atlas makes is assembled from a fixed cast, and the useful way to classify them is not by importance but by **how they grow**.
+
+| Claimant | Owner | Growth | Bounded by |
+| --- | --- | --- | --- |
+| System prompt | You, at write time | Fixed | You, obviously |
+| Tool schemas | You, at write time | Fixed per tool, linear in tool count | Your catalogue size |
+| Conversation history | The run | Linear in steps | **Nothing** |
+| Retrieved documents | Your retriever | Fixed per request, `k` × chunk size | Your `k` |
+| Tool results | External systems | **Unbounded** | Nothing, unless you act |
+| The user's message | The user | Small, occasionally not | Nothing |
+| Reserved output | The model | Fixed, if you reserve it | You, if you remember |
+
+Read the "bounded by" column. Three rows say nothing, and those three rows are where every context incident comes from.
+
+**Tool results are the dangerous one**, and specifically because they come from systems that do not know they are talking to a model. `query_warehouse("shipments to Iberia in Q2")` can return forty thousand rows. A document fetch can return a 200-page PDF. Nothing upstream will stop it, the request will simply fail, or worse, succeed after silently dropping the thing you needed.
+
+The rule that falls out is short: **every unbounded claimant must be bounded by you, at the boundary where it enters.** Not by hoping. In v0 we truncated tool results at 4,000 characters, which is a bound, and a bad one, for a reason we'll get to.
+
+## Write the budget down
+
+The discipline is to force the allocation to sum, in advance, like any other capacity plan. Here is Atlas's, for a 200,000-token window:
+
+| Claimant | Allocation | Policy when it exceeds |
+| --- | --- | --- |
+| System prompt | 1,500 | Fail the build. It's a constant; fix the constant. |
+| Tool schemas | 5,000 | Fail the build. Over budget means too many tools. |
+| Retrieved documents | 12,000 | Rerank and take fewer. Never "just add room." |
+| Tool results, current step | 8,000 | Summarize or paginate at the tool boundary |
+| Conversation history | 30,000 | Compact oldest-first |
+| User message | 2,000 | Truncate with a visible marker |
+| **Reserved for output** | **8,000** | Hard reserve, never lent out |
+| **Total** | **66,500** | of 200,000 |
+
+The table carries the policies; the same allocation drawn to scale carries the proportions, and the proportions are the part that argues with your instincts.
+
+<Figure caption="Two thirds of the window is deliberately unspent. That empty region is the plan, not a gap in it.">
+	<ContextBudget
+		window={200000}
+		reserveOutput={8000}
+		segments={[
+			{ label: 'System prompt', tokens: 1500, note: 'constant; fail the build' },
+			{ label: 'Tool schemas', tokens: 5000, note: 'constant; fail the build' },
+			{ label: 'Retrieved documents', tokens: 12000, note: 'rerank, take fewer' },
+			{ label: 'Tool results, current step', tokens: 8000, note: 'bounded at the tool boundary' },
+			{ label: 'Conversation history', tokens: 30000, note: 'compact oldest-first' },
+			{ label: 'User message', tokens: 2000 },
+		]}
+	/>
+</Figure>
+
+Two things surprise people about that table.
+
+**It doesn't add up to the window, and shouldn't.** Sixty-six thousand of two hundred thousand. The remaining space is not unallocated capacity waiting to be used. It is headroom, and the next section explains why filling it would make Atlas worse rather than better.
+
+**Every row has a policy, not just a number.** A budget without a stated response to exceeding it is a wish. Notice that two rows say "fail the build": the system prompt and the tool schemas are constants, so exceeding them is a code-review problem, not a runtime one. Enforcing a constant at runtime is an admission that nobody owns it.
+
+## You are budgeting attention, not tokens
+
+Here is the sharpening that turns this from bookkeeping into engineering.
+
+Tokens are not fungible. Two thousand tokens of the right document and two thousand tokens of a *nearly* right document cost the same in dollars and do very different things to your answer.
+
+Recent work measuring long-context behaviour across frontier models found accuracy degrading non-uniformly with input length, in some settings by tens of percent well before the documented window limit. But the more useful finding is about *what* degrades it: **the dominant factor is how hard the answer is to distinguish from the material around it**, not how much material there is. Distractors that are semantically close to the target hurt far more than unrelated filler of the same size.
+
+That inverts the naive retrieval instinct. "Retrieve top-20 instead of top-5, the window can take it" is not a 4× cost increase with a safety margin attached. It is specifically adding the fifteen chunks most likely to be confusable with the correct one, because similarity is exactly what ranked them highly. **The extra chunks are drawn from the worst possible distribution.**
+
+<Aside type="note" title="The consequence for retrieval">
+Five well-reranked chunks beat twenty raw ones, not only on cost, but on accuracy. This is why [reranking](/book/retrieval/hybrid-and-reranking) earns its latency, and why "just increase `k`" is a fix that measures well in a retrieval eval and badly in an end-to-end one.
+
+Related, and worth holding loosely because it is a strong claim from a young literature: coherent, well-structured input has been observed to degrade long-context attention *more* than shuffled input of the same length. If it holds, it means a tidy wall of related documents is closer to the worst case than the best.
+</Aside>
+
+So the budget above is not really 66,500 tokens of capacity. It is 66,500 tokens of *competition for attention*, and the question for every row is not "does this fit" but "does this earn its place against everything else in the prompt."
+
+That is also why the window's headroom stays empty. A larger window is permission to send more; it is not a reason to, and treating spare capacity as free is how a system that worked at 20,000 tokens quietly stops working at 120,000 with no error anywhere.
+
+## Decide the eviction order now
+
+The budget will be exceeded: on the long investigation, the chatty customer, the forty-thousand-row query. When it is, something has to give. Deciding what, under pressure, in an incident, is how teams delete the thing they needed.
+
+Atlas's order, decided in advance and written next to the budget:
+
+```
+   evict first ────────────────────────────────────▶ never evict
+
+   ① oldest tool results        (facts already used and summarized)
+   ② oldest conversation turns  (compacted into a rolling summary)
+   ③ lower-ranked retrieved docs
+   ④ recent tool results
+   ⑤ the user's latest message
+   ⑥ tool schemas               (evicting these removes capability)
+   ⑦ system prompt              (evicting this removes the policy)
+   ⑧ reserved output            (evicting this truncates the answer)
+```
+
+The ordering encodes a claim worth making explicit: **old facts are cheaper to lose than old instructions.** A tool result from step two has usually already done its work: the model read it, drew a conclusion, and that conclusion is in the transcript. The system prompt, by contrast, has to do its work again on every single step.
+
+## The mix changes as the run does
+
+One more reason a single static budget isn't enough: the shape of the competition moves through a run.
+
+<Figure caption="Early steps are dominated by fixed costs; late steps by accumulated history. The same allocation cannot be right at both ends." frame={false}>
+
+```
+   step 1                    step 4                    step 12
+   ┌──────────────┐          ┌──────────────┐          ┌──────────────┐
+   │ system  ███  │          │ system  ██   │          │ system  █    │
+   │ schemas ████ │          │ schemas ███  │          │ schemas █    │
+   │ ticket  █    │          │ docs    ████ │          │ docs    ██   │
+   │              │          │ results ███  │          │ results ███  │
+   │              │          │ history ██   │          │ history ████ │
+   └──────────────┘          └──────────────┘          │         ████ │
+    fixed cost is             balanced                 └──────────────┘
+    ~90% of the prompt                                  history is the prompt
+```
+
+</Figure>
+
+At step 1, almost everything you pay for is fixed overhead, which is why [caching](/book/foundations/prompt-caching) that prefix is the highest-leverage thing available, and why trimming tool descriptions pays off on every single request forever.
+
+By step 12, history dominates, and no amount of schema trimming helps. That is the regime where [compaction](/book/context/compaction) is the only lever that matters. Applying the late-run fix to an early-run problem, or vice versa, is the most common wasted optimization in this field.
+
+## Make it visible
+
+You cannot budget what you don't measure, and none of the above survives contact with production unless the breakdown is recorded per request.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="budget.ts"
+const breakdown = {
+  system: await countTokens(SYSTEM),
+  schemas: await countTokens(TOOLS),
+  history: await countTokens(messages.slice(0, -1)),
+  results: await countTokens(latestResults),
+  documents: await countTokens(retrieved),
+};
+
+const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+log.info('context.allocation', { step, total, ...breakdown });
+
+if (total > BUDGET.softLimit) await compact(messages);
+if (total > BUDGET.hardLimit) throw new BudgetExceeded(breakdown);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="budget.py"
+breakdown = {
+    "system": count_tokens(SYSTEM),
+    "schemas": count_tokens(TOOLS),
+    "history": count_tokens(messages[:-1]),
+    "results": count_tokens(latest_results),
+    "documents": count_tokens(retrieved),
+}
+
+total = sum(breakdown.values())
+log.info("context.allocation", step=step, total=total, **breakdown)
+
+if total > BUDGET.soft_limit:
+    compact(messages)
+if total > BUDGET.hard_limit:
+    raise BudgetExceeded(breakdown)
+```
+
+</Tab>
+</Tabs>
+
+Two limits, not one. The soft limit triggers a policy; the hard limit is the assertion that the policy worked. A system with only a hard limit discovers its context problems as outages.
+
+That log line is also the highest-value thing in this chapter operationally. The first time you plot it per step across a few hundred real runs, you will find one claimant taking three times what you assumed, and it is almost never the one you were optimizing.
+
+---
+
+Next: [The System Prompt](/book/context/system-prompt), what belongs in it, what does not, and why the instructions you inherited from an older model now misfire.
+
+## Takeaways
+
+- The default allocation policy is "whoever appends last wins." Every context incident starts there.
+- Classify claimants by growth behaviour, not importance. History, tool results, and user input are unbounded; bound them where they enter.
+- Write the budget as a table that sums, and give every row a policy for exceeding it. A number without a response is a wish.
+- Constants like the system prompt and tool schemas should fail the build, not the request.
+- Tokens are not fungible. Degradation tracks how confusable the answer is with its surroundings, more than raw length.
+- Raising `k` adds precisely the chunks most likely to be mistaken for the right one. Rerank and send fewer.
+- Leave headroom deliberately. Spare window capacity is not free space; filling it is how a system silently gets worse.
+- Decide eviction order before you need it. Old facts are cheaper to lose than old instructions.
+- The mix shifts across a run: fixed overhead dominates early, history dominates late. Match the lever to the phase.
+- Log the per-request breakdown. One claimant is always three times what you assumed.

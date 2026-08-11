@@ -1,0 +1,238 @@
+---
+title: "Concurrency, Rate Limits, Backpressure"
+description: "Sharing a finite provider quota across everything that wants it."
+---
+
+At 02:00 the nightly eval suite starts. It is a batch job over four thousand fixtures, it is not urgent, and it was configured with a concurrency of fifty because that made it finish before breakfast.
+
+At 02:04 the on-call for the support platform gets paged. Interactive runs are timing out. Nothing is down: the eval job is consuming the account's token quota, so every live request is getting `429`, retrying, and blowing its deadline. A job with no deadline at all has taken the quota from the one workload that has users waiting.
+
+The quota was never the problem. **Nothing decided who gets it.**
+
+That is what this chapter is about, and it is the last of the three reliability mechanics: [retries](/book/reliability/timeouts-and-retries) control how you re-attempt, [breakers](/book/reliability/fallbacks-and-breakers) control when you stop attempting, and admission control decides what gets attempted at all.
+
+## Your limit is not requests
+
+The first thing to internalize is that the constraint agents hit is not the one most rate-limiting code is written for.
+
+Providers meter on several axes at once, and typically as a **token bucket**. Capacity refills continuously rather than resetting on a boundary, so a 60-per-minute limit means roughly one per second with steady refill, not sixty and then a wall.
+
+| Axis | What it counts |
+| --- | --- |
+| **RPM** | Requests, regardless of size. A 200-token call and a 200,000-token call are both one |
+| **Input TPM** | Input tokens per minute, usually metered separately |
+| **Output TPM** | Output tokens per minute, on its own smaller budget |
+| Concurrency | Simultaneous in-flight requests, on some tiers |
+
+Now recall the shape of agent traffic from [the cost chapter](/book/production/cost-engineering): the whole transcript is re-sent every turn, so a run's input tokens grow roughly with the square of its turn count while its request count grows linearly.
+
+> **Agents exhaust input-token quota long before they exhaust request quota. Rate limiting by requests per second measures the axis you are not running out of.**
+
+Which gives the number that should be on your capacity dashboard, and usually is not:
+
+```
+   effective concurrent runs  ≈       input TPM budget
+                                ────────────────────────────
+                                avg context × turns per minute
+
+   40-turn run · 30k avg context · one turn every 4 s
+     → ~450k input tokens/min for ONE run
+
+   A 2M input-TPM budget is therefore about four concurrent runs.
+   Not four hundred. Your worker pool has thirty-two slots.
+```
+
+That arithmetic is the reason so many teams discover their real ceiling in an incident. The worker pool was sized by CPU, and the binding constraint was never CPU.
+
+## Admit or reject, do not queue in the middle
+
+The instinct when capacity is short is to queue. For agents that is subtly wrong, because of a property no ordinary request has: **a run that starts and does not finish has spent real money and produced nothing.**
+
+A half-completed run that dies at step fourteen consumed fourteen steps of tokens, holds a checkpoint, and delivered zero value. Queueing *inside* the run, letting steps stall on quota, converts a capacity shortage into a fleet of expensive zombies.
+
+<Figure caption="Decide at the door, where rejection is free. Once a run has spent tokens, every option is worse." frame={false}>
+
+```
+   incoming run
+        │
+        ▼
+   ┌─────────────────┐   no capacity, low priority
+   │  ADMISSION      │ ──────────────────────────▶ reject / defer
+   │  do we have     │                              (cheap, honest)
+   │  quota for a    │
+   │  WHOLE run?     │
+   └────────┬────────┘
+            │ yes
+            ▼
+   ┌─────────────────┐
+   │  RUN            │  from here, stalling costs money and
+   │  steps 1..N     │  finishes nothing. Do not queue here.
+   └─────────────────┘
+```
+
+</Figure>
+
+So the rule is: **estimate the whole run's budget at admission, and only start runs you can afford to finish.** An estimate is available. You know the workflow, its typical turn count, and its typical context size from your own traces. It will be wrong sometimes; it is still far better than starting optimistically and stranding work halfway.
+
+Rejection at the door is also the *honest* signal. A caller told "not now, retry in ninety seconds" can make a decision. A caller whose run silently stalls at step nine cannot.
+
+## Shed load client-side, before the provider does it for you
+
+A `429` is the provider deciding for you, and it is the worst place to find out: you have already paid the round trip, the retry machinery engages, and, as [the retry chapter](/book/reliability/timeouts-and-retries) covered, that is exactly when amplification starts.
+
+Run your own limiter sized **below** the provider's, so you shed load deliberately and never see a `429` in normal operation. Then a `429` becomes what it should be: a signal that your model of your own quota is wrong, which is worth alerting on.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/gateway/admission.ts"
+export interface Quota {
+  inputTpm: number;
+  outputTpm: number;
+  rpm: number;
+}
+
+export type Priority = 'interactive' | 'background' | 'batch';
+
+// Reserve a share per class so a batch job cannot take the whole bucket.
+const SHARE: Record<Priority, number> = {
+  interactive: 0.70,
+  background:  0.20,
+  batch:       0.10,
+};
+
+export function admit(
+  run: { priority: Priority; tenantId: string; estInputTokens: number },
+  used: { byPriority: Record<Priority, number>; byTenant: Record<string, number> },
+  quota: Quota,
+  tenantCap: number,
+): { admit: true } | { admit: false; retryAfterMs: number } {
+  // Priority share — interactive keeps its floor even under batch load.
+  const classBudget = quota.inputTpm * SHARE[run.priority];
+  if (used.byPriority[run.priority] + run.estInputTokens > classBudget) {
+    return { admit: false, retryAfterMs: backoffFor(run.priority) };
+  }
+  // Per-tenant cap — one customer's burst cannot starve the others.
+  if ((used.byTenant[run.tenantId] ?? 0) + run.estInputTokens > tenantCap) {
+    return { admit: false, retryAfterMs: 30_000 };
+  }
+  return { admit: true };
+}
+
+// Estimate the WHOLE run, not the next call. Starting a run you cannot
+// finish spends tokens and delivers nothing.
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/gateway/admission.py"
+from typing import Literal
+
+Priority = Literal["interactive", "background", "batch"]
+
+# Reserve a share per class so a batch job cannot take the whole bucket.
+SHARE: dict[Priority, float] = {
+    "interactive": 0.70,
+    "background": 0.20,
+    "batch": 0.10,
+}
+
+
+def admit(run, used, quota, tenant_cap) -> tuple[bool, int]:
+    # Priority share — interactive keeps its floor even under batch load.
+    class_budget = quota.input_tpm * SHARE[run.priority]
+    if used.by_priority[run.priority] + run.est_input_tokens > class_budget:
+        return False, backoff_for(run.priority)
+
+    # Per-tenant cap — one customer's burst cannot starve the others.
+    if used.by_tenant.get(run.tenant_id, 0) + run.est_input_tokens > tenant_cap:
+        return False, 30_000
+
+    return True, 0
+
+
+# Estimate the WHOLE run, not the next call. Starting a run you cannot
+# finish spends tokens and delivers nothing.
+```
+
+</Tab>
+</Tabs>
+
+Two allocations do the work, and both are policy rather than mechanism.
+
+**Priority shares** give interactive traffic a floor that batch work cannot cross. The 2am incident does not happen when the eval job is capped at 10% of input TPM, and, critically, the eval job still finishes, just later, which is exactly right for a workload with no deadline. Put the batch work on a [batch endpoint](/book/patterns/cost/batch-api-offload) where it is cheaper and metered separately, and the problem mostly disappears.
+
+**Per-tenant caps** stop one customer's burst from consuming a shared quota. In a multi-tenant deployment this is [fairness](/book/patterns/scale/tenant-fairness), and it is the same argument as the [isolation chapter's](/book/security/tenant-isolation): a shared resource with no per-tenant bound is a cross-tenant failure waiting for traffic.
+
+<Aside type="caution" title="Retries are load, and they are not in your admission control">
+The subtle interaction: your limiter meters *new* work, while retries are generated inside runs that were already admitted. Under degradation, retry traffic rises exactly when there is least room for it, and it bypasses the door.
+
+Which is why [the retry budget](/book/reliability/timeouts-and-retries) and admission control are one system, not two. Count retries against the same quota, and when the retry budget is exhausted, fail through. The [breaker](/book/reliability/fallbacks-and-breakers) is a better answer than a queue at that point.
+</Aside>
+
+## Propagate the pressure
+
+Backpressure that stops at your gateway is not backpressure; it is a queue with extra steps. The signal has to reach whoever is producing work.
+
+**Upstream, tell the truth.** Return a real `429`-equivalent with a `Retry-After` to your own callers. A caller who knows can defer; a caller who is stalled cannot.
+
+**Downstream, remember tools are rate limited too.** Your database, your search index, and the third-party APIs behind your tools all have limits, and an agent that fans out over two hundred documents can flatten a service that was fine with human traffic. [Downstream rate limiting](/book/patterns/scale/downstream-rate-limiting) belongs in the same dispatcher as everything else from [Part XVII](/book/security/least-privilege).
+
+**Bound the fan-out itself.** A [map-reduce over documents](/book/patterns/scale/mapreduce-tree) with unbounded parallelism is a self-inflicted burst. Cap it, and cap it against the token budget rather than a thread count.
+
+**Shed by value, not by arrival order.** When you must drop work, drop the cheapest to lose: a speculative pre-fetch before a user's live question, a nightly backfill before an SLA-bound ticket. This requires knowing what a run is worth, which is the same per-run value the [cost cap](/book/production/cost-engineering) was derived from.
+
+## What to watch
+
+Four signals, and only one of them is on a default dashboard:
+
+| Signal | Means |
+| --- | --- |
+| **Input TPM utilization vs. budget** | Your actual headroom. The number that should be on the wall |
+| **Admission rejection rate, by priority** | The system working, but rising interactive rejections mean real capacity shortage |
+| **`429` rate from the provider** | Your model of your own quota is wrong. Should be ~zero |
+| **Queue age at admission** (not depth) | Depth without age hides whether anything is starving |
+
+Queue *age* over depth is the one worth insisting on. A queue of ten thousand items that drains in twenty seconds is healthy; a queue of forty items where the oldest has waited nine minutes is not, and depth alone reports the first as the emergency.
+
+## Atlas, concretely
+
+| Control | Setting |
+| --- | --- |
+| Metered axis | Input TPM primarily; RPM and output TPM as secondary guards |
+| Client limiter | Sized at 85% of the account quota. `429` should never be seen |
+| Priority shares | Interactive 70%, background 20%, batch 10% |
+| Batch work | Nightly evals and backfills on the batch endpoint, separate quota |
+| Admission unit | The whole run, estimated from that workflow's historical p75 |
+| Per-tenant cap | 25% of the interactive share, per customer |
+| Fan-out cap | 8 concurrent document workers, bounded by tokens rather than threads |
+| Retries | Counted against the same quota as new work |
+| Shed order | Speculative prefetch → background enrichment → batch → never interactive |
+| Alerts | Input TPM > 80% for 5 min; any provider `429`; interactive queue age > 60 s |
+
+The 2am incident is prevented by two rows: the batch share cap, and putting the eval job on a separately metered endpoint. Neither required more capacity. They required someone to decide, in advance, who gets it when there is not enough.
+
+That is the whole chapter. Capacity problems in agentic systems are almost never a shortage of capacity. They are the absence of a decision about allocation, discovered at the worst possible time by whoever is on call.
+
+---
+
+Next: [Failure Injection](/book/reliability/failure-injection), kill the worker mid-run, fail the third tool call, do it on purpose before production does it for you.
+
+## Takeaways
+
+- Providers meter on several axes at once: RPM, input TPM, output TPM. The meter is usually a continuously refilling token bucket rather than a per-minute reset.
+- Agents exhaust input-token quota long before request quota, because the transcript is re-sent every turn. Rate limiting by requests measures the axis you are not running out of.
+- Compute effective concurrent runs as input TPM budget over (average context × turns per minute). It is often single digits, and your worker pool is not.
+- Decide at admission. A run that starts and does not finish has spent real money and produced nothing.
+- Estimate the whole run's budget before starting it, from your own traces. A wrong estimate beats stranding work at step fourteen.
+- Never queue inside a run. A capacity shortage becomes a fleet of expensive zombies.
+- Run a client-side limiter sized below the provider's, so you shed deliberately. A `429` should then be an alert that your model of your quota is wrong.
+- Reserve priority shares so batch work cannot take the interactive floor, and put batch work on a batch endpoint, where it is cheaper and metered separately.
+- Cap per tenant. A shared quota with no per-tenant bound is a cross-tenant failure waiting for traffic.
+- Retries are generated inside admitted runs and bypass the door. Count them against the same quota; retry budget and admission control are one system.
+- Propagate pressure upstream with honest `Retry-After`, and downstream to tools. An agent fanning out can flatten a service that was fine with human traffic.
+- Bound fan-out against tokens, not thread count.
+- Shed by value, not arrival order.
+- Watch queue *age*, not depth. Depth reports a fast-draining backlog as the emergency and a starving one as fine.
+- Capacity incidents are usually not a shortage of capacity. They are a missing decision about allocation, found by whoever is on call.

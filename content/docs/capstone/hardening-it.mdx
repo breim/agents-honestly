@@ -1,0 +1,159 @@
+---
+title: "Hardening It"
+description: "Evals, tracing, failure injection, authorization, and the security review."
+---
+
+Atlas works. It answers policy questions with citations, runs the aggregation, follows the account graph, and issues tier-0 credits through a dispatcher with eight checks in it.
+
+None of that is evidence. "It works" at this stage means *nobody has seen it fail recently*, which is a statement about observation rather than about the system. And for a component whose characteristic failure is [a confident wrong answer](/book/reliability/error-taxonomy), it is the weakest possible claim.
+
+This chapter is the work between *it works* and *we can point customers at it*. It has four parts, and they are ordered by what each one makes possible for the next.
+
+## 1 · Measurement, because nothing after this is assessable without it
+
+The twenty-ticket set from [the original brief](/book/first-agent/the-problem) grows into a real dataset. Three sources, and the proportions matter:
+
+| Source | Count | Purpose |
+| --- | --- | --- |
+| Hand-labeled from real tickets | 180 | Distribution matches production |
+| **Promoted from production failures** | growing | Every incident becomes a fixture |
+| Adversarial, written on purpose | 40 | Injection, cross-account, out-of-scope |
+| Negative, must return nothing | 30 | [Isolation](/book/retrieval/metadata-and-authorization) |
+
+The second row is the one that compounds. [Replay](/book/observability/replay-debugging) turns each production failure into a deterministic fixture, and the corpus grows at exactly the rate the system actually breaks, which is a better sampling strategy than anything anyone designs up front.
+
+The fourth row is the one teams skip. A test asserting *this document ID never appears in the retrieval trace for this principal* is a rare deterministic assertion in a probabilistic system, and you should take every one this field offers.
+
+**What gates and what reports:** the invariants gate: an invariant violation fails the build, no threshold, no discussion. The [rates](/book/capstone/the-brief) report as a distribution against a flake budget, because gating a noisy metric on a single run produces a suite people learn to re-run until it passes.
+
+Then [online scoring](/book/evals/online-evals) on a production sample, because CI has the labels and production has the sample size, and neither substitutes for the other.
+
+## 2 · Tracing, so a failure is answerable rather than mysterious
+
+Already built during weeks one and two, and the hardening question is narrower: does a trace answer the [eight questions](/book/observability/what-a-trace-must-answer) for the specific failures Atlas will actually have?
+
+Four fields carry disproportionate weight, and all four exist for more than one reason:
+
+| Field | Debugging | Also required by |
+| --- | --- | --- |
+| `config_hash` | Which bundle produced this | [Rollout attribution](/book/production/rollout), [drift](/book/observability/drift) |
+| Retrieved chunk IDs **and text** | Why it said that | [Replay](/book/observability/replay-debugging), [poisoning incident scope](/book/security/untrusted-retrieval) |
+| `served_by` | Which model answered | [Silent fallback detection](/book/reliability/fallbacks-and-breakers) |
+| `sub` / `act` / `run_id` | Who authorized this | [Audit](/book/human-in-the-loop/escalation-and-audit), [compliance](/book/security/pii-and-compliance) |
+
+When a field is demanded by three chapters written for different reasons, that is usually the signal it is not optional.
+
+## 3 · Failure injection, which turns claims into observations
+
+[Every reliability mechanism is a hypothesis](/book/reliability/failure-injection) until observed. The CI suite runs six injections on every commit, each asserting the six *reliability* invariants: terminal, no duplicate, bounded, escalated, traceable, contained, which are a different list from [Atlas's nine acceptance invariants](/book/capstone/the-brief):
+
+| Injection | Asserts |
+| --- | --- |
+| Third tool call errors | The model receives it as an instruction; no transport retry |
+| Stream stalls at token 50 | Inactivity timeout fires within 15 s |
+| Worker killed before the dedup record commits | Resume issues **no second credit** |
+| Approval fast-forwarded past the dedup window | **The Friday-to-Monday bug**, still no second credit |
+| `get_order` returns another order's total | Amount re-derivation rejects; run escalates |
+| Ticket carries an injection payload | Taint holds; `issue_credit` denied and escalated |
+
+The fourth row would otherwise take three real days to reproduce and would be found by a customer. The fifth is the only test in the suite that exercises the [semantic class](/book/reliability/error-taxonomy): nothing raises, the agent proceeds, and only the amount re-derivation stands between a corrupted read and a wrong credit.
+
+## 4 · The security review, run as a checklist
+
+Now the part with a real output. [Part XVII](/book/security/threat-model) is eight chapters; run as a review against the built system, it produces findings. Here are Atlas's, which are the ones this book has been arguing you will have.
+
+<Figure caption="Nine findings from one review. Six were design gaps, three were things that had drifted since the design." frame={false}>
+
+```
+   ①  the eval harness calls retrieval without a principal
+   ②  the nightly backfill runs as the service account
+   ③  compaction summaries have no subject_ids
+   ④  the reranker was added without a subprocessor review
+   ⑤  the checkpointer accepts a thread_id argument
+   ⑥  traces are retained 90 days at a third-party vendor
+   ⑦  the fallback path was never eval'd
+   ⑧  tool descriptions ship in code review, not prompt review
+   ⑨  no alert on a run's taint ceiling firing
+```
+
+</Figure>
+
+| # | Finding | Why it happened | Fix |
+| --- | --- | --- | --- |
+| ① | The eval harness retrieves with no principal. It sees every account's corpus | The [principal-required rule](/book/retrieval/metadata-and-authorization) was enforced in the app path, and the harness is not the app path | One retrieval function, no overload without a principal; harness uses a fixture tenant |
+| ② | The nightly backfill runs as the service account with full scope | Nobody was present, so [nobody was named](/book/security/identity) | Named human owner, documented grant, annual expiry, mined scope |
+| ③ | Compaction summaries carry no `subject_ids`, so erasure cannot reach them | Compaction was a [context decision](/book/context/compaction), not a data-protection one | Record subject IDs at creation; retrofit is impossible, so this was nearly a permanent defect |
+| ④ | A reranker was added to improve nDCG; it is a new data processor | [Exactly the way it always arrives](/book/retrieval/metadata-and-authorization) | Subprocessor list updated, region pinned, or removed |
+| ⑤ | The checkpointer takes `thread_id` as an argument | It looked like an ID, not an authorization decision | [Derive the key](/book/security/tenant-isolation): `tenant:thread`, composite, never supplied |
+| ⑥ | Traces hold verbatim prompts for 90 days at a vendor | Retention was set for debugging convenience | 30 days; handles at assembly so traces hold no raw personal data |
+| ⑦ | The fallback rung has never been evaluated | It runs 0.1% of the time, so it is the [least-exercised code](/book/reliability/fallbacks-and-breakers) | Nightly eval against rung 4; 1% of tier-0 traffic served by it permanently |
+| ⑧ | Tool descriptions change through code review | They are [prompt text living in a schema](/book/tools/tool-discovery) | `toolCatalogueHash` in the bundle; description changes run the eval gate |
+| ⑨ | No alert when a taint ceiling denies an action | The control worked and nobody was told | Alert on denial rate. It is the [highest-signal detection](/book/security/sandboxing) available |
+
+Two observations about that table are the point of including it.
+
+**Every finding is a control that existed and had a gap around its edge.** None of them is "we forgot security." Retrieval filtering was implemented, and the eval harness went around it. Identity propagation was implemented, and the scheduled job had no user to propagate. This is the normal shape of security findings in agentic systems, and it is why the review has to be run against the built system rather than the design document.
+
+**Three of the nine were drift.** The reranker, the trace retention, and the tool descriptions were all correct at design time and moved. Which means the review is not a gate you pass once. [Findings ⑧ and ⑨ are specifically mechanisms to catch the next drift](/book/production/versioning) rather than fixes for this one.
+
+<Aside type="caution" title="The finding that was nearly permanent">
+Finding ③ deserves separate attention. Every other item on the list was fixable in days. Missing `subject_ids` on derived artifacts is not retrofittable: the summaries already written have no key, and there is no way to determine after the fact which of them mention a given person.
+
+The only real remedy was to delete the existing summaries and start recording provenance going forward. That was cheap at eleven accounts and six weeks of history. At two years and a thousand accounts it would have been a permanent compliance defect, discovered during an audit.
+
+Which is the general lesson: **the controls that must be designed in are the ones about data you derive.** Everything else can be added later at a cost.
+</Aside>
+
+## The go/no-go
+
+Hardening ends with a decision, and it should be written down before the numbers arrive so that nobody negotiates the bar against the result.
+
+**Hard gates, any failure blocks:**
+
+- Zero invariant violations across the full suite, including adversarial and negative sets.
+- All six failure injections pass.
+- Every finding above either fixed or explicitly accepted by a named person with a date.
+- One run reconstructible end to end from the trace, demonstrated live.
+- Rollback demonstrated: manifest repointed, new runs on the old bundle, in-flight runs finishing.
+
+**Rate gates, measured on the canary, not on fixtures:**
+
+- Escalation recall ≥ 98%. This one is non-negotiable because [its cost is asymmetric](/book/first-agent/the-problem): a false escalation is free and a missed one is a mishandled customer.
+- Factual accuracy ≥ 95%, resolution ≥ 60%, correct citation ≥ 90%.
+- Approval queue p95 under four business hours, because [a gate nobody services is a gate that gets bypassed](/book/human-in-the-loop/risk-tiers).
+
+**Explicitly not a gate:** "the support lead thinks it feels good." That signal is valuable, it belongs in the review, and it is not permitted to override a rate, for the same reason the rates were written down in week one.
+
+## What hardening did not fix
+
+Three things survive all of it, and saying so is part of being ready rather than a caveat on it.
+
+**Semantic failure is bounded, not eliminated.** At 95% factual accuracy, one in twenty answered tickets is wrong. The design response is not a better model. It is that the [escalation contract](/book/first-agent/the-problem), the citation requirement, and the tier-0 cap keep the *consequences* of that one bounded to something a person can correct.
+
+**Injection is contained, not prevented.** A hostile ticket can still make Atlas want to do something. [There is no prepared statement for English](/book/security/prompt-injection); the taint ceiling means wanting is where it stops, and that is the whole claim.
+
+**The model can change underneath you.** [Pinned is not frozen](/book/observability/drift). The canary is the detection, the ladder is the response, and neither is prevention.
+
+A launch review that claims otherwise on any of the three is describing a system nobody built.
+
+---
+
+Next: [Failure Labs](/book/capstone/failure-labs), kill workers, duplicate callbacks, poison retrieval, expire approvals, and preserve the evidence.
+
+## Takeaways
+
+- "It works" means nobody has seen it fail recently. For a system whose failures are silent and plausible, that is the weakest available claim.
+- Build the dataset from four sources: hand-labeled real tickets, promoted production failures, adversarial cases, and negatives that must return nothing.
+- Promoted failures compound: the corpus grows at exactly the rate the system breaks, which beats any up-front sampling design.
+- Negative tests are a rare deterministic assertion in a probabilistic field. Take every one available.
+- Invariants gate with no threshold. Rates report as distributions against a flake budget, or the suite becomes something people re-run until it passes.
+- Four trace fields are demanded by three chapters each: `config_hash`, retrieved chunk IDs with text, `served_by`, and the user/agent/run triple. That redundancy is the signal they are not optional.
+- Six failure injections per commit. Two of them, the approval fast-forward and the wrong-result read, cover bugs that are otherwise found by a customer three days later.
+- Run the security review against the built system, not the design. Every finding will be a control that existed with a gap around its edge.
+- Expect the gaps at the seams: the eval harness bypassing the principal check, the scheduled job with no user, the ID accepted as an argument.
+- Expect a third of findings to be drift: things correct at design time that moved. Fix those with mechanisms, not patches.
+- The controls that must be designed in are the ones about derived data. Missing subject IDs on summaries is not retrofittable; almost everything else is.
+- Write the go/no-go before the numbers arrive, so the bar is not negotiated against the result.
+- Hold escalation recall highest. A false escalation is free; a missed one is a mishandled customer.
+- "The support lead thinks it feels good" belongs in the review and may not override a rate.
+- Hardening bounds three things rather than eliminating them: semantic failure, injection, and model change. A launch review claiming otherwise is describing a different system.

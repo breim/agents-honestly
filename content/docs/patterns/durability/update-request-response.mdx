@@ -1,0 +1,169 @@
+---
+title: "Request-Response via Update"
+description: "Ask a running agent a question and get a validated answer back synchronously."
+---
+
+## Problem
+
+A support lead opens ticket 9104 in the console and clicks **Approve**. The UI needs to say, in that request, whether the approval was accepted, and if it was rejected, why.
+
+[A signal](/book/patterns/durability/signal-with-start) cannot do this. It is fire-and-forget: the client gets an acknowledgement that the signal was *delivered*, not that it was *acted on*. So the console posts the approval, gets a 202, and then has to answer "did it work?" some other way.
+
+The usual workarounds are all bad in the same direction. Polling a query in a loop turns one interaction into fifteen requests and still cannot distinguish *not yet processed* from *rejected*. Signalling and then polling has a race where the answer arrives before the poll starts. And a signal carrying garbage is written into the event history permanently before anyone can look at it: an approval for an amount that is no longer pending, from a reviewer who no longer has authority.
+
+## Forces
+
+- **The caller needs a result**, not an acknowledgement.
+- **The workflow is the only thing that knows** whether the request is currently valid.
+- **Invalid requests should not pollute the history**, which is [size-limited](/book/patterns/durability/continue-as-new-memory) and permanent.
+- **Handling may take time.** The agent might have to call a tool before it can answer.
+- **The client may disconnect** mid-request, and the work must not be lost or duplicated.
+- **The workflow must not block** on the caller.
+
+## Solution
+
+**Update**: a message to a running workflow that is validated on arrival, handled by workflow code, and returns a result or an error to the caller. It is generally available and it is the right tool for every "ask a running agent something" interaction.
+
+<Figure caption="Three phases. Rejection at the validator leaves no trace in history; only admitted updates are recorded." frame={false}>
+
+```
+   client                          workflow
+   ──────                          ────────────────────────────────
+   update('approve', payload)
+        │
+        ▼
+   ┌──────────────┐   VALIDATE   no history is written yet
+   │  validator   │ ───────────▶ is there a pending approval?
+   └──────┬───────┘              is this amount the one pending?
+          │                      is the payload well-formed?
+    reject│  ◀─── error to caller · nothing in the event history
+          │
+    admit ▼
+   ┌──────────────┐   HANDLE     recorded: UpdateAccepted
+   │   handler    │ ───────────▶ mutate state · may await activities
+   └──────┬───────┘
+          │
+          ▼      RESULT          recorded: UpdateCompleted
+   result or error ◀───────────  the caller gets the actual outcome
+```
+
+</Figure>
+
+Four rules:
+
+**Put cheap, deterministic checks in the validator.** Shape, presence, and "is this request currently meaningful": a rejected update leaves *no trace* in the event history, which is the property that makes it safe to expose an update endpoint to a UI where users double-click.
+
+**Do not mutate state in the validator.** It runs before admission and may run more than once. It reads; the handler writes. This is the one rule the API cannot enforce for you.
+
+**Authorization belongs in the handler, not the validator.** [Authority is re-derived at the moment of the action](/book/security/identity), and that usually needs an activity, which validators cannot call. Validate shape cheaply, then check authority where you can do real work.
+
+**Keep the handler bounded.** An update whose handler waits on a human is a request that hangs for three days. Use an update to *record* a decision and return quickly; use [the approval gate](/book/patterns/durability/approval-gate) for the waiting.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/updates.ts"
+export const approve = defineUpdate<ApprovalResult, [ApprovalPayload]>('approve');
+
+export async function ticketAgent(init: TicketInput): Promise<Outcome> {
+  const state = initState(init);
+
+  setHandler(approve, async (p: ApprovalPayload): Promise<ApprovalResult> => {
+    // ── HANDLER: may await activities, may mutate state ──
+    // Authority is re-derived here, not restored — the approver may have
+    // changed roles since the request was rendered.
+    const authority = await verifyApproverAuthority(p.by, state.pending!);
+    if (!authority.ok) return { accepted: false, reason: authority.reason };
+
+    state.recordDecision(p);
+    return { accepted: true, creditId: state.pending!.reference };
+  }, {
+    validator: (p: ApprovalPayload) => {
+      // ── VALIDATOR: cheap, deterministic, READ-ONLY, no activities ──
+      // A rejection here writes nothing to the event history at all.
+      if (!state.pending) throw new Error('no approval is pending');
+      if (p.requestId !== state.pending.requestId) throw new Error('stale request');
+      if (p.amountCents !== state.pending.amountCents) throw new Error('amount changed');
+    },
+  });
+
+  return runLoop(state);
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/updates.py"
+@workflow.defn
+class TicketAgent:
+    @workflow.update
+    async def approve(self, p: ApprovalPayload) -> ApprovalResult:
+        # ── HANDLER: may await activities, may mutate state ──
+        # Authority is re-derived here, not restored.
+        ok, reason = await workflow.execute_activity(
+            verify_approver_authority, p.by, self._state.pending)
+        if not ok:
+            return ApprovalResult(accepted=False, reason=reason)
+
+        self._state.record_decision(p)
+        return ApprovalResult(accepted=True, credit_id=self._state.pending.reference)
+
+    @approve.validator
+    def _validate_approve(self, p: ApprovalPayload) -> None:
+        # ── VALIDATOR: cheap, deterministic, READ-ONLY, no activities ──
+        # A rejection here writes nothing to the event history at all.
+        if self._state.pending is None:
+            raise ValueError("no approval is pending")
+        if p.request_id != self._state.pending.request_id:
+            raise ValueError("stale request")
+        if p.amount_cents != self._state.pending.amount_cents:
+            raise ValueError("amount changed")
+```
+
+</Tab>
+</Tabs>
+
+The `requestId` check is what makes a double-click harmless. The second click carries the same ID, the state no longer has that request pending, and the validator rejects it with a clear message: without adding an event, without running the handler, and without the caller having to implement its own deduplication.
+
+## Trade-offs
+
+**Updates are recorded once admitted.** The validator saves you from garbage; everything past it is permanent history, so a chatty update endpoint still grows the history like any other message.
+
+**Handler duration is caller-visible.** An update that awaits three activities keeps the client waiting for all three. Callers need a timeout, and a slow handler is a slow API endpoint. This is easy to forget because the code reads like workflow logic rather than a request handler.
+
+**Client disconnects do not cancel the work.** The update proceeds and completes; the caller simply does not see the result. Design for that: the caller should be able to re-ask (via a [query](/book/durable-execution/signals-and-children)) rather than assume failure and retry, which would be a second update.
+
+**Validators run in workflow context and must be deterministic.** No activities, no clock, no randomness. This is a genuine constraint, and it is why anything requiring I/O, including authorization, lands in the handler.
+
+## When not to use it
+
+**When the caller does not need a result.** A customer reply webhook has nobody waiting. Use [signal-with-start](/book/patterns/durability/signal-with-start), which is cheaper and can create the workflow.
+
+**When the answer is a read.** *"What is the current deadline?"* is a query: no history, no admission, no mutation. Reaching for an update to read state is expensive by an order of magnitude.
+
+**When the handler has to wait on a human.** That is an [approval gate](/book/patterns/durability/approval-gate). Use an update to *deliver* the human's decision and return immediately; the waiting is the workflow's job, not the caller's.
+
+**When the workflow may not exist.** Updates do not have a start variant. If the entity might be new, signal-with-start first and read the result separately.
+
+<Aside type="note" title="Three operations, and picking wrong is the common mistake">
+Every interaction with a running agent is one of three things, and the failure mode of choosing wrong is usually a polling loop someone wrote to paper over it.
+
+**Query.** Read state, no history, no mutation, must be side-effect free. *"What is this run waiting on?"*
+
+**Signal.** Fire-and-forget, can start the workflow, no result. *"The customer replied."*
+
+**Update.** Validated, handled, returns a result. *"Approve this, and tell me if it worked."*
+
+The tell that you picked wrong: if your client sends something and then polls to find out what happened, you wanted an update. If it polls to watch state change over time, you wanted a query on a schedule. Or, more likely, [a signal into the workflow so the workflow can act](/book/durable-execution/signals-and-children) rather than the client watching.
+</Aside>
+
+## Related
+
+- [Signal With Start](/book/patterns/durability/signal-with-start): the fire-and-forget sibling, and the one that can create the workflow
+- [Approval Gate](/book/patterns/durability/approval-gate): where the waiting belongs; the update only delivers the decision
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the running execution being addressed
+- [Signals and Children](/book/durable-execution/signals-and-children): the three ways to talk to a running execution
+- [Generative UI and Approvals](/book/interface/generative-ui-and-approvals): the console on the other end of this call

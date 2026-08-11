@@ -1,0 +1,235 @@
+---
+title: "Schema and Granularity"
+description: "Why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one."
+---
+
+[Part IV settled the SQL case](/book/retrieval/sql-is-still-the-answer): the accuracy gap, the semantic layer, the rails. It is not repeated here. What this chapter does is take the mechanism underneath that argument and show that it had nothing to do with databases, then spend the rest of its length on the half Part IV never touched: **the schema itself.**
+
+## `execute_sql` is a category, not a tool
+
+Look at what these have in common:
+
+```
+execute_sql(query: string)
+run_bash(command: string)
+http_request(url: string, method: string, body: string)
+call_internal_api(endpoint: string, params: string)
+search(query: string)          ← when the backend interprets it as syntax
+```
+
+Each declares a `string` and receives **a program**. The type system says "some text"; the runtime says "an unbounded instruction to a system that will carry it out." Every property Part IV found in text-to-SQL follows from that one fact and reappears wherever the pattern does: the failure is a plausible result rather than an exception, the blast radius is whatever the executor can reach, and no test you can write covers the input space.
+
+That gives a rule with more reach than "don't give agents SQL":
+
+> **The schema is the only place a constraint exists before the model acts. Everything else is a request.**
+
+A description saying *"only use SELECT"* is a request. A system prompt saying *"never drop tables"* is a request. A parameter typed as an open string is a decision to have no constraint at all, and [the invariant/request distinction](/book/first-agent/the-problem) says exactly what that costs.
+
+So granularity is really one question: **how much of the program lives in your code, and how much arrives in a string the model wrote?**
+
+## The ladder, generalized
+
+<Figure caption="Each rung moves program text out of the model's output and into your code. The failure mode changes kind between rungs one and two." frame={false}>
+
+```
+   ①  FREE-FORM PROGRAM      execute_sql("SELECT …")        model writes it all
+              │
+   ②  STRUCTURED REQUEST     {metric, dims, filter}         model picks your terms
+              │
+   ③  PARAMETERIZED TASK     list_unpaid_invoices(4471)     model fills arguments
+              │
+   ④  FIXED ACTION           escalate_to_human()            model only decides
+```
+
+</Figure>
+
+| Rung | Model supplies | You supply | When it goes wrong |
+| --- | --- | --- | --- |
+| ① Free-form program | The whole program | An executor | A confident wrong result, unbounded reach |
+| ② Structured request | A choice among terms you defined | The compiler | **A refusal**: "no such metric" |
+| ③ Parameterized task | Arguments | The whole program | A wrong argument: visible, testable |
+| ④ Fixed action | The decision only | Everything | Called at the wrong moment |
+
+The boundary between ① and ② is the important one, and [Part IV named the asymmetry that makes it matter](/book/retrieval/sql-is-still-the-answer): text-to-SQL fails with a confident wrong number, a semantic layer fails by refusing, and those are different kinds of event rather than two points on a quality scale. On this ladder the same split lands one rung down from the top. **Rung ① fails by answering; rungs ②–④ fail by refusing.** A refusal routes to a human and costs a few minutes; a wrong answer routes to a customer. That asymmetry is the whole reason this ladder is worth climbing down rather than up.
+
+## Where to sit, per tool
+
+[The previous chapter](/book/tools/tools-are-apis-for-models) posed the trade between composability and selection accuracy, and deferred it here. The resolution is that it is not one dial for your system. It is a per-tool decision with two inputs.
+
+**Does the question space cluster?** Real questions cluster hard. Meridian's support tickets ask about a dozen things in a hundred phrasings, which is why a dozen parameterized tools cover the large majority and the tail is short. When you *can* enumerate the jobs, rung ③ is correct and cheap. When the tail is long and genuinely valuable, with analysts asking things nobody anticipated, rung ② buys expressiveness without handing over the program.
+
+**How reversible is it?** This one overrides the first. A read tool that picks wrong wastes a turn and some tokens; a write tool that picks wrong moves money. **Write tools belong further down the ladder than their clustering alone would justify**, which is the subject of [the next chapter](/book/tools/read-and-write-tools). Atlas's `issue_credit` is rung ④ with an approval gate, not because refunds are hard to parameterize but because the cost of being wrong is asymmetric.
+
+The procedure, once it is running: log the calls, find the chains the model keeps repeating, and collapse those into one tool. Then log the **refusals**, the questions with no tool. That list, not your intuition, is where the next tool comes from.
+
+## The schema half
+
+Everything above is about which tools exist. The rest of this chapter is about the arguments, where most of the real defects live and where the book has said little so far.
+
+### What `strict` actually guarantees
+
+Setting `strict: true` on a tool, with `additionalProperties: false` and an explicit `required`, guarantees the `input` you receive validates against your schema exactly. It is worth having and it is worth understanding narrowly, because the schema language accepted in strict mode is a subset:
+
+| Supported | Not supported |
+| --- | --- |
+| `type`, `enum`, `const` | Recursive schemas |
+| `anyOf`, `allOf`, `$ref` / `$defs` | `minimum`, `maximum`, `multipleOf` |
+| String `format`: `date`, `date-time`, `time`, `duration`, `email`, `uri`, `uuid`, `hostname`, `ipv4`, `ipv6` | `minLength`, `maxLength` |
+| `additionalProperties: false` | Complex array constraints |
+
+Read the right column again. **`minimum: 1` is not a constraint.** Neither is `maxLength: 64`. If you write them expecting enforcement, you have a validation you believe in and do not have.
+
+What the SDKs do with them is genuinely clever and worth knowing. They strip unsupported constraints from the schema sent to the model and **fold them into the property's description**, so the model reads "Must be at least 100" as prose, while your client-side validation still enforces the real thing. The constraint becomes persuasion at the boundary and code behind it. That is the correct division, and it is the same division as everywhere else in this book: the model is asked, your code enforces.
+
+<Aside type="caution" title="A valid call is not a permitted call">
+`account_id: "4471"` validates perfectly whether or not this ticket's requester is entitled to that account. `amount_cents: 5000000` validates perfectly at fifty thousand dollars.
+
+Schema validity says the shape is right. It says nothing about authority, nothing about magnitude, and nothing about whether the values correspond to anything real. [Structured output](/book/foundations/structured-output) made this point about model claims generally; here it is the reason [the requester rule](/book/tools/tools-are-apis-for-models) and the credit limit both live in your handler rather than in the schema.
+</Aside>
+
+### Five rules for arguments
+
+**1 · Enum anything with a closed set.** `status: string` invites `"Open"`, `"OPEN"`, `"in transit"`, and `"shipped?"`. An enum both constrains the value and **publishes the vocabulary**, because the model reads the allowed values. That second half is the part people miss. Detailed schemas with types and enums are reported to improve function-calling accuracy by roughly 10–20%, and enums are the cheapest slice of that.
+
+**2 · Never ship an ambiguous scalar.** `amount: number` is cents or dollars, and the model will guess, and the guess will be right most of the time, which is worse than always wrong. Put the unit in the name: `amount_cents`, `weight_kg`, `age_days`. And pin dates with `format: "date"` rather than hoping. Ambiguity in a schema does not surface as an error; it surfaces as a factor of a hundred.
+
+**3 · Take IDs, and say where the ID comes from.** A free-form string parameter has no schema-level defense against an invented value: nothing stops a plausible-looking `account_id` that does not exist, and the only real protection is checking existence in your handler before acting. Reduce how often that fires by telling the model, in the parameter description, which tool produces this ID: *"from `crm_search_accounts`; never construct one."*
+
+**4 · Flat beats nested.** Every level of nesting is another place for the model to get the shape right and the semantics wrong, and a nested object cannot be scanned at a glance in a description. Rung ② is the exception that proves it: a structured query object is nested on purpose, and it earns that by replacing an entire program.
+
+**5 · State the default of every optional parameter.** An omitted `as_of` that the model believes means "today" and your code treats as "start of quarter" is a divergence with no error and no trace. Say the default in the description.
+
+### All five, in one tool
+
+The good tool from this chapter's title, written out:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/invoices.ts"
+export const listUnpaidInvoices = {
+  name: 'erp_list_unpaid_invoices',
+  description:
+    'Unpaid and partially-paid invoices for one account, newest first. Returns ' +
+    'invoice ID, issue date, due date, amount outstanding, and days overdue. ' +
+    'Capped at 50; the result states the total match count when it exceeds ' +
+    'that. Use for "what does this account owe" and payment-chasing questions. ' +
+    'For one invoice whose ID you already have, use `erp_get_invoice`.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      account_id: {
+        type: 'string',
+        description:
+          'Meridian account ID, from `crm_search_accounts` or ' +
+          '`crm_account_risk_profile`. Digits only, e.g. "4471". Never construct one.',
+      },
+      status: {
+        type: 'string',
+        enum: ['unpaid', 'partially_paid', 'any'],
+        description: 'Which invoices to include. Defaults to "any" if omitted.',
+      },
+      as_of: {
+        type: 'string',
+        format: 'date',
+        description:
+          'Date that "overdue" is computed against, YYYY-MM-DD. ' +
+          'Omit for today — do not pass a guessed date.',
+      },
+    },
+    required: ['account_id'],
+    additionalProperties: false,
+  },
+  strict: true,
+} as const;
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/invoices.py"
+LIST_UNPAID_INVOICES = {
+    "name": "erp_list_unpaid_invoices",
+    "description": (
+        "Unpaid and partially-paid invoices for one account, newest first. Returns "
+        "invoice ID, issue date, due date, amount outstanding, and days overdue. "
+        "Capped at 50; the result states the total match count when it exceeds "
+        "that. Use for \"what does this account owe\" and payment-chasing questions. "
+        "For one invoice whose ID you already have, use `erp_get_invoice`."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "account_id": {
+                "type": "string",
+                "description": (
+                    "Meridian account ID, from `crm_search_accounts` or "
+                    "`crm_account_risk_profile`. Digits only, e.g. \"4471\". "
+                    "Never construct one."
+                ),
+            },
+            "status": {
+                "type": "string",
+                "enum": ["unpaid", "partially_paid", "any"],
+                "description": 'Which invoices to include. Defaults to "any" if omitted.',
+            },
+            "as_of": {
+                "type": "string",
+                "format": "date",
+                "description": (
+                    'Date that "overdue" is computed against, YYYY-MM-DD. '
+                    "Omit for today — do not pass a guessed date."
+                ),
+            },
+        },
+        "required": ["account_id"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+```
+
+</Tab>
+</Tabs>
+
+Three parameters, three property descriptions, and no scalar whose unit or origin is left to inference. The amount outstanding is described as a return value in cents rather than accepted as an input, because this tool cannot move money. That is a granularity decision, not a schema one, and it is why the two halves of this chapter are one chapter.
+
+<Aside type="note" title="Property descriptions are nearly free">
+A handful of tokens each, sitting in the stable part of the prompt where [caching](/book/foundations/prompt-caching) makes them cost almost nothing after the first request. The tool schemas are re-sent on every turn regardless; whether they are *useful* on every turn is your choice.
+</Aside>
+
+## Atlas, concretely
+
+The catalogue after this chapter, by rung:
+
+| Tool | Rung | Why there |
+| --- | --- | --- |
+| `query_warehouse` | ② structured request | Long tail of aggregate questions; refuses what the semantic layer can't express |
+| `crm_account_risk_profile` | ③ parameterized | One clustered job, three endpoints collapsed |
+| `erp_list_unpaid_invoices` | ③ parameterized | Clustered, read-only |
+| `get_order` | ③ parameterized | The narrowest possible read |
+| `search_policies` | ③ parameterized | A query string, but the backend treats it as text rather than syntax |
+| `issue_credit` | ④ fixed action | Reversibility overrides clustering |
+| `escalate_to_human` | ④ fixed action | The decision *is* the payload |
+
+No tool at rung ①. That is not a policy Atlas follows; it is what happens when you apply the two inputs honestly to a support agent whose questions cluster and whose one write moves money.
+
+The number worth tracking is not the tool count. It is **how many of the twenty tickets end in a refusal because no tool fits**. That is your rung-③ tail showing itself, and it is the only evidence that should make you add a tool or move one up the ladder. [Part XIV](/book/evals/datasets) makes that measurement routine.
+
+---
+
+Next: [Read Tools and Write Tools](/book/tools/read-and-write-tools), different risk, different permissions, different review. Treating them alike is how agents cause incidents.
+
+## Takeaways
+
+- `execute_sql`, `run_bash`, and `http_request` are one pattern: a `string` parameter that is really a program. Everything Part IV found in text-to-SQL follows from that and appears wherever the pattern does.
+- The schema is the only constraint that exists before the model acts. A description saying "SELECT only" is a request; an open string is a decision to have no constraint.
+- Four rungs: free-form program, structured request, parameterized task, fixed action. Rung ① fails by answering; the rest fail by refusing.
+- Granularity is per-tool, decided by two inputs: whether the question space clusters, and how reversible the action is. Reversibility overrides clustering. Write tools sit lower than their clustering justifies.
+- `strict: true` guarantees shape, from a subset of JSON Schema. `minimum`, `maximum`, `minLength`, and `maxLength` are **not enforced**. SDKs strip them into the description and leave enforcement to your code.
+- A valid call is not a permitted call. Schema validity says nothing about authority, magnitude, or whether the values refer to anything real.
+- Enum every closed set. It constrains the value and publishes the vocabulary. Detailed typed schemas with enums are reported to lift function-calling accuracy by 10–20%.
+- Put units in parameter names and pin date formats. An ambiguous scalar fails silently by a factor of a hundred.
+- Nothing in a schema prevents an invented ID. Say which tool produces it, and check existence in the handler.
+- State the default of every optional parameter, and give every property a description. They are cached, and therefore nearly free.
+- Track the tickets that end in a refusal for want of a tool. That list, not intuition, is what justifies the next tool.

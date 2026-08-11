@@ -1,0 +1,228 @@
+---
+title: "Determinism, Retries, and Timers"
+description: "The rules that make replay work, and the retry policies you will actually configure."
+---
+
+[The previous chapter](/book/durable-execution/temporal-in-forty-minutes) gave you the nouns. This one gives you the constraints and the knobs, the two things that decide whether a durable system behaves well in production, and the one gotcha that makes a broken workflow look stuck rather than failed.
+
+Still no AI in sight.
+
+## What replay actually compares
+
+The rule is usually stated as "workflow code must be deterministic," which is true and slightly misleading. What replay requires is narrower:
+
+> **Re-running the workflow against its history must produce the same sequence of commands.**
+
+Not the same values everywhere, not purity in a functional sense. The same *decisions*: schedule this activity, then that one, then start this timer. If the replayed run asks for something the history does not show, the SDK raises a non-determinism error, because it can no longer tell where in the code this execution actually is.
+
+That framing matters because it tells you what is safe. Computing a hash, formatting a string, or looping over a list you were handed is all fine. What is not fine is anything that could make the code take a *different branch* on the second run.
+
+## The four sources of divergence
+
+| Source | Looks like | Why it breaks |
+| --- | --- | --- |
+| **Time** | `Date.now()`, `datetime.now()` | Replay happens later. A branch on elapsed time flips. |
+| **Randomness** | `Math.random()`, `uuid4()` | A new value on replay, and any branch or key derived from it changes |
+| **I/O** | Any read, any call, any file | The world moved between the original run and the replay |
+| **Ordering** | Set/map iteration, whichever-finished-first | The sequence changes without any value changing |
+
+The first three are obvious once stated. **The fourth is the one that reaches production**, because nothing about it looks like a violation:
+
+```ts
+// Both of these are non-determinism bugs.
+for (const id of new Set(orderIds)) { await processOrder(id); }   // iteration order
+const winner = await Promise.race([checkA(), checkB()]);          // completion order
+```
+
+Iterating an unordered collection can yield a different sequence on replay. Branching on which of two concurrent operations finished first is branching on timing, which is exactly what replay does not preserve. Sort the collection; await both and decide from the values.
+
+## The safe replacements
+
+Every SDK provides deterministic versions of the things you are not allowed to call directly. But the two tracks deliver them differently, and this is one of the few places that matters. The TypeScript sandbox **replaces the globals in place**, so the ordinary call is already the safe one. Python **exposes explicit functions**, and the ordinary call stays unsafe.
+
+| You need | TypeScript | Python |
+| --- | --- | --- |
+| The clock | `Date.now()`, patched by the sandbox to the last task completion | `workflow.now()` |
+| Randomness | `Math.random()`, patched and seeded per execution | `workflow.random()` |
+| A UUID | `uuid4()` from any library built on `Math.random()` | `workflow.uuid4()` |
+| A delay | `sleep()`, a durable timer, never `setTimeout` | `asyncio.sleep()` through the SDK, never `time.sleep` |
+| **Anything else** | **An activity** | **An activity** |
+
+The asymmetry catches people moving between tracks: a TypeScript reader who goes looking for `workflow.now()` will not find one, and a Python reader who calls `datetime.now()` out of habit has written a replay bug.
+
+That last row is the whole discipline, and it compresses to one sentence worth remembering:
+
+> **Workflow code decides. Activity code discovers.**
+
+If a line of workflow code needs to *find something out* from a database, a clock, a service, a file, it is an activity. If it only needs to choose based on what it already knows, it belongs in the workflow.
+
+<Aside type="note" title="The sandbox catches the obvious ones, not the interesting ones">
+Both SDKs run workflow code in a constrained environment: the TypeScript SDK executes it in an isolate with the nondeterministic globals replaced, and the Python SDK runs it in a sandbox that reloads modules per execution.
+
+This catches the beginner mistakes loudly and early, which is genuinely useful. It does not catch iterating a set, branching on completion order, or reading a module-level variable that a different process mutated. Treat the sandbox as a linter, not as a proof.
+</Aside>
+
+## The gotcha: exceptions behave differently on each side
+
+This one is not about determinism, and it is the single most confusing thing about operating a durable system for the first time.
+
+| Where | An exception is… |
+| --- | --- |
+| **In an activity** | Converted to an application failure and **retried per the retry policy** |
+| **In a workflow** | Fails only *that workflow task*, which is then **retried** |
+
+Read the second row again. A `TypeError` in your workflow code, a genuine bug, a null dereference, a bad cast, **does not fail the workflow.** It fails the workflow task, and the server hands that task out again. And again. The execution does not error out; it sits there, retrying, looking alive.
+
+<Figure caption="A bug in workflow code produces an execution that is neither progressing nor failed. The alert you need is on workflow task failures, not on workflow failures." frame={false}>
+
+```
+   activity throws          workflow code throws
+   ───────────────          ────────────────────
+   → application failure    → workflow TASK fails
+   → retry policy applies   → task is redelivered
+   → eventually surfaces    → same bug, same failure
+     to the workflow        → repeat, indefinitely
+   → workflow can catch     
+     it and compensate      status: RUNNING  ⚠
+```
+
+</Figure>
+
+The design is deliberate and defensible: a workflow task failure is usually a bug or a bad deploy, and retrying gives you the chance to fix the code, redeploy the worker, and have in-flight executions recover, instead of losing them to an exception. That is a genuinely good default. It is also invisible if you are watching for failed workflows, because the workflow never fails.
+
+Two consequences to act on:
+
+**To actually fail a workflow, fail it explicitly.** Throw the SDK's application-failure type. Anything else reads as "this worker had a problem," not "this business process cannot continue."
+
+**Alert on workflow task failures.** It is the signal that a deploy broke something, and it is not the same metric as failed workflows.
+
+## Retries: the defaults differ, on purpose
+
+| | Default |
+| --- | --- |
+| **Activities** | Retried automatically, with backoff, until a timeout bound is reached |
+| **Workflows** | **Not retried.** Assigning a workflow a retry policy is uncommon. |
+
+The asymmetry is the model working as intended. An activity is one attempt at one effect; retrying it is obviously right. A workflow *is* the retry mechanism. It already knows what succeeded and what did not, so restarting it wholesale usually throws away exactly the information you wanted to keep.
+
+The policy fields are few:
+
+| Field | What it does | Typical |
+| --- | --- | --- |
+| `initialInterval` | Wait before attempt 2 | 1s |
+| `backoffCoefficient` | Multiplier per attempt | 2 |
+| `maximumInterval` | Cap on the wait | 100× initial, or a minute |
+| `maximumAttempts` | Give up after N | 0 (unlimited) or a small number |
+| `nonRetryableErrorTypes` | Error types that skip retrying entirely | **The one you will actually set** |
+
+Three of those four timing defaults are reasonable and most teams leave them alone. `maximumAttempts` is the one to look at, because **it defaults to unlimited**. An activity that fails the same way forever retries forever, and the execution's status reads `RUNNING` the entire time. That is [the failure this book says survives to month six](/book/durable-execution/everything-that-breaks), arriving as a default rather than as a bug. It is a defensible default for a platform whose job is to eventually succeed, and it is not one to inherit without deciding.
+
+The last field is where the engineering is, because retrying is only correct for a subset of failures:
+
+> **Infrastructure failures retry. Business rejections must not.**
+
+A 429 or a connection reset should back off and try again. "Credit limit exceeded," "account not found," and "invalid parameter" will fail identically on every attempt. Retrying them burns the retry budget, delays the real outcome, and in the worst case masks a bug behind an eventual timeout.
+
+That is the same distinction [errors-as-instructions](/book/tools/errors-as-instructions) drew for a model deciding what to do next. Here the consumer is a retry policy rather than a model, and it needs the same information: **can trying again possibly help?**
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/workflow.ts"
+const { issueCredit } = proxyActivities<typeof activities>({
+  // one attempt may take this long
+  startToCloseTimeout: '30 seconds',
+  // the whole thing, retries included, must finish inside this
+  scheduleToCloseTimeout: '10 minutes',
+  retry: {
+    initialInterval: '1 second',
+    backoffCoefficient: 2,
+    maximumInterval: '1 minute',
+    maximumAttempts: 5,
+    // these will fail the same way every time — do not spend attempts on them
+    nonRetryableErrorTypes: ['CreditLimitExceeded', 'AccountNotFound'],
+  },
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/workflow.py"
+credit_id = await workflow.execute_activity(
+    issue_credit,
+    args=[order_id, cents, key],
+    # one attempt may take this long
+    start_to_close_timeout=timedelta(seconds=30),
+    # the whole thing, retries included, must finish inside this
+    schedule_to_close_timeout=timedelta(minutes=10),
+    retry_policy=RetryPolicy(
+        initial_interval=timedelta(seconds=1),
+        backoff_coefficient=2.0,
+        maximum_interval=timedelta(minutes=1),
+        maximum_attempts=5,
+        # these will fail the same way every time — do not spend attempts on them
+        non_retryable_error_types=["CreditLimitExceeded", "AccountNotFound"],
+    ),
+)
+```
+
+</Tab>
+</Tabs>
+
+You can also mark an error non-retryable at the throw site rather than listing it in the policy. The SDK's application-failure type takes a `nonRetryable` flag. Use the policy for error classes the caller knows about; use the flag when only the activity can tell.
+
+## The four timeouts, and the two you set
+
+This is where most misconfiguration lives, because there are four and their names are similar.
+
+| Timeout | Bounds | Set it? |
+| --- | --- | --- |
+| **Start-To-Close** | A single attempt | **Yes, always.** |
+| **Schedule-To-Close** | The whole activity, retries included | Yes, when there is a real deadline |
+| **Heartbeat** | The gap between heartbeats | For long activities, with a caveat below |
+| **Schedule-To-Start** | Time spent waiting in the queue | **Usually not.** See below. |
+
+**At least one of Start-To-Close or Schedule-To-Close is required**, and Start-To-Close should be comfortably longer than the slowest legitimate single attempt. Set it too tight and you convert slow-but-working into failed-and-retried, which is how a struggling dependency becomes a thundering herd.
+
+**Heartbeat has a trap worth stating plainly.** Setting a heartbeat timeout without actually heartbeating from inside the activity means the timeout is ignored. You get the configuration and none of the protection. Heartbeating is a call the activity makes periodically; if you are not making it, do not set the timeout and believe you are covered.
+
+**Schedule-To-Start is the one to leave alone.** It bounds how long a task may sit in the queue before a worker picks it up. That is a *capacity* signal, and a timeout does not create capacity. The recommended practice is to monitor schedule-to-start latency as a scaling metric and alert on it, rather than to fail work that was merely waiting. Set it only when you have a concrete plan to reroute those tasks to a different queue. Otherwise you are turning "we are under-provisioned" into "and now the work is also failing."
+
+## Changing code while executions are running
+
+Two mechanisms, and the choice between them is a product question rather than a technical one.
+
+**Worker Versioning.** Now generally available, and the default answer. Running executions are pinned to the worker version that started them, so a deploy cannot break anything in flight, and old executions finish on old code.
+
+**Patching.** Explicit branches inside workflow code that let a *running* execution take the new path. Still necessary when old behaviour is not acceptable to completion: a bug that must be fixed for executions already underway, or a policy change that has to apply retroactively.
+
+> Versioning lets old runs **finish** on old code. Patching **migrates** them.
+
+Pick by asking whether it is acceptable for an execution that started last Tuesday to complete under last Tuesday's rules. Usually it is, which is why versioning is now the common case and patching is the exception it was always meant to be.
+
+## Atlas, concretely
+
+The refund workflow, configured: thirty seconds start-to-close on each activity, ten minutes schedule-to-close on `issueCredit` because a refund that has not settled in ten minutes is a human's problem, `CreditLimitExceeded` and `AccountNotFound` listed as non-retryable, no heartbeat because nothing here runs long enough to need one, and no schedule-to-start because the answer to a deep queue is another worker.
+
+Still a plain program. The step that makes it an agent is [Part XI](/book/durability/agent-as-workflow): one activity whose output is not a function of its input, and which therefore must sit on the activity side of every rule in this chapter.
+
+---
+
+Next: [Signals, Updates, and Child Workflows](/book/durable-execution/signals-and-children), getting data into a running workflow, getting answers out, and decomposing the big ones.
+
+## Takeaways
+
+- Replay requires the same *sequence of commands*, not purity. Computing and formatting are fine; anything that could change a branch is not.
+- Four sources of divergence: time, randomness, I/O, and ordering. Ordering is the one that reaches production: iterating a set, or branching on which concurrent call finished first.
+- Use the SDK's replay-stable clock, seeded random, and UUID. Everything else is an activity.
+- Workflow code decides; activity code discovers. If a line needs to find something out, it is an activity.
+- The sandbox is a linter, not a proof. It catches `Date.now()`, not a mutated module-level global.
+- An exception in an activity is retried per policy. An exception in a workflow fails only the workflow task, which is retried, so a bug leaves the execution running, not failed.
+- Therefore: fail workflows explicitly with the application-failure type, and alert on workflow **task** failures, which is a different metric from failed workflows.
+- Activities retry by default; workflows do not, and giving a workflow a retry policy is uncommon. The workflow already is the retry mechanism.
+- The retry field you will actually configure is `nonRetryableErrorTypes`. Infrastructure failures retry; business rejections must not.
+- Always set Start-To-Close (or Schedule-To-Close). Make it comfortably longer than the slowest legitimate attempt, or slow-but-working becomes failed-and-retried.
+- A heartbeat timeout without actual heartbeating is ignored. Configuration without protection.
+- Leave Schedule-To-Start alone. A deep queue is a capacity problem, and failing the work does not add capacity. Monitor the latency metric instead.
+- Worker Versioning lets old executions finish on old code; patching migrates them mid-flight. Choose by whether last Tuesday's rules are acceptable for a run that started last Tuesday.

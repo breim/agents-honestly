@@ -1,0 +1,237 @@
+---
+title: "MCP Is Not A2A"
+description: "Remote-agent discovery, delegated tasks, task lifecycle, streaming, cancellation, authentication, and why another agent is not a tool server."
+---
+
+Atlas needs a freight investigation. The carrier exposes an agent that can gather depot records, contact a driver, wait for a scan, and return a claim package.
+
+Wrapping that agent as `investigate_freight()` makes the call look familiar. It also hides the important part. The remote system owns a task that can live for hours, request more input, produce intermediate artifacts, and fail after taking actions in a domain Meridian does not control.
+
+A remote agent is a delegated worker, not a long-running function.
+
+## The boundary decides the protocol
+
+| Boundary | MCP | A2A |
+| --- | --- | --- |
+| Main object | Tool, resource, prompt | Message, task, artifact |
+| Control | Client selects a capability | Remote agent plans within delegated scope |
+| Lifetime | Usually one request and result | May be stateful and long-running |
+| Progress | Tool result or protocol progress | Task state and artifact updates |
+| More input | New tool call | Task may become `input-required` |
+| Discovery | Server capabilities | Agent Card and skills |
+| Cancellation | Transport or tool-specific | Task operation |
+| Authority question | May this tool execute? | May this agent own this task? |
+
+The current [MCP specification](https://modelcontextprotocol.io/specification/2026-07-28) defines a client-server protocol for context and capabilities. The current [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/) defines discovery, messages, stateful tasks, artifacts, streaming, push updates, cancellation, authentication, authorization, and several protocol bindings.
+
+The names may change. The distinction survives. Tools expose operations. Remote agents accept delegated work.
+
+<Figure caption="MCP keeps planning with the client. A2A gives a bounded task to another system that owns its internal plan." frame={false}>
+
+```text
+MCP
+
+Atlas decides ---- call tool ----> carrier server
+      ^                               |
+      +---------- result ------------+
+
+
+A2A
+
+Atlas delegates ---- task --------> carrier agent
+      ^                               |
+      |       status, input request   |
+      +-------------------------------+
+      |                               |
+      +---------- artifacts ----------+
+```
+
+</Figure>
+
+## Discovery is metadata, not trust
+
+An Agent Card describes identity, endpoint, skills, supported interfaces, authentication, and capabilities. The specification provides a well-known discovery location and supports signatures.
+
+Treat the card like a package manifest that arrived from the network:
+
+- resolve only from an approved domain or registry;
+- verify TLS and signatures when present;
+- pin the accepted card or record its hash per run;
+- diff capability and authentication changes;
+- keep public cards free of sensitive internal details;
+- require review before a new skill becomes reachable.
+
+Discovery tells Atlas what the remote agent claims. A supplier review, contract, eval suite, and runtime policy decide what Atlas may delegate.
+
+<Aside type="caution" title="Dynamic discovery can change authority without a deploy">
+If a client automatically exposes every newly discovered skill, the remote party can expand Atlas's action set by editing a card. Capability discovery belongs before an allowlist, never after it.
+</Aside>
+
+## A task is a state machine
+
+The useful part of A2A is not the request format. It is the explicit task lifecycle.
+
+```text
+submitted
+    |
+    v
+working <----------+
+  |  |              |
+  |  +--> input-required
+  |         |
+  |         +-- client message
+  |
+  +--> auth-required
+  |
+  +--> completed
+  +--> failed
+  +--> rejected
+  +--> canceled
+```
+
+Store the remote task ID next to your own workflow ID. They answer different questions:
+
+```json
+{
+  "workflow_id": "ticket-8823",
+  "delegation_id": "freight-investigation-1",
+  "remote_agent": "carrier-eu",
+  "remote_task_id": "task-7194",
+  "agent_card_hash": "sha256:...",
+  "principal": "staff-22",
+  "scope": {
+    "shipment_id": "ship-481",
+    "allowed_outputs": ["status", "evidence_bundle"],
+    "forbidden_actions": ["contact_customer", "accept_charge"]
+  }
+}
+```
+
+The local workflow persists that mapping before acknowledging the delegation. A duplicate local retry reuses the same delegation ID and must not create a second remote investigation.
+
+## Delegate scope, not ambient authority
+
+Authentication proves which system is calling. Authorization decides what it may ask for. Delegation also records on whose behalf the call occurs and what subset of their authority crosses the boundary.
+
+Send a narrow token or signed claim containing:
+
+- the user, service, and local run identities;
+- tenant and resource scope;
+- allowed task class;
+- maximum financial or operational effect;
+- expiry and audience;
+- a unique delegation ID.
+
+The remote agent enforces its own policy. The local system still validates every returned artifact and every requested follow-up. A remote `auth-required` state must not induce Atlas to grant broader credentials than the original task allowed.
+
+## Long-running updates are webhooks with a richer schema
+
+Streaming works while both sides are connected. Push notifications handle disconnected work. Both need the same rules as enterprise integrations:
+
+- authenticate the sender;
+- validate the task and tenant before parsing content;
+- persist before acknowledging;
+- deduplicate by event identity;
+- tolerate reordering;
+- fetch authoritative task state after a suspicious or missing update;
+- treat artifacts and messages as untrusted content.
+
+A push callback saying `completed` is an event. Querying the task and validating its artifacts establishes the local outcome.
+
+## Cancellation is a request
+
+The remote agent may already have sent an email, opened a case, or paid for a lookup. Cancellation cannot erase those effects.
+
+Define for every delegated task:
+
+| Question | Required answer |
+| --- | --- |
+| Is cancellation supported? | Capability recorded before start |
+| What stops immediately? | Pending remote work |
+| What may continue? | Irreversible external effects |
+| What artifact returns? | Partial result and effect ledger |
+| Who reconciles? | Named local owner or workflow step |
+
+Use a local deadline even when the remote task has one. On timeout, request cancellation, query final state, and reconcile observed effects. Do not mark the business case canceled just because the protocol request succeeded.
+
+## Observability crosses the trust boundary
+
+Propagate a trace context if both organizations support it, but do not assume access to the remote trace. Your audit record needs enough evidence without it:
+
+- card and protocol version;
+- exact task request and delegated scope;
+- local and remote task IDs;
+- state transitions with timestamps;
+- messages and artifact hashes;
+- update authentication result;
+- cancellation and reconciliation outcome;
+- cost or quota charged by the remote party.
+
+The remote agent's reasoning is not required. Its contract, messages, artifacts, and effects are.
+
+## Evaluate a remote agent as a supplier
+
+Before enabling a skill, run contract and behavioral tests:
+
+- card parsing, signature, and version negotiation;
+- task idempotency;
+- input-required and auth-required handling;
+- streaming reconnect and push deduplication;
+- cancellation at every state;
+- malformed and hostile artifact content;
+- scope violations;
+- latency, cost, and availability;
+- graceful behavior when either party upgrades.
+
+Run the tests continuously. A remote agent can change behavior without your deploy, just as a hosted model can.
+
+<FrameworkCheck decision="Atlas consumes the carrier's typed status tools over MCP and delegates open-ended freight investigations over A2A. Temporal owns the local business deadline and reconciliation.">
+<FrameworkOption name="plain">
+
+**Ordinary API.** Best when the remote operation and response are fixed, synchronous, and owned through a conventional service contract.
+
+</FrameworkOption>
+<FrameworkOption name="mcp">
+
+**MCP.** Best when Atlas selects a remote tool or reads a resource while retaining the plan.
+
+</FrameworkOption>
+<FrameworkOption name="a2a">
+
+**A2A.** Best when another agent owns a stateful task, produces artifacts, and may request input while it works.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+**Temporal plus A2A.** The remote agent owns its task. The local workflow owns Meridian's deadline, authority, audit record, retry, cancellation, and business outcome.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+The carrier exposes `get_shipment_status` and `get_scan_history` as MCP tools. Atlas uses those for ordinary tickets. It uses A2A only when evidence is incomplete and a carrier-owned investigation must contact depots and wait for new scans.
+
+Meridian allowlists one signed Agent Card version. The delegation token names the shipment and forbids customer contact or charge acceptance. A Temporal workflow stores the remote task ID, receives push updates through the inbox pattern, and escalates if the carrier misses the six-hour deadline.
+
+## References
+
+- [A2A 1.0 specification](https://a2a-protocol.org/latest/specification/), current protocol operations, data model, discovery, security, and bindings.
+- [A2A life of a task](https://a2a-protocol.org/latest/topics/life-of-a-task/), task states, multi-turn input, and artifacts.
+- [A2A and MCP](https://a2a-protocol.org/latest/topics/a2a-and-mcp/), the protocol project's comparison of capability access and agent collaboration.
+- [Model Context Protocol specification, 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28), current MCP architecture and protocol revision.
+
+---
+
+Part IX ends here. Next: [Why Durable Execution](/book/durable-execution/why-durable-execution), because a remote task does not remove the need for a durable local business process.
+
+## Takeaways
+
+- MCP exposes context and capabilities. A2A delegates work to another agent.
+- An Agent Card supports discovery. Approval, pinning, supplier review, and policy create trust.
+- Persist local and remote task identities before acknowledging delegation.
+- Carry user, agent, tenant, resource, action, expiry, and delegation ID across the boundary.
+- Treat push updates and artifacts as authenticated but untrusted input.
+- Cancellation requests work to stop. They do not undo effects already produced.
+- Keep a local deadline and reconcile remote state after timeout or uncertainty.
+- Evaluate remote agents continuously because their behavior can change without your deploy.

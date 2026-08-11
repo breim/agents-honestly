@@ -1,0 +1,189 @@
+---
+title: "Structured Output"
+description: "Schemas, constrained decoding, and getting data out of a model without a regex and a prayer."
+---
+
+
+A model emits text. Your program needs a value. Everything between those two sentences used to be a folk practice: ask for JSON in the prompt, add "respond ONLY with valid JSON, no markdown," strip the ` ```json ` fence the model added anyway, run `JSON.parse` in a `try`, retry on failure, and log the ones that still got through.
+
+That entire apparatus is obsolete, and the thing that replaced it is worth understanding properly, because it makes a guarantee that is both stronger and narrower than most people assume.
+
+## What the constraint actually does
+
+Recall from [the loop](/book/foundations/what-is-an-agent) that generation is one token at a time, and each step produces a score for every token in the vocabulary. Constrained decoding inserts one operation into that step.
+
+Your schema is compiled into a state machine once, then cached. At each position, the machine knows which tokens could legally come next: after `{` you may have a quote, after `"total_cents"` you must have a colon, inside an integer field you may have digits. Everything else is masked to negative infinity before the token is sampled.
+
+<Figure caption="The mask is applied to the scores, not to the model. Illegal tokens are made unselectable at each step." frame={false}>
+
+```
+   model computes scores for the whole vocabulary
+            │
+            ▼
+   ┌────────────────────────────────────────┐
+   │  "  0.41   ,  0.22   }  0.18   the 0.09│   ← raw
+   └────────────────────────────────────────┘
+            │
+            │  schema state machine: after `{`, only `"` or `}` are legal
+            ▼
+   ┌────────────────────────────────────────┐
+   │  "  0.41   , −inf    }  0.18   the −inf│   ← masked
+   └────────────────────────────────────────┘
+            │
+            ▼
+        sample  ──▶  guaranteed-parseable next token
+```
+
+</Figure>
+
+The consequence is absolute: **output that violates the schema is not unlikely, it is unreachable.** There is no prompt to tune, no retry loop, no parse failure to handle. A field typed as an integer cannot come back as `"about 40"`. An enum cannot come back with a value you didn't list.
+
+That is a real guarantee, and it is the reason the old apparatus is gone. Now the two things it does *not* guarantee.
+
+## Valid is not correct
+
+The schema constrains shape. It says nothing about truth.
+
+`{"order_id": "ORD-4921", "refund_cents": 4900}` is schema-valid whether or not that order exists and whether or not $49.00 is the right amount. You have removed an entire class of parsing bugs and removed none of the reasoning ones. Every validation your program owed before, it still owes: does this ID exist, is this within policy, does this total match the line items.
+
+This matters most where structured output is most tempting. An agent that emits a typed `issue_credit` payload *feels* verified in a way that free text does not. It isn't. The type system stops at the boundary of your process; the model's claim about the world is still a claim. [Tool design](/book/tools/schema-and-granularity) and [approval gates](/book/human-in-the-loop/approval-gates) exist because of exactly this gap.
+
+## The constraint tax
+
+The second limit is subtler and it is the reason this chapter exists rather than a paragraph in the API docs.
+
+**The model does not know it is being constrained.** The forward pass runs exactly as it would unconstrained; the mask is applied to the scores afterward. So when the model's preferred next token is illegal under the schema, the sampler does not get a better plan. It gets the model's *second* choice, or its tenth. Constraint does not redirect the reasoning. It overrides the output of reasoning that has already happened.
+
+Push that far enough and it costs you accuracy. Benchmarks on reasoning-heavy tasks show measurable degradation under strict JSON constraints compared to free-form generation, not because the model got dumber, but because the tokens it needed in order to think were not available in the shape you demanded. A model asked to emit `{"answer": ` as its very first tokens must commit to an answer before it has produced a single token of reasoning.
+
+The fix follows directly, and it is a schema-design decision rather than a prompting one:
+
+**Give reasoning somewhere to live, before the conclusion.** Either let the model think outside the constrained region, where modern models reason before answering and that reasoning is unconstrained, or put a free-text field *first* in the schema and the verdict after it. Field order is generation order.
+
+```
+   ✗  { "category": ..., "confidence": ..., "reasoning": ... }
+         └── commits to a verdict, then rationalizes it
+
+   ✓  { "evidence": ..., "reasoning": ..., "category": ..., "confidence": ... }
+         └── the verdict is generated after the tokens that justify it
+```
+
+The second schema costs more tokens and is more accurate, and the difference is not small on hard classification. It is the same principle as chain-of-thought, expressed in a type.
+
+## Two doors, one machine
+
+The same mechanism is reachable two ways, and choosing between them is a question about intent, not capability.
+
+| | **Response format** | **Strict tool schema** |
+| --- | --- | --- |
+| You want | The answer, as a typed value | The model to *choose* an action and its arguments |
+| Set | `output_config.format` on the request | `strict: true` on the tool definition |
+| Shape | One schema, always applied | Many schemas, model picks one |
+| Fits | Extraction, classification, grading | Agents |
+
+Response format is for when there is exactly one thing you want back. Tool schemas are for when the model's job includes deciding *which* thing, which is [the definition of an agent](/book/foundations/what-is-an-agent), so the tool path is the one the rest of this book lives on.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="extract.ts"
+const response = await client.messages.create({
+  model: 'claude-opus-5',
+  max_tokens: 1024,
+  output_config: {
+    format: {
+      type: 'json_schema',
+      schema: {
+        type: 'object',
+        properties: {
+          reasoning: { type: 'string' },
+          sentiment: { type: 'string', enum: ['angry', 'neutral', 'pleased'] },
+          order_id: { type: 'string' },
+        },
+        required: ['reasoning', 'sentiment', 'order_id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  messages: [{ role: 'user', content: ticketText }],
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="extract.py"
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=1024,
+    output_config={
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {"type": "string"},
+                    "sentiment": {"type": "string", "enum": ["angry", "neutral", "pleased"]},
+                    "order_id": {"type": "string"},
+                },
+                "required": ["reasoning", "sentiment", "order_id"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    messages=[{"role": "user", "content": ticket_text}],
+)
+```
+
+</Tab>
+</Tabs>
+
+Note `additionalProperties: false` and an explicit `required`. Both are mandatory for strict validation, and forgetting them is the most common setup error. Note also `reasoning` first, per the section above.
+
+<Aside type="tip" title="Let the SDK own the schema">
+Hand-writing JSON Schema is tedious and drifts from your types. Both SDKs will generate it: `zodOutputFormat(MySchema)` in TypeScript, and `messages.parse()` in either language returns an already-validated object rather than a string you have to check. Define the type once, in the language you're already writing.
+</Aside>
+
+## What a schema cannot say
+
+The supported subset is smaller than JSON Schema, and the gaps are load-bearing.
+
+**Expressible:** objects, arrays, strings, numbers, booleans, null; `enum` and `const`; `anyOf` / `allOf`; `$ref` for shared definitions; string `format` for dates, emails, URIs, UUIDs.
+
+**Not expressible:** recursive schemas; numeric bounds (`minimum`, `maximum`); string length (`minLength`, `maxLength`); most array constraints. The SDKs quietly strip these and validate them client-side after the fact, which means they are assertions, not guarantees, and a violation surfaces as an exception rather than as impossible.
+
+So the rule is: **constrain what the grammar can constrain, validate the rest.** "Refund amount must be a number" is a schema concern. "Refund amount must be at most 5000 and at most the order total" is your code's concern, and it belongs there anyway, because it is policy. See [Errors as Instructions](/book/tools/errors-as-instructions) for handing the violation back in a way the model can act on.
+
+The most useful thing the grammar *can* do is `enum`. Anywhere your program branches on a string, an enum turns "the model wrote `Angry` instead of `angry`" from a bug you will eventually hit into a state that cannot occur. Reach for it before you reach for validation.
+
+## Failure modes that survive
+
+Three ways a schema-constrained call still fails, all of which your code must handle.
+
+**Truncation.** The token budget runs out mid-object. The constraint guarantees every token was legal *so far*; it cannot guarantee the object closed. Check the stop reason: `max_tokens` means what you have is a valid prefix of an invalid document.
+
+**Refusal.** If the model declines the request, the response is a refusal, not your schema. The guarantee is conditional on the model answering at all. Branch on stop reason before you touch the payload.
+
+**The honest-null problem.** A required `order_id` on a ticket that mentions no order forces the model to invent one, because the grammar demands a string and the model will produce one. This is the cruelest failure here, because it is a hallucination *your schema caused*. Make fields that might genuinely be absent nullable, or add an explicit `"not_found"` enum member. **A schema with no way to say "I don't know" guarantees you will never be told.**
+
+## Where this leaves you
+
+Structured output moves a whole category of failure out of runtime: your program will not crash on a stray backtick, and a string that must be one of four values will be one of four values.
+
+What it does not do is make the model reliable. The shape is deterministic; the content is still drawn from a distribution, and the same input can produce a different but equally valid object tomorrow. That gap between "parses every time" and "answers the same every time" is the subject of the next chapter.
+
+---
+
+Next: [Why Your Agent Is Flaky](/book/foundations/nondeterminism), sampling, the reproducibility you can and cannot buy, and what it does to your idea of a test.
+
+## Takeaways
+
+- Constrained decoding compiles the schema into a state machine and masks illegal tokens at each step. Invalid output is unreachable, not merely unlikely.
+- The guarantee is shape only. Valid is not correct, and every business validation you owed before, you still owe.
+- The mask is applied after the forward pass, so a constraint overrides reasoning rather than guiding it. Strict schemas measurably cost accuracy on hard tasks.
+- Field order is generation order. Put reasoning fields before verdict fields, or leave room for the model to think outside the constrained region.
+- Response format is for one known answer; strict tool schemas are for letting the model choose. Agents use the second.
+- `additionalProperties: false` plus an explicit `required` list are mandatory, and easy to forget.
+- Bounds and lengths are not expressible in the grammar; they get validated after the fact. Constrain what the grammar can; validate the rest in code, where the policy lives anyway.
+- Enums are the highest-value constraint available: they delete a class of branch bug outright.
+- Still handle truncation and refusal, and give every field that might genuinely be unknown a way to say so, or the schema will force a hallucination.

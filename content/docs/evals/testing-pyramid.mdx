@@ -1,0 +1,237 @@
+---
+title: "The Testing Pyramid for Agentic Systems"
+description: "Unit, contract, integration, replay, statistical eval, fault injection, and red team: which layer catches which failure."
+---
+
+Evals do not replace tests. They cover the behavior that equality assertions cannot. Everything deterministic around the model still deserves ordinary tests, and those tests are faster, cheaper, and more precise than asking a judge whether the system behaved.
+
+The mistake is treating "the agent" as one test target. It is several kinds of software joined together, and each kind needs a different instrument.
+
+## The stack, not a slogan
+
+<Figure caption="Lower layers run more often and localize failures better. Upper layers see more of the real system and cost more to interpret." frame={false}>
+
+```text
+                 production monitoring
+              adversarial and fault tests
+             statistical behavior evals
+          end-to-end and replay scenarios
+       provider and integration contract tests
+    unit · property · schema · authorization tests
+```
+
+</Figure>
+
+This is not a rule that the bottom must contain more files. It is an order of preference. Prove a property at the lowest layer that can see it.
+
+If a JSON schema can reject an invalid amount, do that once. Do not run a hundred model samples and score how often the amount happened to parse. If the question is whether a policy answer is complete and useful, a schema cannot decide it. That belongs in an eval.
+
+## Layer 1: deterministic tests
+
+Test the code you own with exact assertions:
+
+- schema validation and canonical serialization;
+- context-budget arithmetic;
+- routing tables and authority checks;
+- idempotency-key derivation;
+- risk-tier computation;
+- retrieval filters;
+- reducers and state transitions;
+- stop conditions and budget enforcement;
+- citation resolution;
+- prompt assembly from fixed inputs.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/dispatch/authorize.test.ts"
+it('cannot widen account scope through model arguments', () => {
+  const ctx = runContext({ tenantId: 'meridian', accountIds: ['acme'] });
+
+  expect(authorize(
+    { tool: 'issue_credit', args: { account_id: 'other', order_id: '4921' } },
+    ctx.scope,
+  )).toEqual({ ok: false, reason: 'account_out_of_scope' });
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/tests/test_authorize.py"
+def test_model_arguments_cannot_widen_account_scope() -> None:
+    ctx = run_context(tenant_id="meridian", account_ids=["acme"])
+
+    assert authorize(
+        tool="issue_credit",
+        args={"account_id": "other", "order_id": "4921"},
+        scope=ctx.scope,
+    ) == Denied(reason="account_out_of_scope")
+```
+
+</Tab>
+</Tabs>
+
+No model call belongs in this test. The property is total and deterministic. Adding a model would make the test slower and weaker.
+
+Property-based tests are valuable where inputs are broad but the invariant is crisp. Generate arbitrary tool arguments and assert that no value outside run scope reaches the client. Generate arbitrary retry sequences and assert that one idempotency key produces at most one effect.
+
+## Layer 2: contracts at every boundary
+
+A contract test proves that two components still agree.
+
+| Boundary | Contract |
+| --- | --- |
+| Model provider | Content parts, tool calls, usage, stop reasons, errors |
+| Tool adapter | Input schema, result schema, units, provenance, partial flag |
+| Enterprise API | Auth, pagination, enum handling, API version |
+| Vector index | Dimensions, metric, filters, pipeline version |
+| Graph store | Parameterized query, path bounds, per-hop authorization |
+| Temporal Activity | Serialized arguments, retryable error class, heartbeat details |
+| UI event stream | Event IDs, ordering, resumability, terminal states |
+
+Run a small provider probe against the real endpoint on a schedule. A mock can prove your adapter handles a `tool_call`; it cannot prove the provider still emits the field where your adapter expects it.
+
+Provider probes should cost pennies and avoid behavior claims. Ask the endpoint to return one structured object, call one inert tool, report usage, and stream one response. Their job is compatibility, not quality.
+
+## Layer 3: integration scenarios
+
+Bring real components together while keeping external effects controlled.
+
+Examples:
+
+- Postgres row-level security plus vector filters under two tenants;
+- a Temporal Workflow with test time skipping through a three-day approval;
+- a webhook persisted, acknowledged, delivered twice, and applied once;
+- an agent tool call passing through the real dispatcher into a sandbox adapter;
+- an index build published atomically after one parser retry;
+- a UI reconnect receiving no duplicated event.
+
+Integration tests should use a real database and real serialization. In-memory substitutes erase the exact transaction, isolation, and compatibility behavior the test exists to catch.
+
+## Layer 4: record, replay, and end-to-end
+
+Recorded fixtures make expensive remote behavior deterministic. Keep the original request, response, resolved bundle, tool results, retrieval IDs, timestamps that affected decisions, and provider error metadata.
+
+Then use two modes:
+
+**Replay.** Feed recorded nondeterministic results into new deterministic code. The expected diff for a refactor is zero.
+
+**Re-run.** Call the model and tools again on the same input. The result may vary, so score the outcome and path rather than comparing bytes.
+
+Confusing the two produces false confidence. Replay cannot validate a changed prompt or model because it reuses the old answer. Re-run cannot localize a dispatcher refactor because the model may take a different path before reaching it. [Replay-Driven Debugging](/book/observability/replay-debugging) implements the distinction.
+
+Recorded production data needs the same retention, access, and erasure controls as the system it came from. A fixture copied into Git has a longer life and a broader audience than the trace it was extracted from.
+
+## Layer 5: statistical behavior evals
+
+Use repeated samples and scores for properties only the model can make uncertain:
+
+- answer correctness and completeness;
+- tool selection and arguments;
+- retrieval use;
+- trajectory efficiency;
+- safe abstention;
+- response quality;
+- cost and latency distributions.
+
+The next chapters cover datasets, scoring, trajectories, and sample sizes. The testing rule is already available. Do not make a statistical gate for a property that code can enforce exactly.
+
+## Layer 6: failure and adversarial testing
+
+Fault injection asks whether the system survives an accidental failure. Red teaming asks whether an attacker can steer the same failure on purpose.
+
+```text
+Fault: tool returns a forged-looking value by mistake
+Attack: tool returns a forged value with instructions
+
+Fault: webhook is delivered twice
+Attack: signed old webhook is replayed deliberately
+
+Fault: retrieval returns another tenant's chunk
+Attack: poisoned metadata tries to cross the filter
+```
+
+The invariants are shared: no unauthorized effect, no duplicate effect, bounded execution, traceable outcome, and safe escalation. [Failure Injection](/book/reliability/failure-injection) and [Adversarial Evals](/book/security/adversarial-evals) differ in method and ownership, not in the safety properties they assert.
+
+## Test doubles without lying to yourself
+
+Use the smallest double that preserves the behavior under test.
+
+| Double | Good for | Cannot prove |
+| --- | --- | --- |
+| Fixed model response | Parser, dispatcher, state transitions | Model quality |
+| Recorded provider response | Adapter regression, replay | Current provider behavior |
+| Fake tool | Agent path and error recovery | Vendor contract, auth, side effect |
+| Containerized database | Transactions, RLS, migrations | Managed-service limits |
+| Temporal test environment | Workflow logic and time skipping | Production queue saturation |
+| LLM judge | Subjective scoring at scale | Authorization or factual invariants |
+
+The double's limitation belongs in the test name or suite description. "End-to-end" is a false label if the model, database, and tool are all fakes.
+
+## The release pipeline
+
+Run tests by cost and diagnostic value:
+
+```text
+every edit
+  lint · types · unit · schema
+
+every commit
+  contract fixtures · database integration · workflow tests · replay
+
+pull request
+  golden set · trajectory assertions · cost estimate · security invariants
+
+scheduled
+  live provider probes · larger evals · drift canary · red team corpus
+
+pre-release
+  shadow execution · fault suite · canary readiness
+```
+
+Promote a late expensive failure downward when possible. If a red-team case reveals that a `webhook_url` argument enables exfiltration, remove the argument or constrain it in schema. The permanent regression becomes a unit assertion, not a nightly attack that you hope keeps failing.
+
+<FrameworkCheck decision="Use framework test utilities for their runtimes, but keep fixtures, invariants, and scoring contracts framework-independent.">
+<FrameworkOption name="plain">
+
+Unit, property, schema, adapter, and dispatcher tests remain ordinary language-level tests. They are the largest and most valuable layer.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+Test nodes as functions, conditional edges as routing rules, reducers under concurrent updates, and small compiled graph trajectories. Do not require the whole graph for a node invariant.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Use the test environment for replay, time skipping, retries, signals, and Continue-As-New. Activities keep separate adapter and integration suites.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+Test event serialization, stream resumption, tool approval state, cancellation, and rendering from fixed event sequences without calling a model.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas runs exact unit gates on scope, tiers, citations, budgets, and idempotency. Contract suites cover all four enterprise sources and the model gateway. Postgres and Temporal integration tests run on every commit. Recorded traces cover deterministic refactors. The twenty-ticket set reports behavior until it grows large enough to gate the rates it claims to measure.
+
+Every production incident enters at the lowest layer that can prevent it. A bad reply becomes a golden-set case. A forbidden argument becomes a schema test. A duplicate credit becomes an idempotency property test plus a failure scenario. "Add it to the eval set" is not the universal answer.
+
+---
+
+Next: [Building a Dataset](/book/evals/datasets), the examples and labels that make the statistical layers mean something.
+
+## Takeaways
+
+- Evals cover uncertain behavior. They do not replace exact tests for deterministic code.
+- Prove each property at the lowest layer that can see it.
+- Contract-test model, tool, API, index, graph, workflow, and UI boundaries.
+- Replay old nondeterministic results for deterministic changes. Re-run when the model or prompt changed.
+- Treat recorded fixtures as production data with retention and erasure obligations.
+- Fault tests and red teams assert many of the same invariants under different causes.
+- Name what every test double cannot prove.
+- Promote failures downward. The best permanent fix often becomes a schema or unit test, not another expensive eval.

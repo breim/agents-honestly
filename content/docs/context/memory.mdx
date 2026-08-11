@@ -1,0 +1,167 @@
+---
+title: "Memory: Short-Term, Long-Term, and Neither"
+description: "Thread state, durable user facts, and the knowledge base: three different things people put in one vector store."
+---
+
+
+"Add memory to the agent" is one requirement in a sentence and three systems in practice. Teams hear it as one, build one vector store, write everything into it, and get something that works acceptably for none of the three.
+
+This chapter is mostly about telling them apart, because once you have, each is a solved problem with an unremarkable answer.
+
+## Three things, and a fourth that isn't
+
+<Figure caption="Different lifetimes, different access patterns, different correctness requirements. Only one of them is a retrieval problem." frame={false}>
+
+```
+   ┌────────────────────┬────────────────────┬────────────────────┐
+   │   THREAD STATE     │  DURABLE FACTS     │  KNOWLEDGE BASE    │
+   ├────────────────────┼────────────────────┼────────────────────┤
+   │ where we are in    │ what's true about  │ what's true about  │
+   │ this task          │ this entity        │ the world          │
+   │                    │                    │                    │
+   │ lives: one run     │ lives: until it    │ lives: until the   │
+   │                    │ changes            │ document changes   │
+   │                    │                    │                    │
+   │ small, ordered,    │ small, keyed,      │ large, unordered,  │
+   │ must be complete   │ must be exact      │ must be relevant   │
+   │                    │                    │                    │
+   │ access: all of it  │ access: by key     │ access: by         │
+   │                    │                    │ similarity         │
+   │                    │                    │                    │
+   │ → a typed object   │ → a database row   │ → retrieval        │
+   └────────────────────┴────────────────────┴────────────────────┘
+```
+
+</Figure>
+
+**Thread state** is where the current task stands: what we've looked up, what we've concluded, what's left. It dies with the run.
+
+**Durable facts** are small, specific truths about an entity that outlive any conversation: this account is net-60, this contact prefers email, this customer has an open dispute.
+
+**The knowledge base** is Meridian's policy corpus. It is not memory at all. It exists whether or not anyone ever talks to Atlas, and it is [Part IV's subject](/book/retrieval/where-does-the-answer-live) rather than this chapter's.
+
+And the fourth category, the one worth naming because it absorbs a surprising amount of "memory" work: **things that are just your database.** Order history, ticket history, contract terms. These are facts the business already stores, with an owner, a schema, and a source of truth. Copying them into a memory store creates a second, worse copy that drifts. If the answer is in Postgres, the memory system is a `SELECT`.
+
+## Why one store fails all three
+
+Put them in a single vector index and each breaks in its own way.
+
+**Thread state needs order and completeness.** Similarity search returns neither. "What did we already try?" is not a semantic question. It is *all of it, in sequence*, and a top-k retrieval over your own recent steps is a way to forget step two while remembering step four.
+
+There is a sharper way to say this: treating working state as a retrieval problem is a **category error**. It is a context-budget problem, and the tools for it are the ones from the last two chapters: allocation, prioritization, and compression. Not embeddings.
+
+**Durable facts need exactness.** "Net-60" and "net-30" embed to nearly the same vector. A fuzzy match on payment terms is not a slightly worse answer; it is a wrong number in a customer email. Facts want a key lookup.
+
+**And mixing them corrupts the ranking.** Once a policy document and a customer preference live in the same index, a well-written policy paragraph can outrank the one-line fact that this specific customer negotiated an exception. The corpus is bigger and denser, so it wins on similarity, and the exception is exactly the thing you needed.
+
+## Thread state: keep it typed
+
+The default place agents keep working state is the transcript itself: everything the model concluded is in there, as prose, along with everything it retrieved and every tool result.
+
+That works until it doesn't, for two reasons already established. The transcript grows without bound, so it eventually gets [compacted](/book/context/compaction) and your state is summarized away. And the transcript is [poisonable](/book/context/context-poisoning): a wrong intermediate conclusion sits there as established fact for every subsequent step.
+
+The fix is to keep verified state in a typed object your code owns, and pass it forward explicitly:
+
+```
+   { ticket_id: 8823,
+     order: { id: 4921, verified: true, total_cents: 184_500 },
+     damage_policy: { doc: "POL-114", version: 7, max_credit_pct: 40 },
+     computed_credit_cents: 54_000,
+     awaiting: "authority_check" }
+```
+
+Three properties that the transcript version doesn't have: it is typed, so a malformed conclusion fails at the boundary rather than propagating; it is small, so it survives compaction; and it is *yours*, so the model can read it but cannot silently rewrite it. That is the [structured scratchpad](/book/patterns/context/structured-scratchpad), and it is the single highest-value pattern in this part of the book.
+
+## Durable facts: writing is the hard part
+
+Reading facts back is easy. Deciding what to write, and when, is where memory systems fail, and they fail in four documented ways.
+
+| Failure | What it looks like |
+| --- | --- |
+| **Leakage** | A fact learned in one customer's context surfaces in another's |
+| **Stale propagation** | A fact that was true in March is recalled with perfect fidelity in September |
+| **Contradiction persistence** | Both the old and new version of a fact are stored, and the agent picks one |
+| **Provenance collapse** | Nobody can say where a fact came from, when, or on whose authority |
+
+The third and fourth compound, and they come from the same design choice: **append-only storage.** Writing memories as new entries is the obvious implementation and it is the trap. The old version doesn't go anywhere, so both coexist, and the agent has no principled way to choose. Research on evolving agent memory names this *trust hierarchy ambiguity*: without explicit versioning and conflict resolution, a stale memory is treated as exactly as authoritative as fresh input.
+
+So a fact is not a string. It is a record:
+
+```
+   { subject: "account:4471",
+     predicate: "payment_terms",
+     value: "net-60",
+     source: "ticket:8102",         ← provenance
+     asserted_by: "human:jvega",    ← authority
+     asserted_at: "2026-03-14",     ← recency
+     supersedes: "fact:9912" }      ← resolution
+```
+
+With those four fields, contradiction has an answer: highest authority wins, then most recent. Without them, you are asking a probabilistic component to adjudicate a data-integrity question.
+
+**And write sparingly.** The instinct is to have the model summarize each conversation into memory, which manufactures exactly the low-authority, unverified, contradiction-prone entries above. Better rules: write when a human asserts something, when a system-of-record changes, or when the same correction happens twice. Do not write the model's inferences. Those are conclusions, and conclusions belong to a run.
+
+<Aside type="caution" title="Never write secrets into memory">
+Memories persist and are replayed verbatim into every future context that loads them. An API key written once is re-injected into every subsequent session, indefinitely, where it is visible to anything that can read the context, including content an attacker controls.
+
+This is the *unauthorized leakage* failure mode in its most expensive form, and unlike the others it does not degrade slowly. Credentials belong in a secret store; nothing in a memory store should be a secret.
+</Aside>
+
+## Forgetting is a feature
+
+Nobody builds deletion, and every memory system needs it, for correctness before compliance.
+
+Facts drift on different timelines. A shipping address changes yearly, an open-dispute flag changes weekly, a contract term changes at renewal. **No single expiry policy fits them**, which means TTL has to be per fact type, decided when you define the type.
+
+Three mechanisms, and a serious system has all three:
+
+**Expiry.** A per-type TTL, after which a fact is stale rather than absent, surfaced with its age rather than silently dropped. "Payment terms were net-60 as of eighteen months ago" is useful; a confident bare "net-60" is not.
+
+**Versioning.** Every mutation produces an immutable prior version. This is what makes provenance collapse recoverable: you can answer *when did this change, and who changed it*, and roll back a bad write.
+
+**Deletion and redaction.** A user asks to be forgotten; a fact turns out to be wrong; a secret gets written by mistake. You need to remove the current value *and* scrub it from history while keeping the audit trail that something was removed. Systems that treat memory as append-only have no answer here, which is a legal problem as well as an engineering one.
+
+## Retrieve facts by key, not by similarity
+
+One practical consequence worth stating on its own, because it contradicts the reflex.
+
+For entity facts, the right query is *"give me everything you know about account 4471"*, a keyed lookup returning a small, complete set. Not *"find facts similar to this ticket."* You want completeness over a tiny result set, which is what a `WHERE subject = ?` does perfectly and what similarity search does badly.
+
+Similarity earns its place when the corpus is large and the query is fuzzy, which is the knowledge base. Applying it to a dozen structured facts about one account adds latency, adds error, and adds an embedding pipeline you now have to maintain.
+
+## Atlas, specifically
+
+| Information | Where it goes | Why |
+| --- | --- | --- |
+| What we've looked up this ticket | Typed scratchpad, in-run | Ordered, complete, discarded at the end |
+| Order 4921's contents | Nowhere; query it | It's in Postgres; a copy would drift |
+| "This account negotiated net-60" | Fact store, keyed by account | Small, exact, must survive |
+| "Contact prefers email over phone" | Fact store, keyed by contact | Same, and low-stakes if stale |
+| Meridian's damage policy | Policy corpus | A document, not a memory |
+| "Customer seemed frustrated" | Nowhere | A model inference. Not a fact. |
+
+That last row is the discipline. If you cannot name which of the four categories a piece of information belongs to, do not store it. An unclassified write is how the store fills with prose nobody can validate, expire, or contradict.
+
+## The reason this chapter exists
+
+Memory is among the most common points of **silent** failure in agentic systems, and by now that word should be ringing a bell. A stale fact does not raise. A leaked fact does not raise. A contradiction does not raise. The agent keeps answering, nothing errors, and the answers just slowly get worse, over weeks, in a way that no single trace will show you and no unit test will catch.
+
+The defenses are structural rather than clever: separate the three things, give facts provenance and expiry, keep working state typed and outside the transcript, and store nothing you cannot classify. None of that requires a memory product. All of it requires deciding what memory means before you build one.
+
+---
+
+Next: [Compaction and Summarization](/book/context/compaction), rewriting history so the agent can keep going, without losing the thing it needed.
+
+## Takeaways
+
+- "Memory" is three systems: thread state, durable facts, and a knowledge base. A fourth category is just your existing database.
+- Only the knowledge base is a retrieval problem. Treating working state as retrieval is a category error; it's a context-budget problem.
+- One vector store fails all three: state loses order, facts lose exactness, and the corpus outranks the exceptions you needed.
+- Keep thread state in a typed object your code owns. It survives compaction and can't be silently rewritten mid-run.
+- Memory fails four ways: leakage, staleness, contradiction, and provenance collapse. The last two come from append-only storage.
+- Store facts as records with source, authority, timestamp, and what they supersede. Without those, you're asking a probabilistic component to resolve a data-integrity question.
+- Write sparingly, and don't write the model's inferences. Conclusions belong to a run, not to a store.
+- Never write secrets, because memories are replayed verbatim into every future context.
+- Forgetting is a feature: per-type expiry, versioning, and real deletion with redaction.
+- Fetch entity facts by key, not similarity. Completeness over a small set beats ranking.
+- The whole failure class is silent. Nothing errors; the answers just get worse.

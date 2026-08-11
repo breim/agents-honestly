@@ -1,0 +1,283 @@
+---
+title: "Learning From Production Feedback"
+description: "Turning corrections, overrides, and complaints into evidence without treating every click as truth or poisoning the next release."
+---
+
+Production gives you more data than any lab and fewer clean labels than it appears to. A thumbs-down can mean the answer was wrong, too long, rude, slow, or correct but unwelcome. A human rewrite can fix tone while preserving the same factual error. A customer who quietly leaves provides the strongest signal and no explanation.
+
+Feedback is evidence about an interaction. It becomes a label only after someone defines what the signal means.
+
+## Signals are not labels
+
+| Signal | What it proves | What it does not prove |
+| --- | --- | --- |
+| Thumbs up | User chose a positive control | Factual correctness |
+| Thumbs down | Something was unsatisfactory | Which criterion failed |
+| Human edit | Reviewer preferred different output | That every edit improved quality |
+| Override | Human chose another action | Whether agent or policy was wrong |
+| Escalation | Agent stopped or policy required review | Failure |
+| Reopened ticket | Prior resolution did not hold | Which component caused it |
+| Refund reversed | Business action was corrected | Malice, model error, or changed facts |
+| No response | Nothing reliable by itself | Satisfaction |
+
+The lesson is not to ignore weak signals. It is to store them with enough context to interpret later and never feed them directly into training or a golden set.
+
+## The feedback event
+
+Keep the raw event immutable. Interpretation can change as the rubric changes.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/feedback/event.ts"
+export interface FeedbackEvent {
+  id: string;
+  runId: string;
+  turnId?: string;
+  actor: { type: 'customer' | 'reviewer' | 'system'; id?: string };
+  kind: 'rating' | 'edit' | 'override' | 'reopen' | 'complaint' | 'outcome';
+  value: unknown;
+  occurredAt: string;
+  exposure: { bundle: string; route: string; tenantId: string };
+  source: string;
+}
+
+export interface Adjudication {
+  feedbackId: string;
+  rubricVersion: string;
+  labels: string[];
+  severity: 'none' | 'minor' | 'major' | 'critical';
+  notes: string;
+  reviewerId: string;
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/feedback/event.py"
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Literal
+
+@dataclass(frozen=True)
+class FeedbackEvent:
+    id: str
+    run_id: str
+    turn_id: str | None
+    actor_type: Literal["customer", "reviewer", "system"]
+    actor_id: str | None
+    kind: Literal["rating", "edit", "override", "reopen", "complaint", "outcome"]
+    value: Any
+    occurred_at: datetime
+    bundle: str
+    route: str
+    tenant_id: str
+    source: str
+
+@dataclass(frozen=True)
+class Adjudication:
+    feedback_id: str
+    rubric_version: str
+    labels: tuple[str, ...]
+    severity: Literal["none", "minor", "major", "critical"]
+    notes: str
+    reviewer_id: str
+```
+
+</Tab>
+</Tabs>
+
+Separate actor from subject. A manager correcting a reply about a customer is the feedback actor; the customer remains the data subject. That distinction matters when the actor leaves the company or the subject requests erasure.
+
+## Join feedback to the run
+
+A feedback event without the resolved bundle, retrieved evidence, tool trajectory, and final state is a complaint you cannot diagnose.
+
+```text
+feedback event
+      │ run_id
+      ▼
+run record
+├── model and prompt bundle
+├── input and context manifest
+├── retrieval IDs and versions
+├── tools, arguments, and results
+├── policy and authority decisions
+├── latency and cost
+└── final business outcome
+```
+
+The join must survive compaction, Continue-As-New, and a UI reconnect. Use the stable run ID from [What a Trace Must Answer](/book/observability/what-a-trace-must-answer), not a browser session ID.
+
+## Triage before labeling
+
+Route feedback by potential harm and information value.
+
+1. **Immediate incident.** Possible data leak, unauthorized effect, financial loss, or repeated dangerous behavior. Contain first; label later.
+2. **Deterministic defect.** Wrong filter, stale version, broken unit conversion, missing idempotency. Open an engineering issue and add the lowest-layer regression test.
+3. **Behavioral failure.** Poor answer, wrong tool choice, unnecessary escalation, incomplete reasoning. Candidate for the eval dataset.
+4. **Preference.** Tone, format, verbosity, workflow friction. Product evidence, not necessarily a correctness case.
+5. **No defect found.** Keep the event. The absence of a confirmed defect is a label too.
+
+This triage prevents a prompt tweak from hiding an authorization bug and prevents every stylistic preference from bloating the golden set.
+
+## Corrections need a diff with reasons
+
+Store the original, edited version, and a structured reason:
+
+```text
+factual_correction
+missing_evidence
+wrong_action
+policy_override
+tone_or_style
+too_long
+too_short
+changed_after_new_information
+reviewer_preference
+```
+
+"Changed" is not a useful label. The reason decides whether the case belongs in retrieval, tool design, prompt behavior, policy, or nowhere.
+
+When reviewers disagree, preserve both labels and send the case back to the rubric. [Building a Dataset](/book/evals/datasets) already established that disagreement often reveals an undefined success criterion. Do not erase that finding by picking the senior reviewer automatically.
+
+## The promotion pipeline
+
+<Figure caption="Production feedback earns its way into a regression set. No raw click crosses directly into a release gate or training job." frame={false}>
+
+```text
+raw signal
+    ↓
+join to run and outcome
+    ↓
+privacy scrub + deduplication
+    ↓
+triage
+    ↓
+adjudication against versioned rubric
+    ↓
+candidate set
+    ↓
+review for representativeness and leakage
+    ↓
+golden set · report set · incident fixture · discard
+```
+
+</Figure>
+
+Promotion requires:
+
+- enough input and context to reproduce the task;
+- an expected outcome that does not depend on hidden reviewer knowledge;
+- source evidence and its version;
+- tenant-safe pseudonymization;
+- a stated slice and failure class;
+- no duplicate or near-duplicate already dominating the set;
+- a rubric version and reviewer record.
+
+An incident fixture may preserve more internal detail than a portable golden case. Keep those stores separate. The fixture is for replay under restricted access; the golden case is for repeated evaluation and may reach CI workers and developer machines.
+
+## Sampling is part of the product
+
+Feedback arrives from the users most willing to provide it, on the interactions where the control was visible, and after the outcomes that were obvious quickly. That is not the production distribution.
+
+Use deliberate sampling alongside volunteered feedback:
+
+- random baseline sample;
+- all high-risk actions;
+- escalations and human overrides;
+- retries, loops, and cost outliers;
+- new model, prompt, tool, or index versions;
+- underrepresented tenants, languages, and routes;
+- delayed outcomes such as reopened cases and reversed credits.
+
+Track the denominator. "Twelve complaints" is uninterpretable without how many eligible interactions occurred and which users were offered the feedback control.
+
+The NIST report on [monitoring deployed AI systems](https://www.nist.gov/publications/challenges-monitoring-deployed-ai-systems-center-ai-standards-and-innovation) identifies human-AI feedback loops and scaling human validation as open monitoring problems. That is the honest status. The mechanisms here create auditable evidence, not a magic unbiased data flywheel.
+
+## Feedback can be attacked
+
+An attacker can flood negative ratings to force a rollback, insert secrets into free-text feedback, or craft corrections that later enter a training set. An internal reviewer can also encode policy changes through edits without authority to change policy.
+
+Controls:
+
+- authenticate the actor and record their role;
+- rate-limit and deduplicate events;
+- strip or quarantine secrets before dataset promotion;
+- separate policy override from model correction;
+- require a second reviewer for security-critical labels;
+- never auto-train or auto-deploy from feedback;
+- monitor label distribution by actor and tenant;
+- retain raw evidence so suspicious adjudications can be audited.
+
+The feedback store is untrusted input with a slower path to production. Treating it as trusted because a human typed it is the same mistake as trusting a retrieved document because an employee uploaded it.
+
+## Close the loop through releases
+
+Improvement follows the same release path as any other change:
+
+```text
+labeled failure
+    ↓
+root cause and lowest-layer fix
+    ↓
+offline regression
+    ↓
+shadow / canary
+    ↓
+production monitoring
+    ↓
+did the target slice improve without moving another one?
+```
+
+Record which feedback IDs motivated a change. After rollout, compare the affected slice and inspect for displaced failures. A prompt that reduces "too long" complaints may increase missing-evidence errors. Without lineage from signal to change to metric, the team remembers only that the prompt looked better in review.
+
+<FrameworkCheck decision="Store feedback in one application-owned event and adjudication model. Let UI, graph, and workflow layers contribute signals without owning the learning policy.">
+<FrameworkOption name="plain">
+
+The application database owns immutable events, adjudications, rubric versions, promotion status, and lineage to releases.
+
+</FrameworkOption>
+<FrameworkOption name="langgraph">
+
+Graph nodes emit run and decision IDs. Human corrections may resume a run, but graph state is not the long-term feedback dataset.
+
+</FrameworkOption>
+<FrameworkOption name="temporal">
+
+Workflows emit durable outcomes such as approval, timeout, reversal, and reopen. Those are signals joined by run ID, not automatic labels.
+
+</FrameworkOption>
+<FrameworkOption name="ai-sdk">
+
+The interface captures ratings, edits, and reason codes beside the exact message or approval card the user saw. It sends events to the same backend store.
+
+</FrameworkOption>
+</FrameworkCheck>
+
+## Atlas, concretely
+
+Atlas captures ratings, reviewer edits, approval overrides, reopened tickets, credit reversals, and complaints. Every event joins to a run and resolved bundle. Security and financial signals page the owner; behavioral cases enter a weekly adjudication queue.
+
+No raw feedback enters the golden set. Two reviewers label high-risk cases. Promoted examples keep source IDs and versions, then the release manifest records which examples motivated the change. The dashboard reports feedback rate with its exposure denominator and slices it by route, bundle, and tenant.
+
+## References
+
+- [Challenges in Monitoring Deployed AI Systems](https://www.nist.gov/publications/challenges-monitoring-deployed-ai-systems-center-ai-standards-and-innovation), NIST, the monitoring gaps this chapter is a response to.
+
+---
+
+Next: [What a Trace Must Answer](/book/observability/what-a-trace-must-answer), the run record that makes every feedback event diagnosable.
+
+## Takeaways
+
+- Feedback is evidence about an interaction. It is not a label until interpreted against a rubric.
+- Store raw events immutably and keep adjudication separate.
+- Join every event to the resolved bundle, evidence, trajectory, policy decisions, and outcome.
+- Triage incidents and deterministic defects before sending behavioral cases to an eval queue.
+- Store edits with a reason. "Changed" does not identify the layer that failed.
+- Promote cases through privacy review, deduplication, adjudication, and representativeness checks.
+- Track exposure denominators and sample deliberately. Volunteered feedback is not the production distribution.
+- Feedback can be poisoned. Authenticate actors, monitor distributions, and never auto-deploy from it.
+- Link each change back to motivating cases, then verify the target slice improved after release.

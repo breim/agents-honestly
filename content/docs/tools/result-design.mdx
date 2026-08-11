@@ -1,0 +1,209 @@
+---
+title: "Tool Result Design"
+description: "What comes back lands in the context window forever. Shape it, cap it, summarize it."
+---
+
+[Atlas v0](/book/first-agent/the-loop-by-hand) truncated every tool result at four thousand characters. [Part III called that a bound, and a bad one](/book/context/context-as-budget), and deferred the reason to this chapter. Here it is.
+
+## Why the blunt cut is the wrong bound
+
+`truncate(JSON.stringify(data), 4_000)` is one line and it looks responsible. Five things are wrong with it.
+
+**It cuts by position, and position has nothing to do with importance.** The field that decides the answer is wherever the serializer happened to put it. A blunt cut keeps the first 4,000 characters, which on a typical payload means metadata, IDs, and timestamps. It drops the one field the ticket was about.
+
+**It produces invalid JSON.** The model receives `{"invoices":[{"id":"88213","amount_cents":42` and has to repair it. It will, plausibly. A repaired value is indistinguishable from a real one in everything downstream. This is [the confident-wrong-answer failure](/book/retrieval/sql-is-still-the-answer) arriving through a door nobody watches.
+
+**It is silent.** Nothing in the truncated text says it was truncated, so the model cannot tell "that is all there is" from "there was more and you were not shown it." That is [silent truncation](/book/workflows/composition-patterns), which this book keeps finding in new places, and it is dishonest in the specific sense that the agent will report a partial answer as a complete one.
+
+**You already paid for everything you threw away.** The query ran, the rows serialized, the bytes crossed the network. Cutting at the tool boundary saves context and nothing else: not latency, not database load, not the thing that was actually expensive.
+
+**One number for every tool is one number that fits none of them.** Four thousand characters is generous for an order lookup and absurd for a policy document.
+
+## The real cost, and why it compounds
+
+A tool result is not paid once. It is appended to the transcript and **re-sent on every subsequent request for the rest of the run.**
+
+<Figure caption="A result returned early is bought once and rented for the remainder of the run." frame={false}>
+
+```
+   a 4,000-token result returned on turn 2 of a 10-turn run
+
+   turn:   2    3    4    5    6    7    8    9   10
+           ▓    ▓    ▓    ▓    ▓    ▓    ▓    ▓    ▓
+           └──────────── re-sent 9 times ───────────┘
+
+           4,000 × 9  =  36,000 input tokens
+                          for one lookup
+```
+
+</Figure>
+
+That arithmetic is the whole chapter. It is why [an earlier chapter claimed](/book/tools/tools-are-apis-for-models) that returning only the fields the agent needs is the single highest-leverage change in tool design. It is also why the claim is quantitative rather than aesthetic: **the multiplier on every unnecessary field is the number of turns that follow it.** Trimming a result in half on turn 2 saves more than trimming it in half on turn 9.
+
+It also interacts with [caching](/book/foundations/prompt-caching) in your favour. A result that lands early and never changes sits in the stable prefix, which makes the re-sends cheap, but only if the result is deterministic. A payload carrying a `retrieved_at` timestamp invalidates the prefix on every turn and converts a cache read back into full price.
+
+## Four moves, in order of preference
+
+[Compaction](/book/context/compaction) gives the order for history: drop, truncate, summarize, externalize. At the tool boundary the order is different, because you control the source:
+
+**1 · Shape at the source.** Select the fields in the query. Do not fetch, serialize, and then discard. Decide what the tool returns as part of designing the tool, and let the database return that. This is where the entire win is; the remaining three moves are for what survives it.
+
+**2 · Cap, and say so.** A count and the cap, both stated. `"Showing 5 of 213 matches"` is a fact the model can act on; five results presented as all of them is a lie it will repeat to a customer.
+
+**3 · Paginate deliberately.** Return a page plus a cursor, and expose a tool that accepts the cursor. This is the one place a protocol is appropriate. Not `limit`/`offset` arithmetic the model has to compute, but an opaque token it hands back.
+
+**4 · Externalize.** Past some size, do not put it in the transcript at all: write it somewhere, return a reference and a short preview, and let the model fetch what it needs. Real harnesses draw this line in the range of roughly 8,000 characters to 20,000 tokens, substituting a path plus a preview of the first few hundred characters or first ten lines. This is the same move as [retrieval on demand](/book/context/dynamic-selection), applied to output rather than input. The catalog carries all four of these rules as one entry, [Tool Result Truncation](/book/patterns/context/tool-result-truncation), with the cap, the count, the cursor, and the continuation nudge in code.
+
+<Aside type="tip" title="Truncation, done honestly">
+When you do cut, the continuation nudge is what makes it recoverable. Harnesses that get this right append something like:
+
+```
+[Showing lines 1–2000 of 50000. Use offset=2001 to continue.]
+```
+
+Three things in one line: what you got, what exists, and the exact call that gets more. Compare with a bare `...` and it is obvious which one an agent can act on, and which one produces [an apology instead of a recovery](/book/tools/errors-as-instructions).
+</Aside>
+
+## JSON is for your API, not for your prompt
+
+Format is a lever most people never touch, and for uniform rows it is a large one. Measured across common serializations of the same flat data:
+
+| Format | Relative token cost | Why |
+| --- | --- | --- |
+| TSV / CSV | **~0.4×** | Field names appear once, in a header row |
+| Compact JSON | ~0.7× | No indentation, but keys still repeat per record |
+| Pretty JSON | 1.0× (baseline) | Indentation, quotes, braces, and every key repeated |
+| XML | ~1.16× | Closing tags write every field name twice |
+
+Reported figures put the gap between pretty JSON and TSV at roughly **2.6×** for flat data. The repetition tax gets worse with more rows and more fields, because `"amount_cents"` is paid once per record rather than once per result. Treat the exact multipliers as illustrative; they move with the tokenizer and the content. The ordering is stable.
+
+The rule that follows is narrow and worth applying literally:
+
+- **Uniform rows → tabular.** Fifty invoices with the same six fields is a header and fifty lines.
+- **Nested or heterogeneous → JSON.** A single account with a contract object and an array of terms is not a table, and forcing it into one costs more in confusion than it saves in tokens.
+- **Never XML for data.** It is strictly worse than the baseline on this axis.
+
+JSON is the right thing at your API boundary, where a parser consumes it. Inside the prompt the consumer is a model, and that is a different consumer, which is [the whole thesis of this part](/book/tools/tools-are-apis-for-models), showing up one last time as a serialization decision.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/invoices.ts"
+export async function listUnpaidInvoices(args, requester) {
+  const CAP = 50;
+  // ① shape at the source — six columns, not SELECT *
+  const { rows, total } = await db.unpaidInvoices({
+    accountId: args.account_id,
+    requester,
+    limit: CAP + 1,
+  });
+
+  const page = rows.slice(0, CAP);
+
+  // ② uniform rows → tabular. header once, values after.
+  const table = [
+    'invoice_id\tissued\tdue\toutstanding_cents\tdays_overdue',
+    ...page.map((r) =>
+      [r.id, r.issued, r.due, r.outstandingCents, r.daysOverdue].join('\t'),
+    ),
+  ].join('\n');
+
+  return {
+    account_id: args.account_id,
+    as_of: args.as_of ?? todayInTz('Europe/Lisbon'), // stable, not Date.now()
+    returned: page.length,
+    total_matching: total,
+    // ③ disclosure, with the exact call that gets more
+    note:
+      total > CAP
+        ? `Showing ${CAP} of ${total}. Call again with after_id="${page.at(-1)!.id}".`
+        : undefined,
+    invoices_tsv: table,
+  };
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/invoices.py"
+async def list_unpaid_invoices(args, requester):
+    CAP = 50
+    # ① shape at the source — six columns, not SELECT *
+    rows, total = await db.unpaid_invoices(
+        account_id=args["account_id"], requester=requester, limit=CAP + 1
+    )
+    page = rows[:CAP]
+
+    # ② uniform rows → tabular. header once, values after.
+    header = "invoice_id\tissued\tdue\toutstanding_cents\tdays_overdue"
+    table = "\n".join(
+        [header]
+        + [
+            "\t".join(
+                map(str, (r.id, r.issued, r.due, r.outstanding_cents, r.days_overdue))
+            )
+            for r in page
+        ]
+    )
+
+    result = {
+        "account_id": args["account_id"],
+        "as_of": args.get("as_of") or today_in_tz("Europe/Lisbon"),  # stable
+        "returned": len(page),
+        "total_matching": total,
+        "invoices_tsv": table,
+    }
+    # ③ disclosure, with the exact call that gets more
+    if total > CAP:
+        result["note"] = (
+            f'Showing {CAP} of {total}. Call again with after_id="{page[-1].id}".'
+        )
+    return result
+```
+
+</Tab>
+</Tabs>
+
+Note `as_of` resolving to a date rather than a timestamp. That is the cache point above, made concrete: a date is stable for the rest of the run, and `Date.now()` would invalidate the prefix on every turn for no informational gain.
+
+## Every result is a citation
+
+[Part IV established](/book/retrieval/sql-is-still-the-answer) that a warehouse result should carry the query that produced it. The general form: **a result should contain enough provenance for the reply built on it to be checked.**
+
+For Atlas that means the invoice result carries `as_of`, the policy search carries document IDs and versions, and the warehouse query carries its filters. Not because the model needs them to reason, but because [the acceptance spec requires citations](/book/first-agent/the-problem), and a citation the agent invents after the fact is not a citation. If the provenance is not in the result, the reply cannot honestly contain it.
+
+This is also the field set most worth spending tokens on. It is small, it is stable, and it converts an assertion into something a human can verify in one click.
+
+## Atlas, concretely
+
+| Tool | Shape | Cap | Disclosure |
+| --- | --- | --- | --- |
+| `get_order` | JSON: one nested object | — | — |
+| `crm_account_risk_profile` | JSON: nested, heterogeneous | — | — |
+| `erp_list_unpaid_invoices` | TSV rows + JSON envelope | 50 | Count + `after_id` |
+| `query_warehouse` | Scalar + filters + SQL | 500 rows | Row count, or "narrow the query" |
+| `search_policies` | JSON: id, version, span, excerpt | 5 chunks | Total matches |
+
+`search_policies` is the one worth a second look: it returns an **excerpt**, not the document. A full policy PDF in the transcript is the externalization case from move 4, and the excerpt plus a document ID is what makes the citation checkable without renting the whole document for nine turns.
+
+The number to watch is not the size of any single result. It is **input tokens per resolved ticket**, which is where the multiplier shows up, and it is the one line on the [cost dashboard](/book/observability/cost-accounting) that responds immediately to work done in this chapter.
+
+---
+
+Part VIII ends with one question left: what happens when the catalogue is too large to send at all. Next: [Tool Discovery at Scale](/book/tools/tool-discovery), what to do when there are two hundred tools and eleven are relevant.
+
+## Takeaways
+
+- Truncating at a fixed character count cuts by position rather than importance, produces invalid JSON the model repairs by guessing, says nothing about what was dropped, and saves none of the cost you already paid.
+- A result is bought once and rented for the rest of the run. A 4,000-token result on turn 2 of a 10-turn run costs 36,000 input tokens.
+- The multiplier on every unnecessary field is the number of turns after it, which is why trimming early results matters more than trimming late ones.
+- Order of preference at the tool boundary: shape at the source, cap with disclosure, paginate with a cursor, externalize past a threshold.
+- Real harnesses externalize somewhere between ~8,000 characters and ~20,000 tokens, returning a path plus a short preview.
+- "Showing 5 of 213 matches" is actionable; five results presented as all of them is a lie the agent will repeat.
+- When you truncate, append what you got, what exists, and the exact call that returns more.
+- For uniform rows, TSV costs roughly 0.4× pretty JSON. The gap is about 2.6×, because keys are written once instead of once per record. XML is worse than JSON. Keep JSON for nested or heterogeneous data.
+- JSON belongs at your API boundary. Inside the prompt the consumer is a model, and the format should follow the consumer.
+- Keep results deterministic. A timestamp in a payload invalidates the cached prefix on every turn for no informational gain.
+- Every result carries its provenance, because a citation the agent invents afterwards is not a citation.
+- Track input tokens per resolved ticket. It is the metric this chapter moves.

@@ -1,0 +1,199 @@
+---
+title: "Signals, Updates, and Child Workflows"
+description: "Getting data into a running workflow, getting answers out, and decomposing the big ones."
+---
+
+Everything in Part X so far describes a workflow that starts, runs, and finishes on its own. Real ones need three more things: someone has to be able to **tell them something**, **ask them something**, and eventually you have to **cut the big ones up**.
+
+This is the last of the mechanics, and still no AI in sight.
+
+## Three ways to talk to a running execution
+
+| | **Signal** | **Query** | **Update** |
+| --- | --- | --- | --- |
+| Direction | In | Out | In **and** out |
+| Returns a value | No | Yes | **Yes** |
+| May change state | Yes | **No** | Yes |
+| May block or await | Yes | **No** | Yes |
+| Validation | — | — | **Optional validator** |
+| Recorded in history | Yes | **No** | Yes |
+| Caller learns the outcome | **No** | Yes | **Yes** |
+
+The compressed version: **a signal is a message, a query is a getter, an update is a method call.**
+
+One row decides most real choices, and it is the last one. **A signal is acknowledged by the server immediately, before the workflow has processed it.** So "the signal was accepted" means the server durably recorded it, not that the workflow acted on it, and certainly not that it worked. If your caller needs to know what happened, a signal cannot tell them, and reaching for one anyway is how people end up building a second channel to report the result back.
+
+> Need fire-and-forget? Signal. Need an answer? Update. Need to read without disturbing anything? Query.
+
+Updates carry the piece signals lack: an optional **validator**, a read-only check that accepts or rejects the update before it touches the workflow. Like a query, a validator cannot block. It is the natural place for "is this workflow even in a state where that request makes sense," which otherwise becomes an awkward branch inside the handler after the request is already recorded.
+
+## Waiting for one
+
+The durable wait is a condition, not a poll:
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/temporal/refund-workflow.ts"
+import { condition, setHandler, sleep, defineUpdate, defineQuery } from '@temporalio/workflow';
+
+export const approve = defineUpdate<boolean, [Decision]>('approve');
+export const status = defineQuery<string>('status');
+
+export async function refundWorkflow(orderId: string): Promise<string> {
+  let decision: Decision | undefined;
+  let phase = 'awaiting-approval';
+
+  setHandler(approve, (d) => { decision = d; return true; }, {
+    // read-only, cannot block: reject nonsense before it is recorded
+    validator: (d) => { if (d.amountCents > 100_000) throw new Error('above limit'); },
+  });
+  setHandler(status, () => phase);
+
+  // Wait for a person, or give up after three days. Nothing is held open.
+  const approved = await Promise.race([
+    condition(() => decision !== undefined).then(() => true),
+    sleep('3 days').then(() => false),
+  ]);
+
+  if (!approved) { phase = 'escalated'; return escalate(orderId); }
+
+  phase = 'issuing';
+  // …issue the credit, as in the previous chapters
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/temporal/refund_workflow.py"
+@workflow.defn
+class RefundWorkflow:
+    def __init__(self) -> None:
+        self._decision: Decision | None = None
+        self._phase = "awaiting-approval"
+
+    @workflow.update
+    async def approve(self, d: Decision) -> bool:
+        self._decision = d
+        return True
+
+    @approve.validator
+    def _validate(self, d: Decision) -> None:
+        # read-only, cannot block: reject nonsense before it is recorded
+        if d.amount_cents > 100_000:
+            raise ValueError("above limit")
+
+    @workflow.query
+    def status(self) -> str:
+        return self._phase
+
+    @workflow.run
+    async def run(self, order_id: str) -> str:
+        # Wait for a person, or give up after three days. Nothing is held open.
+        try:
+            await workflow.wait_condition(
+                lambda: self._decision is not None,
+                timeout=timedelta(days=3),
+            )
+        except asyncio.TimeoutError:
+            self._phase = "escalated"
+            return await escalate(order_id)
+
+        self._phase = "issuing"
+        # …issue the credit, as in the previous chapters
+```
+
+</Tab>
+</Tabs>
+
+Three days of waiting, and no process is running. This is the mechanism underneath [approval gates](/book/human-in-the-loop/approval-gates), the chapter that spends its length on *when* a human should be asked. The durable answer to *how you wait* is the eight lines above.
+
+<Aside type="caution" title="Two handler traps, both quiet">
+**Handlers can run before the main method starts.** With signal-with-start especially, a message can be delivered to a handler before your `run` body has executed its first line. Do not assume initialization has happened; initialize in the constructor or guard the handler.
+
+**Returning from the workflow can interrupt a handler that is still running.** A workflow that completes, or continues-as-new, while an update handler is mid-flight cuts it off. The fix is to wait for handlers to drain before finishing. Every SDK exposes an "all handlers finished" condition for exactly this, and it belongs immediately before your `return` in any workflow that accepts updates.
+</Aside>
+
+## Signal-with-start
+
+One call that starts the workflow if it is not running and delivers the message either way. It is the idempotent entry point for *"an event arrived concerning entity X"*, which is most events.
+
+Paired with [the workflow ID acting as a dedup key](/book/durable-execution/temporal-in-forty-minutes), it collapses a whole category of code: no "does a run exist for this order," no race between two processes both deciding to start one, no lookup table mapping entities to executions. The entity's ID **is** the workflow ID, and every event is a signal-with-start against it.
+
+## Children exist to partition history
+
+The naive reason to reach for a child workflow is code organization. The real reason is a hard number:
+
+> **An event history is capped at roughly 51,200 events or 50 MB.**
+
+A workflow that loops indefinitely accumulates events indefinitely, and that ceiling is not a soft one. Two tools address it, and they solve different halves:
+
+**Continue-As-New** ends the current execution and immediately starts a fresh one with the same workflow ID, passing forward a *summary* of state as input. History resets to empty. This is how a workflow runs for a year.
+
+**Child workflows** each get their own workflow ID, their own history, and their own lifecycle. Splitting work into children splits the history along with it. A parent that starts a thousand children keeps a thousand child-related events, not a thousand children's worth of internal events.
+
+| | **Activity** | **Child workflow** |
+| --- | --- | --- |
+| Models | One effect | A sub-process with its own steps |
+| Its events land in | The parent's history | **Its own history** |
+| Can be signalled or queried | No | **Yes** |
+| Can run long timers | Not really | Yes |
+| Can outlive the parent | No | Yes, with a policy |
+
+The rule of thumb: **if it needs its own history, its own long waits, or its own mailbox, it is a child. Otherwise it is an activity.** A child workflow is not a bigger activity. It is a workflow, with all the machinery and all the cost that implies.
+
+<Aside type="caution" title="Continue-As-New kills your children by default">
+By default, child workflows are terminated when the parent closes, **and continuing-as-new counts as closing.**
+
+That is the trap, because continue-as-new is not an exceptional event. It is the normal, intended operation for any long-running workflow, and the first time a parent recycles its history it silently takes its children with it.
+
+Set a parent-close policy explicitly on any child that should outlive the parent's current run. This is a one-line decision that is very unpleasant to discover from behaviour.
+</Aside>
+
+The two tools compose into the standard pattern for unbounded work: a parent starts a child, the child does periodic work and continues-as-new as many times as it needs, then completes and reports back. The parent's history stays small because it holds one child reference; the child's history stays small because it resets on every cycle.
+
+## Choosing, quickly
+
+| You want to… | Use |
+| --- | --- |
+| Deliver an event and not wait | Signal |
+| Deliver a request and know the outcome | Update |
+| Read progress without side effects | Query |
+| Start-or-notify an entity's workflow | Signal-with-start |
+| Run one effect with retries | Activity |
+| Run a sub-process with its own waits and mailbox | Child workflow |
+| Run forever without hitting the history ceiling | Continue-As-New |
+
+## Atlas, concretely
+
+The refund workflow, now able to hold a conversation:
+
+- **Started** with signal-with-start on workflow ID `refund-4921`, so a duplicate event finds the existing run instead of opening a second one.
+- **`approve` is an update, not a signal**, because the caller is an operations console and a person clicking Approve needs to be told whether it was accepted. The validator rejects an approval whose amount does not match the pending credit. It is read-only, non-blocking, and it fires before anything is recorded.
+- **`status` is a query**, so the console can poll without adding an event to history every time someone refreshes a page.
+- **The wait is a condition raced against a three-day timer.** No process, no thread, no row in a table with a cron against it. On timeout it escalates rather than retrying, because a refund nobody approved in three days is a question for a human.
+- **No children.** One refund is small. A nightly batch reconciling ten thousand of them *would* use one child per refund, not for tidiness, but because ten thousand refunds' worth of activity events do not fit in one history.
+
+Part X is done: a workflow that survives crashes, retries correctly, waits for people, and can be cut into pieces. Nothing in it has been about agents.
+
+The catalog turns the last two chapters into recipes: [Signal With Start](/book/patterns/durability/signal-with-start) for the inbound event that may arrive before the workflow exists, [Request-Response via Update](/book/patterns/durability/update-request-response) for the console that needs an answer back, [Updatable SLA Timer](/book/patterns/durability/sla-timer) for the deadline that moves, and [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory) for the history ceiling this chapter named.
+
+---
+
+Part X ends here. Next: [Not a Background Job](/book/durability/not-a-background-job), Part XI, where the model finally shows up, and where putting it in the wrong half of this machinery breaks everything above.
+
+## Takeaways
+
+- A signal is a message, a query is a getter, an update is a method call.
+- A signal is acknowledged by the server before the workflow processes it. Accepted is not the same as acted on. If the caller needs an outcome, use an update.
+- Updates can carry a validator: a read-only, non-blocking check that rejects a request before it is recorded.
+- Queries must not change state and must not block. They also do not appear in history, which is why polling one is cheap.
+- The durable wait is a condition raced against a timer. Three days of waiting costs no process and no thread.
+- Handlers can run before the main workflow body starts, especially with signal-with-start. Do not assume initialization has happened.
+- Completing or continuing-as-new can cut off an in-flight handler. Wait on the "all handlers finished" condition before returning.
+- Signal-with-start makes the entity ID the workflow ID and removes an entire category of does-a-run-exist code.
+- Event history is capped at roughly 51,200 events or 50 MB. This is the real reason child workflows exist.
+- Continue-As-New resets history for the same workflow ID; children partition history across many IDs. Use both for unbounded work.
+- By default, continuing-as-new terminates the parent's children. Set a parent-close policy explicitly, because this is discovered from behaviour otherwise.
+- A child workflow is not a bigger activity. If it needs its own history, long waits, or a mailbox, it is a child; otherwise it is an activity.

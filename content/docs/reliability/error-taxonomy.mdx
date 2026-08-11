@@ -1,0 +1,226 @@
+---
+title: "An Error Taxonomy for Agents"
+description: "Transient, permanent, policy, budget, semantic. Different failures, different responses."
+---
+
+Here is one hour of Atlas's error log, deduplicated:
+
+```
+Error: socket hang up
+Error: 429 Too Many Requests
+Error: 400 prompt is too long: 214813 tokens > 200000
+Error: tool 'issue_credit' failed: account 9917 not found
+Error: 529 Overloaded
+Error: refusal: I can't help with that
+Error: run budget exhausted
+```
+
+Seven lines, and a single `catch` block treating them alike is wrong seven different ways. Three should be retried, but not on the same schedule, and one of the three carries a header telling you when. Two must never be retried, because the second attempt is guaranteed to fail identically and bill you for it; one of those two is repaired by handing the message back to the model rather than by failing the step. One means a person needs to look, and working around it is the worst available response. And one is not a failure at all. It is the run stopping cleanly at a limit you set.
+
+And the most expensive failure of the hour is not in the log, because it did not raise. At 14:20 Atlas confidently quoted a refund policy that expired in March.
+
+> **The only useful question about an error is what should happen next. A taxonomy is the set of answers, not a naming exercise.**
+
+Part XVI is classical distributed-systems discipline applied to a component that is expensive, slow, and occasionally wrong. This chapter is the classification everything else in the part dispatches on.
+
+## Five classes
+
+<Figure caption="Read down the 'who can fix it' column. It is the axis that actually determines the response." frame={false}>
+
+```
+   ①  TRANSIENT    the world was briefly busy
+                   who fixes it: waiting
+                   → retry, once, at one layer
+
+   ②  PERMANENT    this request is malformed or impossible
+                   who fixes it: you, in code
+                   → fail fast. never retry
+
+   ③  POLICY       the request was understood and refused
+                   who fixes it: a person, or a rule change
+                   → route to a human. do not work around
+
+   ④  BUDGET       allowed, but you have spent the allowance
+                   who fixes it: a decision about limits
+                   → degrade, then stop cleanly
+
+   ⑤  SEMANTIC     it worked, and the answer is wrong
+                   who fixes it: prompts, tools, retrieval, evals
+                   → does not raise. does not appear here at all
+```
+
+</Figure>
+
+| Class | Examples | Retry? | Handled where |
+| --- | --- | --- | --- |
+| **Transient** | Socket reset, 5xx, 529 overloaded, 429 | Yes, one layer, with backoff | [Timeouts and retries](/book/reliability/timeouts-and-retries) |
+| **Permanent** | Context length exceeded, 400 malformed, unknown tool, schema violation | **Never** | Fail the step; fix in code |
+| **Policy** | Content refusal, authorization denied, [tier requires approval](/book/human-in-the-loop/risk-tiers), [taint ceiling](/book/security/prompt-injection) | **Never** | [Escalation](/book/human-in-the-loop/escalation-and-audit) |
+| **Budget** | Token cap, run deadline, [retry budget](/book/reliability/timeouts-and-retries) exhausted, max turns | No. That is what exhausted means | [Cost engineering](/book/production/cost-engineering) |
+| **Semantic** | Wrong answer, invented policy, [poisoned context](/book/context/context-poisoning) | Meaningless | [Evals](/book/evals/eval-discipline), [tracing](/book/observability/what-a-trace-must-answer) |
+
+Three of the five rows are frequently misfiled, and each misfiling has a signature cost.
+
+**Context length exceeded is permanent, not transient.** It arrives as a `400` in the middle of a long run, looks like an API error, and gets retried. The same oversized prompt fails identically three more times and you are billed for each rejection. The recovery is [compaction](/book/context/compaction) and re-entry, which is a different code path entirely.
+
+**A content refusal is policy, not transient.** The reflex is to rephrase and try again. That is the reflex of someone building a workaround for a control. If a refusal is wrong, that is a prompt or a product problem to fix deliberately; if it is right, retrying until it passes is the [worst possible response](/book/security/prompt-injection).
+
+**Budget exhaustion is not an error at all.** It is the system working. Logging it at `ERROR` trains everyone to ignore the error channel, and the correct handling is a clean stop with a partial result, which is a legitimate outcome, not a failure.
+
+## Classify at the boundary, never from the message
+
+The tempting implementation is a function that reads `err.message` and matches substrings. It is a classifier over vendor prose, and vendor prose changes without notice.
+
+Classification belongs at the **adapter**. The code that made the call knows what it called and what the protocol meant, and it assigns the class there, once.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/reliability/errors.ts"
+export type ErrorClass = 'transient' | 'permanent' | 'policy' | 'budget';
+
+export class AgentError extends Error {
+  constructor(
+    readonly cls: ErrorClass,
+    readonly code: string,          // stable, ours — not the vendor's string
+    message: string,
+    readonly opts: {
+      retryAfterMs?: number;        // from the header, when the provider sent one
+      modelFacing?: string;         // what the model sees, if anything
+      escalate?: boolean;
+    } = {},
+  ) { super(message); }
+}
+
+// Assigned where the call was made. One place per dependency.
+export function classifyProviderError(status: number, body: unknown): AgentError {
+  if (status === 429) return new AgentError('transient', 'rate_limited', '…', {
+    retryAfterMs: retryAfterFrom(body),
+  });
+  if (status >= 500) return new AgentError('transient', 'provider_unavailable', '…');
+  if (isContextLength(body)) return new AgentError('permanent', 'context_too_long', '…');
+  if (isRefusal(body)) return new AgentError('policy', 'refused', '…', { escalate: true });
+  return new AgentError('permanent', 'bad_request', '…');
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/reliability/errors.py"
+from dataclasses import dataclass
+from typing import Literal
+
+ErrorClass = Literal["transient", "permanent", "policy", "budget"]
+
+
+@dataclass
+class AgentError(Exception):
+    cls: ErrorClass
+    code: str                     # stable, ours — not the vendor's string
+    message: str
+    retry_after_ms: int | None = None   # from the header, when provided
+    model_facing: str | None = None     # what the model sees, if anything
+    escalate: bool = False
+
+
+def classify_provider_error(status: int, body: dict) -> AgentError:
+    # Assigned where the call was made. One place per dependency.
+    if status == 429:
+        return AgentError("transient", "rate_limited", "…",
+                          retry_after_ms=retry_after_from(body))
+    if status >= 500:
+        return AgentError("transient", "provider_unavailable", "…")
+    if is_context_length(body):
+        return AgentError("permanent", "context_too_long", "…")
+    if is_refusal(body):
+        return AgentError("policy", "refused", "…", escalate=True)
+    return AgentError("permanent", "bad_request", "…")
+```
+
+</Tab>
+</Tabs>
+
+Two fields carry the design. `code` is **yours**, stable across vendor rewording. Your metrics, alerts, and [retry policy](/book/reliability/timeouts-and-retries) key on it. And the adapter captures `retryAfterMs` at the boundary because it is available exactly there and nowhere later.
+
+## Every error has two audiences
+
+This is the part with no equivalent in ordinary distributed systems, and it is where agent error handling actually differs.
+
+A tool error is not only an exception your code handles. If you return it to the model, **it is prompt text**, and the model will reason over it. So every class needs two answers:
+
+| Class | What your code does | What the model sees |
+| --- | --- | --- |
+| **Transient** | Retries, one layer, with backoff | **Nothing.** It never learns the call was retried |
+| **Permanent: your bug** | Fails the step, alerts | Nothing. It cannot fix your serialization |
+| **Permanent: the model's mistake** | Does not retry | **The error, [written as an instruction](/book/tools/errors-as-instructions)** |
+| **Policy** | Escalates | A neutral statement that approval is required |
+| **Budget** | Stops or degrades | That it must conclude with what it has |
+| **Semantic** | — | — |
+
+The third row is the one worth splitting out explicitly, because "permanent" contains two different things. `account 9917 not found` is permanent in the sense that retrying the identical call is pointless, and it is also **the model's mistake and the model's to recover**, so it goes back into the transcript as guidance. `TypeError: cannot read property of undefined` in your adapter is also permanent and the model can do nothing with it; showing it just [pollutes the context](/book/context/context-as-budget) with noise.
+
+The first row matters for the opposite reason. A transient failure that your infrastructure recovered from should be **invisible** to the model. Otherwise it sees `Error: socket hang up` in its history and starts reasoning about network conditions, or worse, [calls the tool again itself](/book/reliability/timeouts-and-retries), which is the fourth retry layer nobody configured.
+
+> **Errors the model can act on go into the transcript. Errors it cannot act on stay in your logs.**
+
+## The class with no exception type
+
+Class ⑤ is the reason this chapter is not just a rewrite of a standard SRE table.
+
+A semantic failure produces a `200 OK`, a well-formed result, a clean trace, valid arguments, and a wrong answer. Nothing raises. Your error rate does not move. Your latency does not move. Every dashboard in the [operating manual](/book/production/operating-manual) stays green while the product gets worse.
+
+It has appeared in nearly every part of this book under different names: [poisoning](/book/context/context-poisoning), [drift](/book/observability/drift), a [retrieval miss](/book/retrieval/retrieval-evals), a [wrong-but-plausible tool result](/book/tools/result-design), an [injected instruction obeyed](/book/security/prompt-injection). What unites them is the shape: **the system reports success and the outcome is wrong.**
+
+<Aside type="caution" title="Which is why the reliability part cannot cover it">
+Everything in Part XVI operates on errors that raise. Retries, breakers, budgets, and backpressure are all machinery for signals your code receives.
+
+Semantic failure emits no signal, so it needs a different apparatus: [graded evals](/book/evals/scoring) that compare output against a rubric, [claim grounding](/book/evals/trajectory-evals) against what the tools actually returned, [online monitoring](/book/evals/online-evals) of production quality, and [traces detailed enough](/book/observability/what-a-trace-must-answer) to reconstruct why.
+
+That is why Parts XIV and XV come before this one. Reliability engineering handles the failures that announce themselves; the ones that don't were someone else's chapter, and they are the majority of what actually goes wrong.
+</Aside>
+
+The practical instruction is to **give class ⑤ a place in your taxonomy anyway**, even though no `catch` block will ever produce it. A team whose error model has four classes believes its error rate describes its failure rate. A team whose model has five knows the number is a floor.
+
+## Compounding: one root cause, five classes
+
+A last observation that changes how incidents read.
+
+A provider degradation starts as transient. Retries fire, so the [retry budget](/book/reliability/timeouts-and-retries) exhausts: budget. Latency rises, so runs hit their deadline: budget again. Some runs fall back to a smaller model, which produces worse tool arguments: permanent errors that are the *model's* mistakes. Those runs take more turns, spend more tokens, and produce weaker answers: semantic.
+
+One root cause, four classes, four dashboards, and an incident that looks like four unrelated problems if your classes are not linked back to a cause. Which is the argument for carrying the **run ID and the originating error code** through every derived failure: the taxonomy tells you what to do next, and only the trace tells you why you are here.
+
+## Atlas, concretely
+
+| Signal | Class | Response |
+| --- | --- | --- |
+| `529 Overloaded` | Transient | SDK retries with jitter; invisible to the model |
+| `429` with `Retry-After` | Transient | Honor the header; feeds [backpressure](/book/reliability/backpressure) |
+| `context_too_long` | Permanent | Compact and re-enter. Never retried |
+| `account not found` | Permanent (model's) | Returned to the model as an instruction |
+| Adapter `TypeError` | Permanent (yours) | Fails the step, pages, never shown to the model |
+| Content refusal | Policy | Escalates with the original request attached |
+| Taint ceiling / tier gate | Policy | [Approval request](/book/human-in-the-loop/approval-gates), not an error |
+| Run cost cap | Budget | Degrade at 70%, clean stop at 100% with a partial result |
+| Wrong refund policy quoted | **Semantic** | Nothing here catches it. [Eval suite](/book/evals/ci-for-agents) and grounding checks |
+
+The last row is deliberately in the table and deliberately without a mechanism. It is the most expensive failure in the hour of logs at the top of this chapter, and Part XVI has nothing to say about it, which is worth seeing in the same table as the ones it does handle.
+
+---
+
+Next: [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries), getting these wrong turns a provider blip into an outage and a bill.
+
+## Takeaways
+
+- The only useful question about an error is what should happen next. The taxonomy is the answer set.
+- Five classes: transient (waiting fixes it), permanent (you fix it), policy (a person fixes it), budget (a decision fixes it), semantic (nothing raises).
+- Context-length exceeded is permanent. Retrying sends the same rejected prompt three more times, billed each time.
+- A content refusal is policy. Rephrasing until it passes is building a workaround for a control.
+- Budget exhaustion is not an error. It is the system working, and logging it at ERROR trains people to ignore the channel.
+- Classify at the adapter, not by matching vendor message strings. Assign your own stable code and capture `Retry-After` where it exists.
+- Every agent error has two audiences: your code and the model. Answer both, separately.
+- Split "permanent" into the model's mistakes and yours. `account not found` goes back into the transcript as an instruction; your `TypeError` does not.
+- Recovered transient failures must be invisible to the model, or it reasons about network conditions and retries the call itself.
+- Class ⑤ has no exception type. A semantic failure is a 200 OK with a clean trace and a wrong answer, and every dashboard stays green.
+- Keep semantic in the taxonomy anyway. Four classes make you believe your error rate is your failure rate; five tell you it is a floor.
+- One root cause cascades across classes: transient becomes budget becomes permanent becomes semantic. Carry the run ID and originating code through, or one incident reads as four.

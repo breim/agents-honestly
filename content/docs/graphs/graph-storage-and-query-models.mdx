@@ -1,0 +1,228 @@
+---
+title: "Graph Storage and Query Models"
+description: "Property graphs, RDF, Cypher, and SPARQL at the level needed to choose a representation and keep generated queries away from production."
+---
+
+
+An ontology does not require a graph database. A graph database does not give you an ontology. The first is a contract about meaning; the second is a way to store and query relationships.
+
+Keeping those decisions separate prevents an expensive mistake: buying a graph product before naming the traversals, then bending the business model around what the product makes easy.
+
+## Three places a graph can live
+
+The same relationship can be represented in an ordinary relational database, a property graph, or RDF.
+
+<Tabs items={['Relational', 'Property graph', 'RDF']}>
+<Tab value="Relational">
+
+```sql
+CREATE TABLE relationship (
+  from_id text NOT NULL,
+  kind text NOT NULL,
+  to_id text NOT NULL,
+  valid_from timestamptz NOT NULL,
+  valid_to timestamptz,
+  source_id text NOT NULL,
+  PRIMARY KEY (from_id, kind, to_id, valid_from)
+);
+```
+
+</Tab>
+<Tab value="Property graph">
+
+```cypher
+(:Account {id: "acme"})
+  -[:GOVERNED_BY {valid_from: date("2026-01-01"), source_id: "C-123"}]->
+(:Contract {id: "C-123"})
+```
+
+</Tab>
+<Tab value="RDF">
+
+```turtle
+@prefix meridian: <https://meridian.example/schema/> .
+@prefix entity: <https://meridian.example/entity/> .
+
+entity:acme meridian:governedBy entity:C-123 .
+```
+
+</Tab>
+</Tabs>
+
+All three can answer "which contract governs Acme." They differ in identity, schema, interoperability, query style, and how naturally they attach properties to a relationship.
+
+## Relational first is a valid answer
+
+If the graph is small, the traversals are fixed, and the source data already lives in Postgres, an edge table plus recursive queries may be enough. You keep transactions, row-level security, backups, and an operational system the team already knows.
+
+Move when the evidence says the relational representation is fighting the workload:
+
+- variable-depth traversal dominates the queries;
+- joins over polymorphic entity types become the application;
+- path and neighborhood operations need dedicated optimization;
+- graph-specific access patterns change independently from the source schema;
+- the graph workload needs isolation from OLTP.
+
+"The SQL is ugly" is a reason to improve an interface. It is not, by itself, a reason to adopt another database.
+
+## Property graphs
+
+A property graph has nodes and directed relationships. Both can carry properties. Labels classify nodes; relationship types name the meaning of edges.
+
+```text
+(:Account {id, name})
+    -[:HAS_TICKET {opened_at, severity}]->
+(:Ticket {id, status})
+```
+
+This shape fits operational business graphs because relationships often have their own state. A contract governs an account during a time range. An employee owns a customer under an assignment source. Those are not timeless triples in the business sense, even if they can be encoded as triples.
+
+Cypher expresses a traversal as a pattern. The [official Cypher overview](https://neo4j.com/docs/cypher-manual/current/introduction/cypher-overview/) describes the same node and relationship syntax used below.
+
+```cypher title="account-health.cypher"
+MATCH (a:Account {id: $account_id})
+MATCH (a)-[:HAS_TICKET]->(t:Ticket)
+WHERE t.status = "open"
+OPTIONAL MATCH (a)-[:GOVERNED_BY]->(c:Contract)
+WHERE c.valid_from <= date($as_of)
+  AND (c.valid_to IS NULL OR c.valid_to > date($as_of))
+RETURN a.id AS account_id,
+       count(DISTINCT t) AS open_tickets,
+       min(t.opened_at) AS oldest_opened_at,
+       collect(DISTINCT c.id) AS active_contracts
+```
+
+The model supplies `account_id` and perhaps `as_of`. Your code owns the pattern, bounds, filters, and aggregation. Letting a model produce arbitrary Cypher creates the same failure as arbitrary SQL, with an extra ability to walk into parts of the graph the starting node did not reveal.
+
+## RDF and triples
+
+RDF represents statements as subject, predicate, and object. IRIs give entities and predicates identities that can be shared across organizations and datasets. The [RDF 1.2 data model](https://www.w3.org/TR/rdf12-concepts/) defines graphs as sets of these triples.
+
+That makes RDF attractive when vocabulary reuse, linked data, formal semantics, or federation across independently owned sources matters more than the convenience of properties on edges.
+
+SPARQL queries triple patterns. Its variables can occupy the subject, predicate, or object position, then combine into larger graph patterns. The [SPARQL 1.2 specification](https://www.w3.org/TR/sparql12-query/) is the primary reference.
+
+```sparql title="account-contracts.rq"
+PREFIX meridian: <https://meridian.example/schema/>
+
+SELECT ?contract
+WHERE {
+  <https://meridian.example/entity/acme>
+    meridian:governedBy ?contract .
+}
+```
+
+Do not choose RDF because triples look simple. The hard questions arrive immediately: which organization owns each IRI, how are vocabularies versioned, how is a statement annotated with source and validity, and what inference rules run at query time. RDF gives precise ways to answer them. It does not answer them for you.
+
+<Aside type="note" title="RDF 1.2 is still moving">
+As of this book's August 2026 verification, RDF 1.2 is a Candidate Recommendation and SPARQL 1.2 is a Working Draft. Use the stable subset your store supports and record the dialect. The conceptual choice between globally identified triples and a local property graph does not depend on the draft finishing.
+</Aside>
+
+## The decision table
+
+| Need | Start with |
+| --- | --- |
+| Existing Postgres, fixed traversals, one owning team | Relational edge tables |
+| Operational graph, rich relationship properties, path-heavy queries | Property graph |
+| Shared vocabularies, linked datasets, formal semantics, federation | RDF store |
+| Whole-corpus themes extracted from documents | GraphRAG pipeline, after the cheaper options |
+
+Storage and query language are coupled less tightly than vendor diagrams imply. Several relational systems support graph extensions. Some graph products expose more than one model. Choose on your required semantics and operations, then test the actual traversal workload.
+
+## Schema-flexible does not mean schema-free
+
+The graph should reject states that contradict the ontology:
+
+```text
+Account.id             required, unique
+Contract.id            required, unique
+GOVERNED_BY.source_id  required
+GOVERNED_BY.valid_from required
+GOVERNED_BY.valid_to   nullable, greater than valid_from
+```
+
+Use database constraints where the store provides them and ingestion validation everywhere. A free-form `RELATED_TO` edge is not flexibility. It is a missing decision that every query will make differently.
+
+Version the ontology separately from the database migration. Adding a property may be backward-compatible at storage level and breaking at meaning level. Renaming `OWNS` to `SERVICES` can leave every row valid while changing the answer to every traversal.
+
+## Provenance is part of the edge
+
+For every relationship, be able to answer:
+
+- which source asserted it;
+- whether the source was a record or model extraction;
+- when it was valid in the business;
+- when the system learned it;
+- which pipeline version created it;
+- which principal may traverse it.
+
+If the store cannot attach those fields directly to an edge or statement, introduce a relationship entity or reification pattern. The extra node is cheaper than a graph that cannot explain why it believes two customers are connected.
+
+## Put graph queries behind task-shaped tools
+
+The agent should not see `execute_cypher(query)` or `execute_sparql(query)`. It should see the business operation that the graph exists to answer.
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/tools/account-health.ts"
+export async function getAccountHealth(
+  accountId: string,
+  ctx: ToolContext,
+): Promise<AccountHealth> {
+  return ctx.graph.read(ACCOUNT_HEALTH_QUERY, {
+    account_id: accountId,
+    tenant_id: ctx.tenantId,
+    as_of: ctx.now.toISOString(),
+    max_depth: 2,
+  });
+}
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/tools/account_health.py"
+async def get_account_health(
+    account_id: str,
+    ctx: ToolContext,
+) -> AccountHealth:
+    return await ctx.graph.read(
+        ACCOUNT_HEALTH_QUERY,
+        account_id=account_id,
+        tenant_id=ctx.tenant_id,
+        as_of=ctx.now.isoformat(),
+        max_depth=2,
+    )
+```
+
+</Tab>
+</Tabs>
+
+The fixed query is reviewed for bounds and per-hop authorization. The result is a small typed object rather than a graph serialization dumped into the context window. This is [Tools Are APIs Designed for Models](/book/tools/tools-are-apis-for-models) applied to a graph.
+
+## Atlas, concretely
+
+Atlas starts with relational edge tables because the source records and tenancy controls already live in Postgres. The `get_account_health` tool owns a depth-two traversal and aggregate result.
+
+If path-heavy account analysis becomes a measurable share of traffic, Meridian can project the same ontology into a property graph. The tool contract does not change. RDF is not selected because Meridian has one owning organization and no vocabulary-federation requirement. That is a scope decision, not a judgment about which model is more sophisticated.
+
+## References
+
+- [Cypher overview](https://neo4j.com/docs/cypher-manual/current/introduction/cypher-overview/), the property-graph query language and its pattern-matching model.
+- [RDF 1.2 Concepts and Abstract Syntax](https://www.w3.org/TR/rdf12-concepts/), the triple model, IRIs, and named graphs.
+- [SPARQL 1.2 Query Language](https://www.w3.org/TR/sparql12-query/), the query language over that model.
+
+---
+
+Next: [Entity Resolution](/book/graphs/entity-resolution). "OpenAI", "Open AI", and "OpenAI, Inc." are still one company no matter which storage model you chose.
+
+## Takeaways
+
+- Ontology chooses meaning. Storage chooses how relationships are persisted and queried.
+- Start with relational edges when the graph is small, traversals are fixed, and the data already lives there.
+- Property graphs fit operational relationships with properties and path-heavy queries.
+- RDF fits shared identities, vocabularies, formal semantics, and federation.
+- Schema-flexible must still enforce entity identity, edge types, required properties, and temporal validity.
+- Every edge needs provenance, business validity, ingestion time, pipeline version, and authorization scope.
+- Keep Cypher and SPARQL behind fixed, parameterized, task-shaped tools. The model supplies an entry point, never the traversal program.

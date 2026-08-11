@@ -1,0 +1,185 @@
+---
+title: "Approval Gate"
+description: "Block a workflow indefinitely on a human decision without holding a process open."
+---
+
+## Problem
+
+The agent has computed a $2,500 credit. That is [tier 1](/book/human-in-the-loop/risk-tiers), so a person has to approve it.
+
+The person is asleep. It is Friday evening, and they will look at the queue on Monday.
+
+Nothing in ordinary server design survives this. A thread blocked for three days is a leaked thread; a polling loop that wakes every minute for seventy-two hours is 4,320 pointless queries per pending approval; and a fire-and-forget design that drops the run and reconstructs it later has to rebuild the agent's position in its own reasoning, which is the state you did not write down.
+
+There is also a correctness trap that has nothing to do with waiting: the naive implementation issues the credit, *then* asks for approval, because the code was written top to bottom.
+
+## Forces
+
+- **The wait is unbounded in practice**: minutes to days, and occasionally never.
+- **No process may be held open.** Thousands of concurrent tickets, each idle almost all the time.
+- **The agent's position is state**, not just its data. "Waiting on approval at step four" has to survive a deploy.
+- **The decision must be auditable**: who, when, and *what they were shown*.
+- **Authorization can change during the wait.** The approver may leave, or the policy may tighten.
+- **Nobody may approve at all**, and that outcome needs a defined behavior rather than an indefinite hang.
+
+## Solution
+
+The workflow **blocks on a condition** awaiting a signal, races it against a timeout timer, and consumes nothing while idle.
+
+<Figure caption="The workflow holds its position for days at zero cost. Only the decision, the timer, and the effect are events." frame={false}>
+
+```
+   workflow  ticket-9104                       worker process
+   ─────────────────────────────────────       ──────────────────
+   …step 4: credit computed
+   render + store approval card         ──▶    activity runs
+        │
+   await race(                                 nothing running
+     approvalSignal,          ← Friday 18:02   ── zero cost ──
+     timer(48 business hours)                  for 62 hours
+   )
+        │  signal: approved by staff-22        worker picks it up
+        ▼                       ← Monday 08:14
+   re-derive authorization  ← NOT restored from the checkpoint
+        │
+        ▼
+   issue_credit                          ──▶   activity runs
+   ── the effect lives AFTER the decision, alone in its step
+```
+
+</Figure>
+
+Four rules:
+
+**No effect before the pause, in the same unit of work.** [The rule that survives either mechanism](/book/human-in-the-loop/interrupts-vs-signals): everything above the wait re-executes on resume, so an effect placed before it happens twice. The effect goes in its own step, after the decision.
+
+**Store the rendered card, as bytes.** [The approval card is assembled from state that will have moved](/book/human-in-the-loop/approval-gates): balances settle, documents get superseded. Storing a *reference* proves nothing, because re-rendering next year produces a different card. The stored bytes are what demonstrates the decision was informed.
+
+**Re-derive authorization on resume; never restore it.** The approver may have changed roles, and the tier threshold may have been lowered on Wednesday. [Policy and authorization resolve at the moment of the action](/book/production/rollout), which means the resumed run re-checks rather than replaying Friday's answer.
+
+**Give the timeout a policy, not a hang.** Escalate to a second approver, expire and cancel, or auto-approve below a threshold, but decide, and record which branch fired. A gate whose timeout behavior is "wait forever" is a queue of stuck runs nobody can explain.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/workflows/approval.ts"
+export async function requestApproval(
+  req: ApprovalRequest, state: RunState,
+): Promise<Decision> {
+  // Rendered and stored BEFORE the wait. These bytes are the audit record.
+  const cardRef = await storeRenderedCard(req);
+  await notifyReviewers(req, cardRef);
+
+  let decision: Decision | null = null;
+  setHandler(approvalSignal, (d: Decision) => { decision = d; });
+
+  // Blocks at zero cost. No thread, no poll, no process held open.
+  const decided = await condition(
+    () => decision !== null,
+    approvalTimeout(req.tier),          // e.g. '48 business hours'
+  );
+
+  if (!decided) {
+    // A timeout is a defined outcome, not a hang. Record which branch fired.
+    return escalateToSecondTier(req, cardRef, 'approval_timeout');
+  }
+
+  // Re-derived, never restored: the approver may have changed roles and the
+  // tier threshold may have moved while this was waiting.
+  const still = await verifyApproverAuthority(decision!.by, req);
+  if (!still.ok) return escalateToSecondTier(req, cardRef, still.reason);
+
+  await recordDecision({ ...decision!, cardRef, requestedAt: req.at });
+  return decision!;
+}
+
+// The effect lives in the CALLER, after this returns — never above the wait.
+//   const d = await requestApproval(req, state);
+//   if (d.approved) await issueCredit(req.orderId);
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/workflows/approval.py"
+@workflow.defn
+class TicketAgent:
+    def __init__(self) -> None:
+        self._decision: Decision | None = None
+
+    @workflow.signal
+    def approval(self, d: Decision) -> None:
+        self._decision = d
+
+    async def request_approval(self, req: ApprovalRequest) -> Decision:
+        # Rendered and stored BEFORE the wait. These bytes are the audit record.
+        card_ref = await workflow.execute_activity(store_rendered_card, req)
+        await workflow.execute_activity(notify_reviewers, req, card_ref)
+
+        # Blocks at zero cost. No thread, no poll, no process held open.
+        # Note the shape: unlike the TypeScript `condition`, which returns a
+        # boolean, wait_condition RAISES on timeout. Testing a return value
+        # here would be dead code, and the timeout would fail the workflow
+        # instead of escalating.
+        try:
+            await workflow.wait_condition(
+                lambda: self._decision is not None,
+                timeout=approval_timeout(req.tier),
+            )
+        except asyncio.TimeoutError:
+            # A timeout is a defined outcome, not a hang.
+            return await escalate_second_tier(req, card_ref, "approval_timeout")
+
+        # Re-derived, never restored: authority may have changed while waiting.
+        ok, reason = await workflow.execute_activity(
+            verify_approver_authority, self._decision.by, req)
+        if not ok:
+            return await escalate_second_tier(req, card_ref, reason)
+
+        await workflow.execute_activity(record_decision, self._decision, card_ref)
+        return self._decision
+
+
+# The effect lives in the CALLER, after this returns — never above the wait.
+```
+
+</Tab>
+</Tabs>
+
+The comment at the bottom is the pattern's most-violated rule. `requestApproval` returns a decision and does nothing else; `issueCredit` is called by the code that received it. Any effect written above the `condition` runs again on every resume.
+
+## Trade-offs
+
+**The wait consumes a workflow, not a process.** That is cheap and not free: each pending approval is a live execution with an event history, a timer, and a place in your [system limits](/book/patterns/durability/continue-as-new-memory). Thousands of long-pending approvals is a real number to watch.
+
+**The queue becomes the bottleneck, predictably.** [The risk-tiers chapter](/book/human-in-the-loop/risk-tiers) predicts it and [the capstone's first month](/book/capstone/operating-it) hits it: p95 queue age drifts past the SLA, and the fix is raising the tier-0 cap based on which amounts were historically approved unchanged. The gate needs a queue-age alert from day one.
+
+**Approval fatigue is an attack surface, not just a UX problem.** Flooding a reviewer with benign requests until approval is reflex is [a documented technique](/book/human-in-the-loop/risk-tiers). Every gate you add spends attention an adversary can also draw against.
+
+**The dedup window has to outlive the pause.** A run that waits from Friday to Monday and then issues a credit is outside a 24-hour dedup window: [the Friday-to-Monday bug](/book/reliability/idempotency-in-practice), and the single most important thing to [inject in a test](/book/reliability/failure-injection) for this pattern.
+
+## When not to use it
+
+**For tier-0 actions.** If the action is reversible and small, gating it spends attention for nothing and makes the reviewer worse at the decisions that matter.
+
+**When the answer is knowable in code.** A threshold check dressed up as an approval is a policy that should be a predicate. Ask a human only when judgment is genuinely required.
+
+**When nobody will service it.** A gate routed to a queue nobody owns is a run that hangs and an incident later. Route to a named owner with a named backup, or do not add the gate.
+
+**When notification would do.** [Notify-and-proceed](/book/human-in-the-loop/risk-tiers) means act now, tell someone, and let them intervene. It is the right posture for a large middle band and costs no waiting at all.
+
+<Aside type="note" title="Why this is the pattern that decides your architecture">
+Of everything in this part, the approval gate is the one that most often forces Tier 3. A team can defer durable execution for retries, for crashes, even for long-running work. A queue and a state table cover a surprising amount.
+
+They cannot defer it for this. **A run that pauses for three days and resumes with its reasoning intact is the requirement that a queue plus a database cannot meet**, because what has to survive is not the data but the agent's position in its own loop. That is exactly what an event history is, and it is why [the two architecture questions](/book/production/reference-architecture) put "does a run outlive one request" first.
+</Aside>
+
+## Related
+
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): which calls need a gate at all, and why fewer is safer
+- [Approval Gates](/book/human-in-the-loop/approval-gates): the card, the queue, and what the reviewer is shown
+- [Interrupts vs. Signals](/book/human-in-the-loop/interrupts-vs-signals): the two mechanisms, and the effect-placement rule
+- [Updatable SLA Timer](/book/patterns/durability/sla-timer): the deadline this races against
+- [Idempotency in Practice](/book/reliability/idempotency-in-practice): sizing the dedup window to the approval pause

@@ -1,0 +1,192 @@
+---
+title: "Bounded Autonomy"
+description: "Hard caps on steps, tokens, wall time, and money."
+---
+
+## Problem
+
+A ticket worth eight dollars of margin generates a run that spends forty dollars of inference over eleven minutes and produces nothing.
+
+Nothing failed. The agent searched, re-read, rephrased its query, searched again, found a partial answer, tried to verify it, hit a tool error, retried, reconsidered, and searched once more. Every turn was locally reasonable. The run had no reason to stop, because nothing in *read a result and decide what to do next* contains a notion of enough.
+
+The naive control is a turn cap, and alone it is the wrong one. A run that hits twenty turns has already spent the money; a run that spends its budget on turn six has not hit the cap; and a run stuck in a loop looks identical to a run doing careful work until you look at what it produced.
+
+## Forces
+
+- **The loop has no natural stopping condition.** Termination is something you impose.
+- **The resources are independent.** Turns, tokens, wall clock, and money each run out on their own schedule.
+- **Cost is superlinear in turns**, because the transcript is re-sent, so a turn cap and a token cap bind at different points.
+- **A hard stop mid-run wastes everything spent so far**, which argues for degrading before failing.
+- **Caps sized for the average break the tail.** The rare hard ticket is the one that needs more.
+- **A cap with no defined outcome is a hang**, not a control.
+
+## Solution
+
+**Five independent bounds, each with a defined outcome, checked in the loop**, with a degrade rung before every hard stop.
+
+<Figure caption="Five bounds, three outcomes. Degrading first is what turns a wasted run into a cheaper one." frame={false}>
+
+```
+   BOUND            SIZED FROM                  AT 70%        AT 100%
+   ─────────────────────────────────────────────────────────────────────
+   turns            p95 of successful runs      —             partial
+   tokens / money   the value of THIS run       degrade       partial
+   wall clock       the user's patience         degrade       partial
+   no-progress      3 turns adding no fact      —             escalate
+   repetition       same tool + same args       —             instruct
+
+   DEGRADE  smaller model · tighter retrieval · no speculative calls
+   PARTIAL  return what was established, marked incomplete
+   ESCALATE hand a person the work already done
+```
+
+</Figure>
+
+Four rules:
+
+**Size the caps per run, from what the run is worth.** A global monthly ceiling tells you nothing about whether this ticket deserved forty calls. The unit is [cost per resolved outcome against margin on one](/book/production/cost-engineering): a ticket worth eight dollars gets a cap derived from eight dollars.
+
+**Degrade before you stop.** At seventy percent of budget, switch to a cheaper model, narrow retrieval, and drop speculative calls. A hard stop produces a truncated run at the worst moment; a degrade produces a cheaper, slightly worse completion, the [same shape as a fallback](/book/reliability/fallbacks-and-breakers), applied to money.
+
+**Every cap produces a defined outcome, and none of them is an exception.** A partial result marked incomplete, or an escalation carrying what was established. Budget exhaustion is [the system working](/book/reliability/error-taxonomy), and logging it at `ERROR` teaches everyone to ignore the error channel.
+
+**Count what the model spends on its own behalf.** Retries, [reflection passes](/book/patterns/control/reflection), critic calls, and abandoned branches all bill at full price. A budget that only counts productive turns is not a budget.
+
+## Code
+
+<Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
+<Tab value="TypeScript">
+
+```ts title="ts/src/control/bounds.ts"
+export interface Bounds {
+  maxTurns: number;
+  capMicros: number;        // derived from THIS run's value, not a global default
+  deadlineMs: number;       // absolute, set once at run start
+  maxBarren: number;        // consecutive turns adding no new fact
+  softRatio: number;        // 0.7 — degrade here, before the wall
+}
+
+export type Verdict =
+  | { action: 'proceed' }
+  | { action: 'degrade'; reason: string }
+  | { action: 'stop'; reason: string; outcome: 'partial' | 'escalate' };
+
+export function check(b: Bounds, s: RunState, ctx: RunContext): Verdict {
+  // Hard stops first — all independent, all sized differently.
+  if (s.turn >= b.maxTurns)
+    return { action: 'stop', reason: 'turn_cap', outcome: 'partial' };
+  if (ctx.budget.spentMicros >= b.capMicros)
+    return { action: 'stop', reason: 'budget', outcome: 'partial' };
+  if (Date.now() >= b.deadlineMs)
+    return { action: 'stop', reason: 'deadline', outcome: 'partial' };
+
+  // Stuck is different from slow: escalate rather than truncate.
+  if (s.barrenTurns >= b.maxBarren)
+    return { action: 'stop', reason: 'no_progress', outcome: 'escalate' };
+
+  // Degrade before the wall. A truncated run wastes everything spent.
+  if (ctx.budget.spentMicros > b.capMicros * b.softRatio)
+    return { action: 'degrade', reason: 'budget_soft' };
+
+  return { action: 'proceed' };
+}
+
+// Derived per run, not configured globally. Note the scope: this is the
+// ceiling for the WHOLE run across every node. An individual node may cap
+// itself lower — Atlas's action loop stops at eight.
+export const boundsFor = (ticket: Ticket): Bounds => ({
+  maxTurns: 12,
+  capMicros: Math.floor(ticket.marginCents * 10_000 * 0.15),  // 15% of margin
+  deadlineMs: Date.now() + 10 * 60_000,
+  maxBarren: 3,
+  softRatio: 0.7,
+});
+```
+
+</Tab>
+<Tab value="Python">
+
+```python title="py/atlas/control/bounds.py"
+@dataclass(frozen=True)
+class Bounds:
+    max_turns: int
+    cap_micros: int       # derived from THIS run's value, not a global default
+    deadline_s: float     # absolute, set once at run start
+    max_barren: int       # consecutive turns adding no new fact
+    soft_ratio: float = 0.7   # degrade here, before the wall
+
+
+def check(b: Bounds, s: RunState, ctx) -> tuple[str, str, str | None]:
+    # Hard stops first — all independent, all sized differently.
+    if s.turn >= b.max_turns:
+        return "stop", "turn_cap", "partial"
+    if ctx.budget.spent_micros >= b.cap_micros:
+        return "stop", "budget", "partial"
+    if time.monotonic() >= b.deadline_s:
+        return "stop", "deadline", "partial"
+
+    # Stuck is different from slow: escalate rather than truncate.
+    if s.barren_turns >= b.max_barren:
+        return "stop", "no_progress", "escalate"
+
+    # Degrade before the wall. A truncated run wastes everything spent.
+    if ctx.budget.spent_micros > b.cap_micros * b.soft_ratio:
+        return "degrade", "budget_soft", None
+
+    return "proceed", "", None
+
+
+def bounds_for(ticket) -> Bounds:
+    # Derived per run, not configured globally. Note the scope: this is the
+    # ceiling for the WHOLE run across every node. An individual node may
+    # cap itself lower — Atlas's action loop stops at eight.
+    return Bounds(
+        max_turns=12,
+        cap_micros=int(ticket.margin_cents * 10_000 * 0.15),   # 15% of margin
+        deadline_s=time.monotonic() + 600,
+        max_barren=3,
+    )
+```
+
+</Tab>
+</Tabs>
+
+Note that `no_progress` escalates while the other three return a partial. That distinction is deliberate: a run that ran out of budget has probably done useful work worth returning, and a run that made no progress for three turns is stuck, and the useful thing to do with stuck is hand it to a person, not truncate it.
+
+## Trade-offs
+
+**Caps sized for the average fail the tail.** The rare hard ticket is exactly the one that legitimately needs fifteen turns, and it is the one your p95-derived cap will cut off. Size from the p95 of *successful* runs, watch the cap-hit rate by route, and treat a rising one as a signal to investigate rather than to raise the number reflexively.
+
+**A partial result is a product decision, not a technical one.** What does the customer see when a run stops at seventy percent? Usually the right answer is that they see nothing and a person sees the work, which means every cap is also a load on the [escalation queue](/book/human-in-the-loop/risk-tiers).
+
+**Degrading changes the output quality silently.** A run that finished on the cheap rung produced a different answer than one that did not. Record which bounds fired, the same way you [record which model served](/book/reliability/fallbacks-and-breakers), or quality analysis is comparing incomparable runs.
+
+**More knobs is more to tune wrong.** Five bounds is five numbers, and most teams get value from three: turns, money, and no-progress. Add the others when you have evidence they bind.
+
+## When not to use it
+
+**Never, but size them honestly.** Every loop needs a stopping condition; the question is only which bounds and what values. An agent with no caps is one bad ticket away from an unbounded bill.
+
+The genuine "when not to" is about *which* bounds:
+
+**Skip the wall-clock deadline for async work.** A [durable run that pauses for approval](/book/patterns/durability/approval-gate) legitimately spans days. Bound its *active* time, not its elapsed time, or the approval pause trips the deadline.
+
+**Skip the money cap where value is not per-run.** A batch analysis over four thousand tickets has a job-level budget, not a per-item one.
+
+**Skip the turn cap when the work is a fixed plan.** [Plan-then-execute](/book/patterns/control/plan-then-execute) bounds itself by construction. The plan has a step count, and a replan budget is the cap that matters instead.
+
+<Aside type="caution" title="The cap that fires is doing a job; the cap that never fires is a guess">
+A bound nobody has seen trigger has not been validated. It might be correctly sized, or it might be an order of magnitude too high and quietly protecting nothing.
+
+So instrument the *distribution*, not just the events: the fraction of runs reaching 50%, 70%, and 90% of each bound. A cap where nothing ever exceeds 20% is not a control; a cap where a third of runs exceed 70% is about to become a product problem.
+
+And [inject the exhaustion deliberately](/book/reliability/failure-injection). Force a run to hit each bound in CI and assert the outcome: does it produce a partial result, does the escalation carry the work, does it reach a terminal state, is the cost bounded on the failure path too. The bounds are the code that runs when things go wrong, which makes them [the least-exercised code in the system](/book/reliability/failure-injection), and the code you most need to be correct.
+</Aside>
+
+## Related
+
+- [ReAct Loop](/book/patterns/control/react-loop): the loop these bounds wrap, and where each check goes
+- [Cost Engineering](/book/production/cost-engineering): deriving the money cap from unit economics
+- [Escalation Ladder](/book/patterns/control/escalation-ladder): what a bound hands the work to
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the deadline, propagated per call
+- [Token Budget Enforcement](/book/patterns/cost/token-budget-enforcement): the money bound, catalogued from the cost side

@@ -1,0 +1,156 @@
+---
+title: "Hybrid Search and Reranking"
+description: "Fusing lexical and semantic candidates, then reranking for what actually answers the question."
+---
+
+
+Two retrievers with complementary failures, one prompt with room for five chunks. This chapter is the two operations that get you from the first fact to the second, and they are routinely spoken of as one thing when they solve different problems.
+
+**Fusion** merges two ranked lists into one. **Reranking** re-scores candidates with a better, more expensive model. You want both, in that order, and confusing them produces systems that do the cheap one badly and skip the valuable one.
+
+## Why you can't just add the scores
+
+The obvious fusion is `0.5 × bm25_score + 0.5 × cosine_score`. It does not work, and the reason is worth understanding because it generalizes.
+
+**The two scores live in different spaces.** Cosine similarity is bounded, roughly zero to one. BM25 is **unbounded**: it grows with term rarity and query length, and a query with one very rare term can score far above anything a cosine score can reach. Adding them means the BM25 side dominates by construction, in a way that varies per query.
+
+The standard fix is to normalize each list, with min-max or z-score, and then combine. This is better and still fragile, for a specific reason:
+
+> Normalization depends on the **score distribution**, and that distribution shifts with every query. A min-max over a query where everything scored 0.8–0.82 stretches noise into confident-looking separation. The same code on the next query behaves differently.
+
+You are calibrating on a sample of one, every time.
+
+## Reciprocal Rank Fusion
+
+The answer is to throw the scores away and use the one thing both lists agree on: **position**.
+
+```
+   RRF(d) = Σ  1 / (k + rank_i(d))          k ≈ 60
+           lists
+
+   doc appears at rank 1 in BM25, rank 8 in dense:
+     1/(60+1) + 1/(60+8) = 0.0164 + 0.0147 = 0.0311
+```
+
+That's the whole algorithm. Each list contributes an amount that decays with rank; a document ranked well by both retrievers beats one ranked brilliantly by only one. The constant `k` damps the influence of the very top positions, so a single retriever's confident first place doesn't automatically win.
+
+Three properties make it the default:
+
+**It is scale-free.** There is no normalization step to be fragile, because scores never enter the computation. BM25's unboundedness stops mattering entirely.
+
+**It composes.** Three lists, five lists, an exact-identifier match alongside BM25 and dense: all fuse the same way, with no per-pair tuning.
+
+**It has one parameter**, and the default works. Compare with weighted normalization, where you have a weight per retriever, a normalization scheme, and their interaction.
+
+<Aside type="note" title="The averages understate the case">
+Published comparisons disagree about how much hybrid retrieval buys: reported gains over the better single method range from a couple of percent to low double digits, depending entirely on the corpus and the query mix. Read as an average, any of those sounds like a modest tuning win.
+
+It isn't, because the average blends two very different populations. On a paraphrase-heavy prose question, hybrid adds close to nothing, because dense already had it. On a question containing `RB-400`, hybrid is the difference between finding the right chunk and not finding it at all.
+
+Do not evaluate hybrid on your average query. Evaluate it on the queries that contain identifiers, and decide from the distribution rather than the mean.
+</Aside>
+
+Weighted score fusion still earns its place in one situation: when you know something about the query and want to act on it. If triage extracted a part number, weighting the lexical list up is a sensible, explicit decision. That's a routing decision expressed as a weight, which is fine, and different from hoping a global weight is right for everything.
+
+## Reranking: why it can't be an index
+
+Fusion gives you a merged candidate list. Reranking asks a better model to order it, and the reason a "better model" exists at all is architectural.
+
+<Figure caption="A bi-encoder can be precomputed and indexed. A cross-encoder cannot, which is exactly why it's more accurate." frame={false}>
+
+```
+   BI-ENCODER  (retrieval)              CROSS-ENCODER  (reranking)
+
+   query ──▶ [encoder] ──▶ vec         ┌──────────────────────────┐
+                            │          │  query + document        │
+   doc   ──▶ [encoder] ──▶ vec         │  read TOGETHER by one    │
+   (precomputed, indexed)   │          │  model → relevance score │
+                            ▼          └──────────────────────────┘
+                      cosine similarity
+                                          nothing to precompute:
+   fast, indexable, but query and         the score depends on
+   document never "see" each other        the PAIR
+```
+
+</Figure>
+
+A bi-encoder embeds the query and the document independently, so documents can be embedded once, in advance, and searched with an index. That independence is what makes retrieval fast, and it is also the limitation: the model never gets to consider the question and the passage together.
+
+A cross-encoder reads both at once, so it can model the interaction: does *this* passage actually answer *this* question, including its exceptions and qualifiers. It is meaningfully more accurate. And it cannot be precomputed or indexed, because there is nothing to compute until a query arrives paired with a candidate.
+
+Which is why reranking is necessarily a **second stage over a small set**, and why the architecture falls out of the arithmetic:
+
+```
+   retrieve 100  (cheap, indexed, approximate)
+        │
+        ▼
+   rerank 100    (expensive, exact, ~100 model passes)
+        │
+        ▼
+   keep 5        (what the prompt actually gets)
+```
+
+By now this shape should look familiar. It is the same one as [rescoring quantized vectors](/book/retrieval/ann-indexes) and the same one as [recall-oriented selection followed by precision-oriented cutting](/book/context/dynamic-selection). Search wide and cheap, then cut narrow and expensive. It keeps recurring because recall and precision want opposite things, and the only way to have both is to want them at different stages.
+
+## What reranking actually buys
+
+The usual claim is "better ordering," which undersells it in a way that matters for agents specifically.
+
+Recall from [Context as an Allocation Problem](/book/context/context-as-budget) that near-miss content is the most expensive material you can put in a prompt: degradation tracks how confusable the answer is with its surroundings, and the chunks ranked 6th through 20th by a bi-encoder are *precisely* the near-misses. They scored highly because they resemble the target.
+
+So reranking's real job is not promoting the good chunk from rank 4 to rank 1. It is **removing the fifteen chunks that would otherwise have been in the prompt competing with it.** The generation improvement comes as much from what leaves as from what rises.
+
+That reframes the cost calculation. A reranker that adds 80ms and lets you send five chunks instead of twenty is not a latency cost against an accuracy gain. It is a latency cost against an accuracy gain *and* a token saving *and* an attention saving, on every request.
+
+## The costs, honestly
+
+**Latency.** Two retrieval paths (run them in parallel; they're independent) plus a cross-encoder pass over the candidate set. Budget tens to low hundreds of milliseconds depending on candidate count and whether the model is local.
+
+**A third party sees everything you send.** A hosted reranker receives all 100 candidates, including the ones that were about to be filtered out. Re-read the [authorization chapter](/book/retrieval/metadata-and-authorization): filter **before** you rerank, not after, or you have shipped restricted content to a vendor.
+
+**It cannot fix bad recall.** This is the one people learn expensively. A reranker only reorders what it was given; if the correct chunk was never retrieved, no reranking recovers it. **Fix recall first, then precision.** A team tuning a reranker to solve a recall problem is optimizing the second stage of a pipeline whose first stage is broken.
+
+## LLM-as-reranker
+
+The current variant worth naming: instead of a dedicated cross-encoder, ask a language model to score or order the candidates.
+
+It is more accurate on nuanced relevance, it can follow instructions ("prefer the current version," "prefer contract-tier documents"), and it needs no separate model to deploy. It is also slower and more expensive per candidate, and it is [nondeterministic](/book/foundations/nondeterminism): the same candidate set can order differently on two runs.
+
+Sensible where the candidate set is small, quality dominates, and you already accept a model call. Less sensible as a per-request component in a latency budget. A useful middle path is to use it offline to *generate labels* for evaluating your cheap reranker, rather than in the request path at all.
+
+## Measuring it
+
+Two metrics, and they answer different questions.
+
+**Recall@k.** Did the right chunk make it into the candidate set? This grades retrieval and fusion. If it's low, reranking is irrelevant.
+
+**nDCG@k.** Is the right chunk near the top? This grades reranking, and it is the number that should move when you add one.
+
+And the honest caveat that Part XIV will make into a discipline: both are proxies. The number that matters is whether the agent answered correctly, and it is entirely possible to improve nDCG while the end-to-end answer rate is flat, which usually means your bottleneck was [chunking](/book/retrieval/chunking) or generation, not ordering.
+
+## Atlas, concretely
+
+Three lists, fused with RRF: exact-match on extracted identifiers, BM25 over prose, dense over the same chunks. Filters for tenant, current version, and tier are applied inside each retriever, before fusion, never after. Fuse to 50, cross-encode to 5, send 5.
+
+On ticket #8812 the identifier list contributes the four chunks naming `RB-400`, the dense list contributes the returns-policy language, and RRF puts the chunk that is *both*, the returns clause for that product family, at the top, which neither list had first. That is the case hybrid exists for, and it is invisible in an average.
+
+## References
+
+- [Reciprocal rank fusion outperforms Condorcet and individual rank learning methods](https://doi.org/10.1145/1571941.1572114), Cormack, Clarke and Büttcher, SIGIR 2009, the fusion formula and the constant everyone ships.
+
+---
+
+Next: [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer), because "how much did we sell in Spain in Q2" is not a retrieval problem.
+
+## Takeaways
+
+- Fusion and reranking are different operations solving different problems. Fuse first, then rerank.
+- You cannot add BM25 and cosine scores: one is unbounded, the other isn't. Normalization is fragile because the score distribution shifts with every query.
+- RRF discards scores and fuses by rank. Scale-free, composes across any number of lists, one parameter with a working default.
+- Benchmark averages understate hybrid, because they blend queries where it changes nothing with queries where it's the whole answer. Evaluate on the identifier-bearing subset.
+- Cross-encoders read query and document together, which is why they're accurate and why they can't be indexed. Reranking is necessarily a second stage over a small set.
+- Retrieve wide and cheap, cut narrow and expensive, the same shape as vector rescoring and context selection.
+- Reranking's real value is removing near-miss distractors, which are the most expensive tokens in the prompt. The win is fewer chunks as much as better order.
+- Filter before reranking, or you send restricted content to a third party.
+- Reranking cannot fix recall. Fix retrieval first.
+- Recall@k grades retrieval, nDCG@k grades reranking, and both are proxies for the only number that matters.
