@@ -5,7 +5,7 @@ description: "Local activities, early return, eager start: where durability cost
 
 Start with the number that says not to read this chapter.
 
-[Production agent runs](/docs/durability/not-a-background-job) in one measured fleet took five to eleven minutes, of which model reasoning was 26–44% and initialization another 31–48%. Against that, journalling a step costs single-digit milliseconds, a rounding error on a run measured in minutes. **Every hour spent optimizing durability inside the agent loop is an hour not spent on the half of the latency that is initialization overhead.**
+[Production agent runs](/book/durability/not-a-background-job) in one measured fleet took five to eleven minutes, of which model reasoning was 26–44% and initialization another 31–48%. Against that, journalling a step costs single-digit milliseconds, a rounding error on a run measured in minutes. **Every hour spent optimizing durability inside the agent loop is an hour not spent on the half of the latency that is initialization overhead.**
 
 So the honest guidance for most of the system is: leave it alone.
 
@@ -45,12 +45,12 @@ The costs are the part people skip, and two of them matter enormously for agents
 
 **Signals are not processed while local activities run.** Nothing external reaches the workflow until they finish.
 
-That second one is disqualifying on the main path of a steerable agent. [Everything Part XI has built](/docs/durability/not-a-background-job) depends on a running execution being reachable: approvals, cancellations, customer replies. A local activity blocks exactly that, for its duration.
+That second one is disqualifying on the main path of a steerable agent. [Everything Part XI has built](/book/durability/not-a-background-job) depends on a running execution being reachable: approvals, cancellations, customer replies. A local activity blocks exactly that, for its duration.
 
 **And on a crash, local activities are retried from the workflow task boundary**, not from where the local activity was scheduled. That is a different recovery granularity than regular activities, and one worth knowing before you rely on it.
 
 <Aside type="caution" title="Never make a model call a local activity">
-It is long, it needs heartbeating to prove liveness, it needs [cancellation propagation](/docs/durability/agent-as-workflow) so an abandoned run stops paying for tokens, and while it runs no signal can reach the workflow.
+It is long, it needs heartbeating to prove liveness, it needs [cancellation propagation](/book/durability/agent-as-workflow) so an abandoned run stops paying for tokens, and while it runs no signal can reach the workflow.
 
 Local activities lose all four properties. The saving would be a few milliseconds against a call that takes seconds, a bad trade made worse by the fact that it breaks steering.
 
@@ -117,7 +117,7 @@ return {"ticket_id": ticket.id, "accepted": accepted,
 </Tab>
 </Tabs>
 
-This is a strict improvement on [the `202` this part opened with](/docs/durability/not-a-background-job). There, the response said *"received."* Here it can say *"received, and here is what I understood, and no, that account ID does not exist"*, because an update runs a handler and can carry a [validator](/docs/durable-execution/signals-and-children). The user gets a real answer to the cheap question immediately, and the expensive question keeps running.
+This is a strict improvement on [the `202` this part opened with](/book/durability/not-a-background-job). There, the response said *"received."* Here it can say *"received, and here is what I understood, and no, that account ID does not exist"*, because an update runs a handler and can carry a [validator](/book/durable-execution/signals-and-children). The user gets a real answer to the cheap question immediately, and the expensive question keeps running.
 
 ## What the combination is worth
 
@@ -131,15 +131,15 @@ Having spent a chapter on milliseconds, the honest redirect:
 
 **Initialization is 31–48% of end-to-end time.** Worker warmth, connection pools, and cold starts are the largest single line item, and none of them are durability. If you have an hour for latency work, spend it there.
 
-**Fewer round trips beats faster round trips.** [Consolidating three chained tool calls into one](/docs/tools/tools-are-apis-for-models) removes two full model turns. That is seconds, not milliseconds. Part VIII is a latency chapter that does not announce itself.
+**Fewer round trips beats faster round trips.** [Consolidating three chained tool calls into one](/book/tools/tools-are-apis-for-models) removes two full model turns. That is seconds, not milliseconds. Part VIII is a latency chapter that does not announce itself.
 
-**Prompt caching** removes re-processing of a stable prefix on every turn, which is [a large fraction of input tokens](/docs/foundations/prompt-caching) and therefore of time-to-first-token.
+**Prompt caching** removes re-processing of a stable prefix on every turn, which is [a large fraction of input tokens](/book/foundations/prompt-caching) and therefore of time-to-first-token.
 
 And the reframe that outranks all of it:
 
 > **Perceived latency is a different quantity from actual latency, and only one of them is what the user has.**
 
-An eight-minute run that streams its reasoning, names the tool it is calling, and shows what it found feels responsive. The same run behind a spinner feels broken at ninety seconds. No amount of durability tuning changes that, and [streaming](/docs/interface/streaming-ux) changes it completely. That is why Part XIII exists and why this chapter is the shortest in Part XI.
+An eight-minute run that streams its reasoning, names the tool it is calling, and shows what it found feels responsive. The same run behind a spinner feels broken at ninety seconds. No amount of durability tuning changes that, and [streaming](/book/interface/streaming-ux) changes it completely. That is why Part XIII exists and why this chapter is the shortest in Part XI.
 
 ## Atlas, concretely
 
@@ -155,7 +155,7 @@ The last row is the point. Atlas optimizes one path, the one between a person ac
 
 ---
 
-Next: [Mapping Temporal Patterns to Agent Patterns](/docs/durability/temporal-pattern-map), a direct cross-reference from the Temporal design-pattern catalog to the agent problem each one solves.
+Next: [Mapping Temporal Patterns to Agent Patterns](/book/durability/temporal-pattern-map), a direct cross-reference from the Temporal design-pattern catalog to the agent problem each one solves.
 
 ## Takeaways
 

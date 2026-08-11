@@ -54,7 +54,7 @@ And one evaluation rule worth adopting wholesale:
 
 > **For any document containing tables, table quality is the single most important criterion.** Not average text accuracy across the corpus.
 
-Because a mangled paragraph produces a slightly worse chunk, while a mangled table produces numbers attached to the wrong labels, which is the [confident-wrong-number failure](/docs/retrieval/sql-is-still-the-answer) arriving through a different door.
+Because a mangled paragraph produces a slightly worse chunk, while a mangled table produces numbers attached to the wrong labels, which is the [confident-wrong-number failure](/book/retrieval/sql-is-still-the-answer) arriving through a different door.
 
 Evaluate parsers on *your* documents, on the twenty pages you know are hardest. Vendor benchmarks are, as ever, measured on a different corpus than yours.
 
@@ -64,7 +64,7 @@ Two opposite mistakes.
 
 **Not cleaning enough.** Every page's header and footer repeated in every chunk. Navigation chrome from an HTML export. Cover pages and tables of contents that match every query weakly and nothing strongly. This is pure noise, indexed and paid for forever.
 
-**Cleaning too much.** Stripping section numbers you need for [citations](/docs/first-agent/the-problem). Collapsing whitespace inside a code block or an address. Removing "boilerplate" that turned out to be the effective-date line. A cleaner tuned on one document type quietly destroys another.
+**Cleaning too much.** Stripping section numbers you need for [citations](/book/first-agent/the-problem). Collapsing whitespace inside a code block or an address. Removing "boilerplate" that turned out to be the effective-date line. A cleaner tuned on one document type quietly destroys another.
 
 Normalization has one requirement beyond correctness: **determinism.** Same input, same bytes out: stable Unicode normalization, stable whitespace handling, stable date formats, sorted keys anywhere you serialize. You will re-run this pipeline, and if it is not deterministic you cannot tell whether a quality change came from your change or from the pipeline shrugging differently.
 
@@ -76,11 +76,11 @@ Everything the retriever filters on has to be extracted here, because after inge
 
 | Extracted | Used by |
 | --- | --- |
-| `document_id`, `version`, `superseded_at` | The version filter: [correctness, not ranking](/docs/retrieval/vector-search) |
-| `tenant_id`, `acl`, `classification` | [Authorization](/docs/retrieval/metadata-and-authorization) |
+| `document_id`, `version`, `superseded_at` | The version filter: [correctness, not ranking](/book/retrieval/vector-search) |
+| `tenant_id`, `acl`, `classification` | [Authorization](/book/retrieval/metadata-and-authorization) |
 | `tier`, `region`, `effective_date` | Business-scope filtering |
-| Identifiers: part numbers, codes | The [exact-match lexical path](/docs/retrieval/lexical-search) |
-| Heading trail | [Chunk self-containment](/docs/retrieval/chunking) |
+| Identifiers: part numbers, codes | The [exact-match lexical path](/book/retrieval/lexical-search) |
+| Heading trail | [Chunk self-containment](/book/retrieval/chunking) |
 
 Two rules. **Fail loudly on missing required metadata.** A document that can't be assigned a tenant should fail ingestion, not get indexed as untagged. And **prefer extraction from structure over inference**: if the version is in the filename or a header field, parse it; ask a model only when there's genuinely nothing else, and mark those values as inferred so you can audit them later.
 
@@ -109,7 +109,7 @@ A document is removed from the source. What happens in your index?
 In most systems: **nothing.** The ingestion job iterates over what exists and adds it. Nothing iterates over what no longer exists. So the deleted document remains searchable, indefinitely, and the agent cites a policy that was withdrawn.
 
 <Aside type="caution" title="The superseded-policy failure">
-Recall from [the problem chapter](/docs/first-agent/the-problem) that Meridian's corpus contains contradictory documents, including superseded versions of the same policy. That's a data problem. It becomes an *agent* problem when the withdrawn version is still in the index because ingestion has no deletion path.
+Recall from [the problem chapter](/book/first-agent/the-problem) that Meridian's corpus contains contradictory documents, including superseded versions of the same policy. That's a data problem. It becomes an *agent* problem when the withdrawn version is still in the index because ingestion has no deletion path.
 
 The version filter in the query defends against the ones you know are superseded. It does nothing about a document that was deleted upstream and that your index still believes is current.
 
@@ -118,7 +118,7 @@ Reconcile: periodically list what the source has, diff against what the index ha
 
 ### Idempotency
 
-Re-running ingestion over the same document must produce the same chunks in the same place, not a second copy. Key chunks by a deterministic identity, such as document ID plus chunk index or a content hash, rather than by an auto-incrementing row. Otherwise a re-run after a partial failure doubles part of your corpus, and duplicate near-identical chunks are exactly the [distractors](/docs/context/context-as-budget) you least want.
+Re-running ingestion over the same document must produce the same chunks in the same place, not a second copy. Key chunks by a deterministic identity, such as document ID plus chunk index or a content hash, rather than by an auto-incrementing row. Otherwise a re-run after a partial failure doubles part of your corpus, and duplicate near-identical chunks are exactly the [distractors](/book/context/context-as-budget) you least want.
 
 ### Partial failure and the manifest
 
@@ -149,11 +149,11 @@ Without it, you cannot answer the question you will eventually be asked: *"did r
 
 Layout-aware parsing by default, vision-language on pages where table detection fires. Content-hash change detection; a nightly reconciliation that lists the source and tombstones anything missing. Required metadata of `tenant_id`, `document_id`, and `version` is enforced at ingestion, with failures rejected rather than indexed untagged. Manifest per run, counts published, alert on chunks-per-document drift.
 
-Roughly 1,200 documents, 41,000 chunks, rebuilt incrementally on change and fully on any pipeline version bump. The full rebuild takes about forty minutes and costs real money, which is the [migration cost](/docs/retrieval/embeddings) made concrete, and the reason `pipeline_ver` is on every row.
+Roughly 1,200 documents, 41,000 chunks, rebuilt incrementally on change and fully on any pipeline version bump. The full rebuild takes about forty minutes and costs real money, which is the [migration cost](/book/retrieval/embeddings) made concrete, and the reason `pipeline_ver` is on every row.
 
 ---
 
-Next: [Multimodal Document Intelligence](/docs/retrieval/multimodal-document-intelligence), on PDFs, scans, tables, images, and audio without flattening away the evidence.
+Next: [Multimodal Document Intelligence](/book/retrieval/multimodal-document-intelligence), on PDFs, scans, tables, images, and audio without flattening away the evidence.
 
 ## Takeaways
 

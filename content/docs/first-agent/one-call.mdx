@@ -6,7 +6,7 @@ description: "A raw completion, then a typed one. The smallest useful thing, and
 
 We have a problem statement, twenty tickets with known answers, and no code. The temptation now is to build the thing: the loop, the tools, the retrieval. We're going to do the opposite and build the smallest thing that could possibly be useful, because it takes twenty minutes and it tells us something we cannot learn any other way: **which of the twenty tickets need more than a single model call.**
 
-That is not a warm-up exercise. It is the [leftmost rung](/docs/foundations/when-not-to-build-an-agent), evaluated honestly, before we pay for a higher one.
+That is not a warm-up exercise. It is the [leftmost rung](/book/foundations/when-not-to-build-an-agent), evaluated honestly, before we pay for a higher one.
 
 ## One call
 
@@ -71,7 +71,7 @@ Read it twice, because it fails in two completely different ways and almost ever
 
 Your program needs to route this ticket. It cannot route a paragraph. There is no field to switch on, no enum, no boolean, just English that happens to contain the information.
 
-The historical response was to ask for JSON in the prompt and parse the result. We know from [Structured Output](/docs/foundations/structured-output) that this is now a solved problem, and the solution is a schema rather than a parser.
+The historical response was to ask for JSON in the prompt and parse the result. We know from [Structured Output](/book/foundations/structured-output) that this is now a solved problem, and the solution is a schema rather than a parser.
 
 ## Failure two: it made the policy up
 
@@ -214,7 +214,7 @@ By the taxonomy from Part I this is a *router*, and routers are workflows. That 
 
 Here is the payoff for writing the ticket set before the code.
 
-Run all twenty through the classifier [several times each](/docs/foundations/nondeterminism), since one run tells you nothing, and compare against the outcomes you wrote down. Suppose it lands roughly like this:
+Run all twenty through the classifier [several times each](/book/foundations/nondeterminism), since one run tells you nothing, and compare against the outcomes you wrote down. Suppose it lands roughly like this:
 
 | | Result |
 | --- | --- |
@@ -242,7 +242,7 @@ That is the next chapter, and it is where the agent actually starts.
 
 ---
 
-Next: [One Tool, Then Many](/docs/first-agent/first-tools), function calling from scratch: the schema, the request, the result, the second request.
+Next: [One Tool, Then Many](/book/first-agent/first-tools), function calling from scratch: the schema, the request, the result, the second request.
 
 ## Takeaways
 

@@ -3,7 +3,7 @@ title: "OpenTelemetry for GenAI"
 description: "The semantic conventions for models, tokens, retrieval, and tool calls, and instrumenting the whole stack against them."
 ---
 
-[The previous chapter](/docs/observability/what-a-trace-must-answer) listed eight questions a trace must answer. You could answer every one of them with field names you invent this afternoon, and the code would work.
+[The previous chapter](/book/observability/what-a-trace-must-answer) listed eight questions a trace must answer. You could answer every one of them with field names you invent this afternoon, and the code would work.
 
 The reason not to is that **you are not the only thing emitting spans.**
 
@@ -41,7 +41,7 @@ The conventions define a hierarchy that should look familiar:
 
 </Figure>
 
-An agent built the way [Part XI](/docs/durability/agent-as-workflow) describes already has those boundaries, because the workflow/activity split forced them. Instrumenting is naming what exists rather than restructuring anything. That is a pleasant and slightly accidental payoff of putting model calls in activities for entirely different reasons.
+An agent built the way [Part XI](/book/durability/agent-as-workflow) describes already has those boundaries, because the workflow/activity split forced them. Instrumenting is naming what exists rather than restructuring anything. That is a pleasant and slightly accidental payoff of putting model calls in activities for entirely different reasons.
 
 ## Which of the eight questions the conventions answer
 
@@ -66,9 +66,9 @@ So the practical rule: **use `gen_ai.*` for everything it defines, and put your 
 
 Messages, system instructions, and tool calls are recorded as structured attributes **only when the application is configured to record content.** Off by default.
 
-That aligns exactly with [the previous chapter's storage split](/docs/observability/what-a-trace-must-answer): the payloads are the expensive and sensitive part, and the observability backend is the wrong place for them. Leave content capture off in the backend, route the payloads to the object store, and keep the hash in the span.
+That aligns exactly with [the previous chapter's storage split](/book/observability/what-a-trace-must-answer): the payloads are the expensive and sensitive part, and the observability backend is the wrong place for them. Leave content capture off in the backend, route the payloads to the object store, and keep the hash in the span.
 
-Turning it on wholesale is how a team discovers that their observability bill and their [third copy of customer data](/docs/observability/what-a-trace-must-answer) arrived on the same day.
+Turning it on wholesale is how a team discovers that their observability bill and their [third copy of customer data](/book/observability/what-a-trace-must-answer) arrived on the same day.
 
 <Aside type="caution" title="These conventions are not stable, and they moved">
 The most important fact in this chapter, and the one that dates fastest.
@@ -86,7 +86,7 @@ Two consequences for how you write the code:
 
 The failure that follows from four layers each shipping instrumentation: two of them wrap the same model call, and your token counts double.
 
-It is easy to miss because the trace looks *more* complete rather than broken: an extra span, plausibly nested. And the number it corrupts is the one feeding [cost attribution](/docs/observability/cost-accounting) and [cost-per-resolved-ticket](/docs/evals/cost-and-latency-evals).
+It is easy to miss because the trace looks *more* complete rather than broken: an extra span, plausibly nested. And the number it corrupts is the one feeding [cost attribution](/book/observability/cost-accounting) and [cost-per-resolved-ticket](/book/evals/cost-and-latency-evals).
 
 The rule is one owner per span type:
 
@@ -110,7 +110,7 @@ Then turn off whatever else was going to emit those, and verify by checking that
 | Convention version | Recorded as an attribute on every trace |
 | Attribute names | One module, one place to edit when they move |
 
-The `meridian.route` attribute is doing quiet work. Everything in [Part XIV](/docs/evals/datasets) is per-route: golden sets, gates, latency budgets, fairness keys. So having the route on every span is what lets a trace query answer *"what changed for policy questions this week"* without a join against anything.
+The `meridian.route` attribute is doing quiet work. Everything in [Part XIV](/book/evals/datasets) is per-route: golden sets, gates, latency budgets, fairness keys. So having the route on every span is what lets a trace query answer *"what changed for policy questions this week"* without a join against anything.
 
 ## References
 
@@ -120,7 +120,7 @@ The `meridian.route` attribute is doing quiet work. Everything in [Part XIV](/do
 
 ---
 
-Next: [Replay-Driven Debugging](/docs/observability/replay-debugging), event histories as ground truth, and re-running a real failure against new code.
+Next: [Replay-Driven Debugging](/book/observability/replay-debugging), event histories as ground truth, and re-running a real failure against new code.
 
 ## Takeaways
 

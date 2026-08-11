@@ -7,7 +7,7 @@ export function baseOptions(): BaseLayoutProps {
       // JSX supported
       title: appName,
     },
-    links: [{ text: 'Docs', url: docsRoute }],
+    links: [{ text: 'Book', url: docsRoute }],
     githubUrl,
   };
 }

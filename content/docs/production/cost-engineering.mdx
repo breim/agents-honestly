@@ -37,7 +37,7 @@ One equation explains nearly every agentic bill, and it is not the one people ca
 
 </Figure>
 
-The chart is the same statement with the constant left in. Bars are what each turn sends; the line is the same conversation with history capped by [compaction](/docs/patterns/context/context-compaction).
+The chart is the same statement with the constant left in. Bars are what each turn sends; the line is the same conversation with history capped by [compaction](/book/patterns/context/context-compaction).
 
 <Figure caption="Turn 1 sends the prefix. Turn 20 sends the prefix plus nineteen turns of history, and you paid for every step in between.">
 	<TurnGrowth turns={20} system={6000} perTurn={2500} summaryCap={14000} />
@@ -47,9 +47,9 @@ Three consequences follow, and they reorder the whole optimization list:
 
 **Input dominates, usually heavily.** A run that emits two hundred output tokens per turn but carries a forty-thousand-token context is spending most of its money re-reading its own history. Output price gets the attention because it is the bigger number per token; input volume is what multiplies.
 
-**Turn count is the strongest lever you have.** Because input cost is roughly quadratic in turns, a change that removes four turns from a twenty-turn run saves far more than the same percentage change in price-per-token. This is why [tool granularity](/docs/tools/schema-and-granularity) and [result design](/docs/tools/result-design) are cost decisions and not only quality ones.
+**Turn count is the strongest lever you have.** Because input cost is roughly quadratic in turns, a change that removes four turns from a twenty-turn run saves far more than the same percentage change in price-per-token. This is why [tool granularity](/book/tools/schema-and-granularity) and [result design](/book/tools/result-design) are cost decisions and not only quality ones.
 
-**Retries and failures are billed at full price.** A run that fails at step eighteen paid for eighteen steps. [The retry budget](/docs/reliability/timeouts-and-retries) is a cost control that happens to live in the reliability chapter.
+**Retries and failures are billed at full price.** A run that fails at step eighteen paid for eighteen steps. [The retry budget](/book/reliability/timeouts-and-retries) is a cost control that happens to live in the reliability chapter.
 
 So before touching the model, measure: **tokens per run, split input/output, by turn index.** Almost every team that does this for the first time finds that one tool returning a large payload every turn is a majority of their bill.
 
@@ -58,21 +58,21 @@ So before touching the model, measure: **tokens per run, split input/output, by 
 | Lever | Typical effect | Costs you |
 | --- | --- | --- |
 | **Cut turns** | Superlinear, the quadratic works both ways | Design effort |
-| **Shrink what's re-sent each turn** | Large; compounds with turn count | [Context engineering](/docs/context/context-as-budget) |
+| **Shrink what's re-sent each turn** | Large; compounds with turn count | [Context engineering](/book/context/context-as-budget) |
 | **Lower the effort level** | Several-fold on reasoning tokens, *and* fewer tool calls, so it pulls the top row too | Capability on the genuinely hard steps |
-| **[Prompt caching](/docs/foundations/prompt-caching)** | Cache reads run roughly an order of magnitude below input price | Prefix discipline |
-| **[Batch endpoints](/docs/patterns/cost/batch-api-offload)** | ~50% off, for latency-tolerant work | Asynchrony |
-| **[Model routing / cascade](/docs/patterns/cost/model-cascade)** | Commonly 40–70% overall | A routing decision that can be wrong |
-| **[Early exit](/docs/patterns/cost/early-exit)** | Removes whole runs | A confidence signal you trust |
+| **[Prompt caching](/book/foundations/prompt-caching)** | Cache reads run roughly an order of magnitude below input price | Prefix discipline |
+| **[Batch endpoints](/book/patterns/cost/batch-api-offload)** | ~50% off, for latency-tolerant work | Asynchrony |
+| **[Model routing / cascade](/book/patterns/cost/model-cascade)** | Commonly 40–70% overall | A routing decision that can be wrong |
+| **[Early exit](/book/patterns/cost/early-exit)** | Removes whole runs | A confidence signal you trust |
 | **Cheaper model everywhere** | Proportional | Quality, uniformly, including where it mattered |
 
 The order is the argument. The top two are free of quality risk and are where the money usually is; the bottom row is the one people reach for first and the only one that degrades everything at once.
 
-The effort row is the highest-leverage one that *does* carry a quality trade, and the one most teams have never touched, because [it replaced the sampling knobs](/docs/foundations/nondeterminism) and arrived with a default. **Omitting the effort parameter is identical to asking for the highest setting**, so every run you have not thought about is running at the top of the scale, where the model generates several times the reasoning tokens of the lowest setting. It also makes *more tool calls*, which is why it belongs above context work rather than below it: it moves the turn count, and turn count is quadratic. [The evals chapter's measured case](/docs/evals/cost-and-latency-evals), cost per attempt from $3.40 to $2.30 with no movement in resolution rate, is this lever, pulled once.
+The effort row is the highest-leverage one that *does* carry a quality trade, and the one most teams have never touched, because [it replaced the sampling knobs](/book/foundations/nondeterminism) and arrived with a default. **Omitting the effort parameter is identical to asking for the highest setting**, so every run you have not thought about is running at the top of the scale, where the model generates several times the reasoning tokens of the lowest setting. It also makes *more tool calls*, which is why it belongs above context work rather than below it: it moves the turn count, and turn count is quadratic. [The evals chapter's measured case](/book/evals/cost-and-latency-evals), cost per attempt from $3.40 to $2.30 with no movement in resolution rate, is this lever, pulled once.
 
 Two mechanisms deserve detail because their behavior is not obvious.
 
-**Cache reads and batch discounts stack.** They apply to different axes: one to the repeated prefix, one to the whole request. So a large fan-out of latency-tolerant calls sharing one long system prompt gets both. On the shared portion the combined effect is dramatic, and it is the single best reason to move offline work (evals, backfills, [dataset generation](/docs/evals/datasets)) to a batch endpoint rather than running it on the interactive path.
+**Cache reads and batch discounts stack.** They apply to different axes: one to the repeated prefix, one to the whole request. So a large fan-out of latency-tolerant calls sharing one long system prompt gets both. On the shared portion the combined effect is dramatic, and it is the single best reason to move offline work (evals, backfills, [dataset generation](/book/evals/datasets)) to a batch endpoint rather than running it on the interactive path.
 
 **Routing is a bet, and the bet has a cost when it loses.** A cascade sends the cheap model first and escalates on low confidence. That is genuinely 40–70% cheaper in reported practice, but only if the escalation signal is good, because a wrong "confident" from the cheap model is a bad answer at a discount, and a cascade that escalates too eagerly pays for both models and saves nothing.
 
@@ -93,13 +93,13 @@ The version that works is coarser and structural: **different steps of the same 
 | Classify the ticket's intent | Recall over a fixed label set | Small |
 | Decide which tool to call next | Judgment over the transcript | Large |
 | Extract fields from a tool result | Format compliance | Small |
-| [Summarize for compaction](/docs/context/compaction) | Faithfulness, no invention | Mid |
+| [Summarize for compaction](/book/context/compaction) | Faithfulness, no invention | Mid |
 | Draft the customer-facing reply | The thing the product is judged on | Large |
 | Grade an eval | Consistency with a rubric | Mid, pinned |
 
-Nothing here is a runtime guess. The node knows what it is, so the model is a property of the node, which also means the routing is testable, reviewable, and rollback-able in the [gateway config](/docs/production/reference-architecture) rather than emergent from a classifier's mood.
+Nothing here is a runtime guess. The node knows what it is, so the model is a property of the node, which also means the routing is testable, reviewable, and rollback-able in the [gateway config](/book/production/reference-architecture) rather than emergent from a classifier's mood.
 
-The one runtime decision worth making is **escalation**: run small, and promote to large when a validator fails, a confidence check trips, or the [risk tier](/docs/human-in-the-loop/risk-tiers) says this call matters. That is a cascade with an honest gate, and the gate is the part to build carefully.
+The one runtime decision worth making is **escalation**: run small, and promote to large when a validator fails, a confidence check trips, or the [risk tier](/book/human-in-the-loop/risk-tiers) says this call matters. That is a cascade with an honest gate, and the gate is the part to build carefully.
 
 ## Enforce the budget in the loop
 
@@ -165,7 +165,7 @@ def before_call(b: CostBudget, estimate_micros: int) -> Literal["proceed", "degr
 </Tab>
 </Tabs>
 
-The `degrade` rung is what makes this usable. A budget with only a hard stop produces truncated runs at the worst moment; one that degrades first produces a cheaper, slightly worse completion, which is [the same shape as a fallback](/docs/reliability/fallbacks-and-breakers), applied to money instead of availability.
+The `degrade` rung is what makes this usable. A budget with only a hard stop produces truncated runs at the worst moment; one that degrades first produces a cheaper, slightly worse completion, which is [the same shape as a fallback](/book/reliability/fallbacks-and-breakers), applied to money instead of availability.
 
 And the cap is **per run, derived from what the run is worth**. A global monthly ceiling tells you nothing about whether a specific ticket deserved forty model calls. Unit economics are the frame: cost per resolved ticket, against the margin on a resolved ticket. If you cannot state that ratio, you are optimizing a number rather than a business.
 
@@ -179,18 +179,18 @@ The productive sequence is:
 
 **2 · Then pick your position, per workflow.** Not per company. The tier-0 automated refund and the escalation draft that a human will send have different stakes, and one number for both is a decision not to think about either.
 
-**3 · Measure the trade with evals, not with intuition.** [The eval suite](/docs/evals/eval-discipline) is what makes "20% cheaper, 2% worse on the rubric" a sentence you can say. Without it, every cost change is a gamble settled by whoever complains loudest.
+**3 · Measure the trade with evals, not with intuition.** [The eval suite](/book/evals/eval-discipline) is what makes "20% cheaper, 2% worse on the rubric" a sentence you can say. Without it, every cost change is a gamble settled by whoever complains loudest.
 
 **4 · Re-run the choice when prices move.** They move a lot, always downward, and a routing table tuned eighteen months ago is leaving money on the table in a direction nobody notices.
 
 The honest caution: cost optimization has a floor set by what the product is worth, and past a certain point you are choosing a worse product to save money that does not matter. A support agent whose replies get slightly worse to save two cents a ticket has made a bad trade, and the only way to know which side of that line you are on is to have the eval number and the margin number in the same sentence.
 
-Where the first of those comes from is [a chapter of its own](/docs/evals/cost-and-latency-evals), and it is worth reading before you believe any figure on this page: cost per *resolved* outcome is a different quantity from cost per run, and a cheap configuration that succeeds one time in five costs exactly what an expensive one that always works. The reported experience is that the first honest computation lands **three to eight times** above what the API arithmetic suggested, which is the gap between the number this chapter helps you lower and the number your business actually pays.
+Where the first of those comes from is [a chapter of its own](/book/evals/cost-and-latency-evals), and it is worth reading before you believe any figure on this page: cost per *resolved* outcome is a different quantity from cost per run, and a cheap configuration that succeeds one time in five costs exactly what an expensive one that always works. The reported experience is that the first honest computation lands **three to eight times** above what the API arithmetic suggested, which is the gap between the number this chapter helps you lower and the number your business actually pays.
 
 <Aside type="caution" title="You cannot optimize what you cannot attribute">
 Every technique here assumes you can answer *which feature, tenant, and run spent that money*. Most teams have a monthly provider invoice and a guess.
 
-Attribution, per-run, per-tenant, per-node cost recorded on the trace, is [Cost Accounting](/docs/observability/cost-accounting) in Part XV, and it is a prerequisite rather than a follow-up. The [model gateway](/docs/production/reference-architecture) is where it gets recorded, which is the fifth reason that box is worth building on day one.
+Attribution, per-run, per-tenant, per-node cost recorded on the trace, is [Cost Accounting](/book/observability/cost-accounting) in Part XV, and it is a prerequisite rather than a follow-up. The [model gateway](/book/production/reference-architecture) is where it gets recorded, which is the fifth reason that box is worth building on day one.
 </Aside>
 
 ## Atlas, concretely
@@ -216,7 +216,7 @@ The first two rows produced more saving than every price-level change combined, 
 
 ---
 
-Next: [The Operating Manual](/docs/production/operating-manual), dashboards, incident patterns, on-call for a probabilistic system, and the first ninety days.
+Next: [The Operating Manual](/book/production/operating-manual), dashboards, incident patterns, on-call for a probabilistic system, and the first ninety days.
 
 ## Takeaways
 

@@ -24,7 +24,7 @@ BM25 produces unbounded positive scores whose scale depends on the corpus and th
 - **The two retrievers fail on disjoint query types**, which is exactly why both are worth having.
 - **Their scores are not commensurable** and normalizing them is a per-corpus, per-query-distribution guess.
 - **Rank position is comparable across systems** even when score is not.
-- **Filters are [authorization](/docs/retrieval/metadata-and-authorization)**, so where they run in the pipeline is a correctness question, not a performance one.
+- **Filters are [authorization](/book/retrieval/metadata-and-authorization)**, so where they run in the pipeline is a correctness question, not a performance one.
 - **The best result is often the document ranked moderately by *both***, which neither list has first.
 
 ## Solution
@@ -56,11 +56,11 @@ The formula is from Cormack, Clarke, and Büttcher (SIGIR 2009), and `k ≈ 60` 
 
 Three rules:
 
-**Filter inside each retriever, before fusion.** Tenant, trust class, and current-version predicates run in each leg's query. Filtering the fused list afterwards means restricted content was read, logged, and possibly sent to a reranker: [post-filtering is not a security boundary](/docs/retrieval/metadata-and-authorization).
+**Filter inside each retriever, before fusion.** Tenant, trust class, and current-version predicates run in each leg's query. Filtering the fused list afterwards means restricted content was read, logged, and possibly sent to a reranker: [post-filtering is not a security boundary](/book/retrieval/metadata-and-authorization).
 
-**Retrieve wide, fuse, then narrow.** Take 50 from each leg, fuse, and pass the top 50 to a [reranker](/docs/patterns/retrieval/two-stage-rerank). Fusion improves the candidate set; it is not a final ranking.
+**Retrieve wide, fuse, then narrow.** Take 50 from each leg, fuse, and pass the top 50 to a [reranker](/book/patterns/retrieval/two-stage-rerank). Fusion improves the candidate set; it is not a final ranking.
 
-**Add a third leg for exact identifiers.** Where [query rewriting extracted](/docs/patterns/retrieval/query-rewriting) `RB-400`, run an exact-match query as its own list. This is the leg that reliably rescues the failure dense retrieval is worst at.
+**Add a third leg for exact identifiers.** Where [query rewriting extracted](/book/patterns/retrieval/query-rewriting) `RB-400`, run an exact-match query as its own list. This is the leg that reliably rescues the failure dense retrieval is worst at.
 
 ## Code
 
@@ -138,13 +138,13 @@ async def retrieve(q, ctx) -> list[str]:
 </Tab>
 </Tabs>
 
-Note what the weights are and are not. A global weight tuned to make the average query better is the mistake this pattern exists to avoid. A weight applied *because you detected identifiers in the query* is a [routing decision](/docs/retrieval/where-does-the-answer-live) expressed as a number, and it is defensible precisely because it is conditional.
+Note what the weights are and are not. A global weight tuned to make the average query better is the mistake this pattern exists to avoid. A weight applied *because you detected identifiers in the query* is a [routing decision](/book/retrieval/where-does-the-answer-live) expressed as a number, and it is defensible precisely because it is conditional.
 
 ## Trade-offs
 
-**Two or three indexes to build and maintain.** Every leg needs its own [ingestion path](/docs/retrieval/ingestion-pipeline), its own filters, and its own consistency with the others. A chunk deleted from one and not the others is a leak or a ghost.
+**Two or three indexes to build and maintain.** Every leg needs its own [ingestion path](/book/retrieval/ingestion-pipeline), its own filters, and its own consistency with the others. A chunk deleted from one and not the others is a leak or a ghost.
 
-**Score information is discarded.** RRF sees only positions, so a document that is a runaway best match and one that is barely ahead of second place contribute identically. This is the trade that makes fusion robust, and it is why fusion feeds a [reranker](/docs/patterns/retrieval/two-stage-rerank) rather than answering directly.
+**Score information is discarded.** RRF sees only positions, so a document that is a runaway best match and one that is barely ahead of second place contribute identically. This is the trade that makes fusion robust, and it is why fusion feeds a [reranker](/book/patterns/retrieval/two-stage-rerank) rather than answering directly.
 
 **Latency is the slowest leg.** Legs run in parallel, so this is usually acceptable, but a slow lexical index now gates every dense query too.
 
@@ -152,29 +152,29 @@ Note what the weights are and are not. A global weight tuned to make the average
 
 ## When not to use it
 
-**When one retriever is sufficient.** A corpus of natural-language prose with no identifiers may not need a lexical leg; a corpus of structured codes may not need a dense one. [Measure recall@k per query type](/docs/retrieval/retrieval-evals) before adding infrastructure.
+**When one retriever is sufficient.** A corpus of natural-language prose with no identifiers may not need a lexical leg; a corpus of structured codes may not need a dense one. [Measure recall@k per query type](/book/retrieval/retrieval-evals) before adding infrastructure.
 
-**When the answer is not in documents at all.** Fusing two retrievers over a corpus that does not contain the answer produces a well-ranked list of irrelevant chunks. [Route first](/docs/retrieval/where-does-the-answer-live): aggregations are SQL and relationships are graph traversals.
+**When the answer is not in documents at all.** Fusing two retrievers over a corpus that does not contain the answer produces a well-ranked list of irrelevant chunks. [Route first](/book/retrieval/where-does-the-answer-live): aggregations are SQL and relationships are graph traversals.
 
 **When you have not built retrieval evals.** Without recall@k you cannot tell whether fusion helped, which leg is carrying it, or whether `k` matters. Adding a second index on faith is how systems acquire components nobody can justify removing.
 
-**As a fix for bad chunking.** If the answer spans a chunk boundary, no fusion recovers it. [Chunking](/docs/retrieval/chunking) and [parent–child retrieval](/docs/patterns/retrieval/parent-child-chunks) are the fix.
+**As a fix for bad chunking.** If the answer spans a chunk boundary, no fusion recovers it. [Chunking](/book/retrieval/chunking) and [parent–child retrieval](/book/patterns/retrieval/parent-child-chunks) are the fix.
 
 <Aside type="note" title="Agreement is the signal">
 The reason RRF works is worth stating plainly, because it explains when it will not.
 
 Two *independent* retrievers agreeing that a document is relevant is real evidence: they failed to be wrong in the same way. That is why the moderately-ranked document that both lists contain beats the top hit of one.
 
-Which means fusion pays in proportion to how independent the legs are. Fusing two dense retrievers over similar embedding models buys almost nothing, because their errors are correlated. Lexical and dense are worth fusing precisely because they fail on disjoint inputs, and the same logic is why [diverse verification lenses beat repeated identical checks](/docs/multi-agent/when-not-to) elsewhere in this book.
+Which means fusion pays in proportion to how independent the legs are. Fusing two dense retrievers over similar embedding models buys almost nothing, because their errors are correlated. Lexical and dense are worth fusing precisely because they fail on disjoint inputs, and the same logic is why [diverse verification lenses beat repeated identical checks](/book/multi-agent/when-not-to) elsewhere in this book.
 </Aside>
 
 ## Related
 
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): what the fused candidate list feeds into
-- [Query Rewriting](/docs/patterns/retrieval/query-rewriting): produces the multiple queries and extracts the identifiers
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): why the predicates run inside each leg
-- [Parent–Child Chunks](/docs/patterns/retrieval/parent-child-chunks): the fix fusion cannot provide
-- [Hybrid and Reranking](/docs/retrieval/hybrid-and-reranking): the chapter, with the score-incompatibility argument in full
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): what the fused candidate list feeds into
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): produces the multiple queries and extracts the identifiers
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): why the predicates run inside each leg
+- [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks): the fix fusion cannot provide
+- [Hybrid and Reranking](/book/retrieval/hybrid-and-reranking): the chapter, with the score-incompatibility argument in full
 
 ## References
 

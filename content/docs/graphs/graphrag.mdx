@@ -18,7 +18,7 @@ Four stages, all offline:
    ④  a model writes a summary of each community, at several levels
 ```
 
-Then two query modes. **Local search** starts at entities mentioned in the question and walks their neighborhood, roughly what [the last chapter](/docs/graphs/graph-retrieval) described. **Global search** ignores the entity graph and answers from the community summaries.
+Then two query modes. **Local search** starts at entities mentioned in the question and walks their neighborhood, roughly what [the last chapter](/book/graphs/graph-retrieval) described. **Global search** ignores the entity graph and answers from the community summaries.
 
 That second mode is the reason GraphRAG exists.
 
@@ -38,7 +38,7 @@ The subtitle's promise. Stage ① is **a model call per chunk over your entire c
 
 Published figures span more than an order of magnitude: **tens of dollars** on a small benchmark corpus, **hundreds to a few thousand** once you are extracting over ten thousand pages. Assume the upper end is yours, because the low figure is measured on corpora smaller than the ones that make anybody want a graph. Even then the dollar amount is not the real cost. Three things are:
 
-**It's re-paid on change.** New documents need extraction. Changed documents need re-extraction and possibly re-clustering. This joins [re-embedding and re-chunking](/docs/retrieval/embeddings) on the list of things that make your corpus a migration rather than a table.
+**It's re-paid on change.** New documents need extraction. Changed documents need re-extraction and possibly re-clustering. This joins [re-embedding and re-chunking](/book/retrieval/embeddings) on the list of things that make your corpus a migration rather than a table.
 
 **It's re-paid on every iteration.** You will not get the extraction prompt right the first time. Each adjustment means rebuilding, which means the feedback loop on your most important design decision is measured in hours and dollars rather than seconds.
 
@@ -59,27 +59,27 @@ A graph extracted from prose has no such property. Every node and edge is a **mo
 **Hallucinated edges.** This is the dangerous one, and the mechanism is worth stating. The model reads a chunk that *mentions* two entities but does not state their relationship, and fills the gap from its own parametric knowledge. The result is an edge that reads confidently and is **structurally wrong**, sitting permanently in an index that everything downstream trusts.
 
 <Aside type="caution" title="This is context poisoning with a longer half-life">
-[Part III](/docs/context/context-poisoning) described a false claim entering a transcript and being reasoned from for the rest of a run. Extraction errors are the same failure, promoted to infrastructure: the false claim is now in an index, later retrievals cite it, community summaries include it, and every future run reasons from it.
+[Part III](/book/context/context-poisoning) described a false claim entering a transcript and being reasoned from for the rest of a run. Extraction errors are the same failure, promoted to infrastructure: the false claim is now in an index, later retrievals cite it, community summaries include it, and every future run reasons from it.
 
 And there is no ground truth to check against. With records, you can reconcile against the source system. With extraction, the "source" is a paragraph and the question "is this edge real?" requires a human to read that paragraph and judge.
 </Aside>
 
-**The fix that Part V already built.** Schema-free extraction is what produces inconsistent typing, so don't extract schema-free. Give the extractor your [ontology](/docs/graphs/modeling-entities): these are the five entity types, these are the six relationship types, emit nothing else. Ontology-guided extraction beats open extraction, and it converts an open-ended generation problem into a constrained classification one. That is [exactly the trade](/docs/foundations/structured-output) Part I recommended everywhere else.
+**The fix that Part V already built.** Schema-free extraction is what produces inconsistent typing, so don't extract schema-free. Give the extractor your [ontology](/book/graphs/modeling-entities): these are the five entity types, these are the six relationship types, emit nothing else. Ontology-guided extraction beats open extraction, and it converts an open-ended generation problem into a constrained classification one. That is [exactly the trade](/book/foundations/structured-output) Part I recommended everywhere else.
 
-You also still need [entity resolution](/docs/graphs/entity-resolution), now on generated names rather than given identifiers. That is the harder version, because there is no tax ID to fall back on.
+You also still need [entity resolution](/book/graphs/entity-resolution), now on generated names rather than given identifiers. That is the harder version, because there is no tax ID to fall back on.
 
 ## The chapter title's other half
 
-The [preface](/docs/preface) claims most teams reaching for GraphRAG have a chunking problem instead. Here is the diagnostic that decides it.
+The [preface](/book/preface) claims most teams reaching for GraphRAG have a chunking problem instead. Here is the diagnostic that decides it.
 
 Ask: **is the failing question global, or is it just spread across a few chunks?**
 
 | Symptom | Actual problem | Fix |
 | --- | --- | --- |
-| "The answer needs the rule *and* its exception" | [Chunking](/docs/retrieval/chunking) | Parent/child. Cost: near zero. |
-| "It needs facts from two documents" | Retrieval breadth | Raise *k*, add [hybrid](/docs/retrieval/hybrid-and-reranking). Cost: near zero. |
+| "The answer needs the rule *and* its exception" | [Chunking](/book/retrieval/chunking) | Parent/child. Cost: near zero. |
+| "It needs facts from two documents" | Retrieval breadth | Raise *k*, add [hybrid](/book/retrieval/hybrid-and-reranking). Cost: near zero. |
 | "It needs one document plus one record" | Tool design | Two tool calls. Cost: zero. |
-| "It needs a chain of entity relationships" | Multi-hop | [Agentic iteration](/docs/graphs/when-relationships-are-the-query), or a records graph. |
+| "It needs a chain of entity relationships" | Multi-hop | [Agentic iteration](/book/graphs/when-relationships-are-the-query), or a records graph. |
 | **"It needs everything, summarized"** | **Genuinely global** | GraphRAG, or the alternatives below. |
 
 Only the last row justifies the build. The first three are the common case, and something you should have done anyway fixes every one of them for a fraction of the cost.
@@ -116,7 +116,7 @@ Part VI goes back to something more fundamental, and more often skipped: whether
 
 ---
 
-Next: [The Determinism Test](/docs/workflows/the-determinism-test), the question that decides whether you are writing a workflow or an agent.
+Next: [The Determinism Test](/book/workflows/the-determinism-test), the question that decides whether you are writing a workflow or an agent.
 
 ## Takeaways
 

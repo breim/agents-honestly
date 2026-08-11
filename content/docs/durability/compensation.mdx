@@ -5,7 +5,7 @@ description: "The saga pattern for refunds, emails, and inventory, plus the \"we
 
 The credit was issued. The confirmation email failed. Ticket #8823 is now in a state where Meridian is four thousand dollars lighter and the customer has no idea.
 
-[Atlas v0 listed this exact failure](/docs/first-agent/the-loop-by-hand) as one of the six things it could not survive. Durable execution fixed everything around it: the crash, the retry, the duplicate. It left this one untouched, because it is not a durability problem. **Both steps succeeded at what they were asked to do.** The sequence is what failed.
+[Atlas v0 listed this exact failure](/book/first-agent/the-loop-by-hand) as one of the six things it could not survive. Durable execution fixed everything around it: the crash, the retry, the duplicate. It left this one untouched, because it is not a durability problem. **Both steps succeeded at what they were asked to do.** The sequence is what failed.
 
 ## Compensation is not rollback
 
@@ -113,7 +113,7 @@ You cannot attach compensations to a static list of steps that does not exist. S
 
 > **Every write tool declares its compensation next to its schema.**
 
-Not in the workflow. In the catalogue, as part of what it means to be a [class ③ or above tool](/docs/tools/read-and-write-tools). A tool without a declared compensation is a tool that cannot participate in a saga, and that should be a property you can check rather than something discovered during an incident.
+Not in the workflow. In the catalogue, as part of what it means to be a [class ③ or above tool](/book/tools/read-and-write-tools). A tool without a declared compensation is a tool that cannot participate in a saga, and that should be a property you can check rather than something discovered during an incident.
 
 Then the stack builds itself from what actually ran:
 
@@ -124,7 +124,7 @@ if (result.ok && catalogue[call.name].compensate) {
 }
 ```
 
-Which is why the [event history](/docs/durability/agent-as-workflow) matters more here than anywhere else in Part XI. It is the authoritative record of *which* effects actually occurred in *this* run, and that record is precisely what has to be unwound.
+Which is why the [event history](/book/durability/agent-as-workflow) matters more here than anywhere else in Part XI. It is the authoritative record of *which* effects actually occurred in *this* run, and that record is precisely what has to be unwound.
 
 ## Order by reversibility, and name the pivot
 
@@ -153,7 +153,7 @@ Get that ordering right and most sagas never compensate at all, which is the poi
 
 ## The "we already sent it" problem
 
-Some steps have no compensation, and pretending otherwise is the anti-pattern this chapter exists to name. You cannot un-send an email. The [class ⑤ writes](/docs/tools/read-and-write-tools) are mail, webhooks, messages, anything already in someone else's system. They are irreversible not because the API lacks a delete but because **a human has already read it.**
+Some steps have no compensation, and pretending otherwise is the anti-pattern this chapter exists to name. You cannot un-send an email. The [class ⑤ writes](/book/tools/read-and-write-tools) are mail, webhooks, messages, anything already in someone else's system. They are irreversible not because the API lacks a delete but because **a human has already read it.**
 
 Three honest responses, in order of preference:
 
@@ -166,16 +166,16 @@ Three honest responses, in order of preference:
 <Aside type="caution" title="The second option is a product decision wearing an engineering costume">
 "Send a correction" means somebody has to write the correction, decide its tone, decide whether it apologises, and decide who is copied. That is not something the workflow author gets to specify in a lambda.
 
-Every irreversible step in your system implies a piece of customer communication that does not exist yet, and the honest thing to do is surface that during design rather than discover it at 2am. [Escalation and audit](/docs/human-in-the-loop/escalation-and-audit) is where the queue for those decisions lives.
+Every irreversible step in your system implies a piece of customer communication that does not exist yet, and the honest thing to do is surface that during design rather than discover it at 2am. [Escalation and audit](/book/human-in-the-loop/escalation-and-audit) is where the queue for those decisions lives.
 </Aside>
 
 ## Compensations fail too
 
-They are activities, so everything from [Part X](/docs/durable-execution/determinism-and-retries) applies, with three adjustments:
+They are activities, so everything from [Part X](/book/durable-execution/determinism-and-retries) applies, with three adjustments:
 
 **Generous retry policies.** A compensation is the last line of defence, and giving up on it early leaves the system inconsistent. Retry harder than you would for the forward path.
 
-**Idempotent, always.** A compensation may be retried by policy, and the whole workflow may replay. Releasing the same hold twice must be a no-op, the same [derived-key discipline](/docs/tools/idempotency) as the forward steps, because compensations are writes.
+**Idempotent, always.** A compensation may be retried by policy, and the whole workflow may replay. Releasing the same hold twice must be a no-op, the same [derived-key discipline](/book/tools/idempotency) as the forward steps, because compensations are writes.
 
 **Failure is an incident, not a retry loop.** When retries are exhausted, a failed compensation escalates to a person with the specific inconsistency named. It does not silently give up, and it does not stop the remaining compensations from running.
 
@@ -200,7 +200,7 @@ Two things worth reading off that table.
 
 ---
 
-Next: [Scale and Quality of Service](/docs/durability/scale-and-qos), fan-out across thousands of cases, provider quotas, priority queues, and fairness across tenants.
+Next: [Scale and Quality of Service](/book/durability/scale-and-qos), fan-out across thousands of cases, provider quotas, priority queues, and fairness across tenants.
 
 ## Takeaways
 

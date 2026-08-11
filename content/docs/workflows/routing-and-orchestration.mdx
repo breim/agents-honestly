@@ -3,7 +3,7 @@ title: "Routing and Orchestration"
 description: "Classify first, then dispatch. Orchestrator/worker without handing control flow to a model."
 ---
 
-Routing has quietly been in this book since [Atlas v0](/docs/first-agent/one-call): a classification, then a `switch`. It reappeared as the [context selection](/docs/context/dynamic-selection) mechanism, and it will reappear again as a cost mechanism in a moment.
+Routing has quietly been in this book since [Atlas v0](/book/first-agent/one-call): a classification, then a `switch`. It reappeared as the [context selection](/book/context/dynamic-selection) mechanism, and it will reappear again as a cost mechanism in a moment.
 
 That persistence is the point. **The model decides *which*; you decide *what happens*.** One bounded call producing a typed value, and branches you wrote. Enumerable, testable, reviewable in a diff.
 
@@ -15,7 +15,7 @@ Most teams design a router by listing the categories they can think of. Four tid
 
 > **The `unknown` route is the most important branch in the router**, and it is the one that gets least design attention.
 
-Two failure modes when it's missing or lazy. If your router has no unknown category, the classifier is *forced* to pick one of the four. And it will, confidently, because that's what the schema demands. (This is exactly the [honest-null problem](/docs/foundations/structured-output) from Part I: a schema with no way to say "I don't know" guarantees you will never be told.) If the unknown route exists but silently drops the ticket, you have built a quiet hole in your queue.
+Two failure modes when it's missing or lazy. If your router has no unknown category, the classifier is *forced* to pick one of the four. And it will, confidently, because that's what the schema demands. (This is exactly the [honest-null problem](/book/foundations/structured-output) from Part I: a schema with no way to say "I don't know" guarantees you will never be told.) If the unknown route exists but silently drops the ticket, you have built a quiet hole in your queue.
 
 Design it deliberately. `unknown` should route to a human, with the ticket, the classification attempt, and the reason. And you should **count** it. A rising unknown rate is the single most informative metric a router produces: it means the world changed and your categories didn't.
 
@@ -36,7 +36,7 @@ For **structured tasks**, say deciding whether a ticket is a policy question or 
 
 For **open-ended generation**, it isn't. Models are confidently wrong at a steady rate, and asking "how sure are you that this reply is correct?" produces a number with little relationship to correctness.
 
-So gate on confidence where the output is a choice. Where the output is prose, a self-report won't do. You need an actual [quality check](/docs/workflows/evaluator-optimizer): a judge, a verifier, a grounding assertion.
+So gate on confidence where the output is a choice. Where the output is prose, a self-report won't do. You need an actual [quality check](/book/workflows/evaluator-optimizer): a judge, a verifier, a grounding assertion.
 </Aside>
 
 ## Routing is also the cost lever
@@ -58,7 +58,7 @@ The cascade's viability rests entirely on that check, which brings back the cave
 <Aside type="tip" title="Layer the cheap stuff first">
 The routing structure that keeps appearing: **rules → classifier → model.** Deterministic patterns catch the obvious cases (a ticket matching a known template, an email from a known automated sender), a cheap classifier handles the ambiguous middle, and a model handles the rest.
 
-That is the same three-band shape as the [entity-resolution review queue](/docs/graphs/entity-resolution) and the same cheap-wide-then-expensive-narrow structure as [reranking](/docs/retrieval/hybrid-and-reranking). At this point in the book it should be a reflex: never spend the expensive operation on cases a cheap one settles.
+That is the same three-band shape as the [entity-resolution review queue](/book/graphs/entity-resolution) and the same cheap-wide-then-expensive-narrow structure as [reranking](/book/retrieval/hybrid-and-reranking). At this point in the book it should be a reflex: never spend the expensive operation on cases a cheap one settles.
 </Aside>
 
 ## Orchestrator and workers
@@ -94,7 +94,7 @@ The question that decides which one you've built:
 
 The workflow version is genuinely useful and under-built. The orchestrator emits something like `{ subtasks: [{worker: "policy_lookup", args: {...}}, {worker: "order_lookup", args: {...}}] }`, a typed value drawn from an enum of workers you defined. Your code validates it, dispatches, and joins. The model contributed *judgment about what's needed*; it did not contribute control flow.
 
-The agent version is fine too, when [the determinism test](/docs/workflows/the-determinism-test) says so. The failure is building the second while believing you built the first, which happens because the diagram is identical and the terminology is shared.
+The agent version is fine too, when [the determinism test](/book/workflows/the-determinism-test) says so. The failure is building the second while believing you built the first, which happens because the diagram is identical and the terminology is shared.
 
 ## Workers get their own context
 
@@ -102,13 +102,13 @@ The property that makes orchestration worth the complexity, beyond parallelism.
 
 Each worker runs with a **fresh, narrow context**: its task, its tools, and nothing else. It does not see the orchestrator's reasoning, the other workers' work, or the whole ticket history. Then it returns a **structured value**, not a transcript.
 
-Two things follow. The [context budget](/docs/context/context-as-budget) stays small in every window, including the orchestrator's, which only ever sees conclusions. And confusion is contained: whatever mess a worker got into while searching stays in the worker's discarded window rather than [poisoning](/docs/context/context-poisoning) the main thread. That's [sub-agent isolation](/docs/patterns/context/subagent-isolation), and it is a correctness mechanism at least as much as a scaling one.
+Two things follow. The [context budget](/book/context/context-as-budget) stays small in every window, including the orchestrator's, which only ever sees conclusions. And confusion is contained: whatever mess a worker got into while searching stays in the worker's discarded window rather than [poisoning](/book/context/context-poisoning) the main thread. That's [sub-agent isolation](/book/patterns/context/subagent-isolation), and it is a correctness mechanism at least as much as a scaling one.
 
 The corollary is a rule: **workers return values, not narratives.** A worker that returns three paragraphs describing what it did has handed the orchestrator a summarization problem and re-imported the noise you isolated it to avoid.
 
 ## Four anti-patterns
 
-**The router that grew to fourteen branches.** Three added last month, each a small PR. That is the [demotion signal](/docs/workflows/the-determinism-test): your input space isn't enumerable and you're hand-maintaining a classification. Collapse the branches into a broader category and let a model handle the variety inside it.
+**The router that grew to fourteen branches.** Three added last month, each a small PR. That is the [demotion signal](/book/workflows/the-determinism-test): your input space isn't enumerable and you're hand-maintaining a classification. Collapse the branches into a broader category and let a model handle the variety inside it.
 
 **Routing on the wrong feature.** Routing by ticket *source* when behaviour actually depends on ticket *intent* produces branches that all do nearly the same thing, plus a maintenance burden. If two branches share most of their handler, the split is in the wrong place.
 
@@ -128,7 +128,7 @@ One classification, one bounded decomposition, and everything else is code. The 
 
 ---
 
-Next: [Evaluator–Optimizer Loops](/docs/workflows/evaluator-optimizer). Generate, critique, revise: the loop that improves output without becoming an open-ended agent.
+Next: [Evaluator–Optimizer Loops](/book/workflows/evaluator-optimizer). Generate, critique, revise: the loop that improves output without becoming an open-ended agent.
 
 ## Takeaways
 

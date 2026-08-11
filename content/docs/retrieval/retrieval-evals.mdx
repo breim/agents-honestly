@@ -45,7 +45,7 @@ Bucket ② is the one that classic information-retrieval metrics cannot see, and
 
 Traditional IR assumes the relevant document *is* the answer: you found the right paper, you're done. RAG breaks that assumption, because a chunk can be indisputably the right chunk and still not contain enough to answer correctly.
 
-This is the [chunking chapter's bug](/docs/retrieval/chunking) made measurable. The chunk containing *"opened electrical components may be returned within 30 days"* is the correct retrieval for "can we return opened relays?": recall@5 counts it as a hit, precision looks fine, nDCG is excellent. And the exception clause that changes the answer was in the next chunk.
+This is the [chunking chapter's bug](/book/retrieval/chunking) made measurable. The chunk containing *"opened electrical components may be returned within 30 days"* is the correct retrieval for "can we return opened relays?": recall@5 counts it as a hit, precision looks fine, nDCG is excellent. And the exception clause that changes the answer was in the next chunk.
 
 So retrieval evaluation needs two distinct questions, not one:
 
@@ -55,13 +55,13 @@ So retrieval evaluation needs two distinct questions, not one:
 | Is the retrieved set enough to answer correctly? | **Context sufficiency** | Chunking split it, or a dependency wasn't retrieved |
 | Is what we retrieved mostly useful? | **Context precision** | You're paying attention for distractors |
 
-Precision matters more here than it does in web search, for a reason established in [Context as an Allocation Problem](/docs/context/context-as-budget): the irrelevant chunks aren't merely wasted tokens, they're the near-misses most likely to be confused with the answer. Low precision doesn't just cost money; it costs accuracy.
+Precision matters more here than it does in web search, for a reason established in [Context as an Allocation Problem](/book/context/context-as-budget): the irrelevant chunks aren't merely wasted tokens, they're the near-misses most likely to be confused with the answer. Low precision doesn't just cost money; it costs accuracy.
 
 ## The labeling problem
 
 All of the above needs ground truth, and that is the actual barrier. Three ways to get it, each with a trap.
 
-**Manual gold sets.** For each question, a human marks which chunks are necessary. Expensive, and the highest quality. Fifty questions labeled carefully beats five hundred labeled sloppily, and you already have twenty from [the problem chapter](/docs/first-agent/the-problem).
+**Manual gold sets.** For each question, a human marks which chunks are necessary. Expensive, and the highest quality. Fifty questions labeled carefully beats five hundred labeled sloppily, and you already have twenty from [the problem chapter](/book/first-agent/the-problem).
 
 **Mined from production.** If Atlas cites its sources, and the acceptance spec requires it, then every correctly-answered ticket is a labeled example, for free. Every escalation that mentions missing information is a candidate negative. This is the cheapest high-quality labeling available, and it exists only because citations were a requirement from day one.
 
@@ -70,7 +70,7 @@ All of the above needs ground truth, and that is the actual barrier. Three ways 
 <Aside type="caution" title="The synthetic-question trap">
 A question generated *from* a chunk shares that chunk's exact vocabulary. It is trivially findable by the chunk it came from, often by lexical overlap alone, so your retriever scores far higher on synthetic questions than on real ones.
 
-Real users don't phrase things the way your documents do. That vocabulary mismatch is [precisely the hard case](/docs/retrieval/lexical-search), and synthetic generation is the one method guaranteed not to test it.
+Real users don't phrase things the way your documents do. That vocabulary mismatch is [precisely the hard case](/book/retrieval/lexical-search), and synthetic generation is the one method guaranteed not to test it.
 
 Use synthetic questions for coverage and regression detection, never for absolute quality claims. Anchor absolute numbers to human-labeled or production-mined examples.
 </Aside>
@@ -91,9 +91,9 @@ Two disciplines make judges trustworthy:
 
 Two evaluations that aren't about quality and should fail the build outright.
 
-**The negative set.** From [the authorization chapter](/docs/retrieval/metadata-and-authorization): questions asked by a principal who lacks access, asserting that the restricted document ID never appears in the retrieval trace. Deterministic, binary, and one of the very few hard assertions this field offers.
+**The negative set.** From [the authorization chapter](/book/retrieval/metadata-and-authorization): questions asked by a principal who lacks access, asserting that the restricted document ID never appears in the retrieval trace. Deterministic, binary, and one of the very few hard assertions this field offers.
 
-**Freshness.** Assert that a superseded document is never returned as current, and that a document deleted upstream is no longer retrievable at all. This is the [ingestion lifecycle](/docs/retrieval/ingestion-pipeline) verified from the query side, and it catches the reconciliation job silently failing.
+**Freshness.** Assert that a superseded document is never returned as current, and that a document deleted upstream is no longer retrievable at all. This is the [ingestion lifecycle](/book/retrieval/ingestion-pipeline) verified from the query side, and it catches the reconciliation job silently failing.
 
 Both belong in CI. Both are pass/fail rather than rates, because there is no acceptable rate of serving another tenant's documents.
 
@@ -107,9 +107,9 @@ The reverse also happens: retrieval metrics flat, answers better. Usually someon
 
 ## Making it routine
 
-Run retrieval evals on every change to chunking, the embedding model, the pipeline, the index parameters, or the reranker, which is to say on every change in Part IV. Each of those alters retrieval behaviour, and several of them ([re-chunking](/docs/retrieval/chunking), [re-embedding](/docs/retrieval/embeddings)) invalidate every number you'd measured before.
+Run retrieval evals on every change to chunking, the embedding model, the pipeline, the index parameters, or the reranker, which is to say on every change in Part IV. Each of those alters retrieval behaviour, and several of them ([re-chunking](/book/retrieval/chunking), [re-embedding](/book/retrieval/embeddings)) invalidate every number you'd measured before.
 
-Run each question [several times](/docs/foundations/nondeterminism) where any stage involves a model, and report rates rather than single results, since the discipline from Part I applies here exactly as it does everywhere else.
+Run each question [several times](/book/foundations/nondeterminism) where any stage involves a model, and report rates rather than single results, since the discipline from Part I applies here exactly as it does everywhere else.
 
 And record the retrieved document IDs on every production request. That single log line is what makes production mining possible, what makes an incident investigable, and what turns "search seems worse lately" into a query you can run.
 
@@ -117,13 +117,13 @@ And record the retrieved document IDs on every production request. That single l
 
 Eleven chapters on a question most projects answer with a reflex. The route matters more than the technology; identifiers and aggregates aren't retrieval problems; chunking sets the ceiling; the filter is what makes results correct rather than merely relevant; hybrid exists because dense and lexical fail in opposite directions; the pipeline's lifecycle causes more incidents than its parser; and none of it is knowable without evaluating retrieval on its own.
 
-The catalog carries the fixes with the code attached: [Parent–Child Chunks](/docs/patterns/retrieval/parent-child-chunks) for the right document and the wrong chunk, [Hybrid Fusion](/docs/patterns/retrieval/hybrid-fusion) and [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank) for recall and precision in that order, [Query Rewriting](/docs/patterns/retrieval/query-rewriting) for conversational phrasing, [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval) for the authorization filter, [Freshness Routing](/docs/patterns/retrieval/freshness-routing) for the questions an index answers stale, [Grounded Citations](/docs/patterns/retrieval/grounded-citations) for making a claim checkable, and [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool) for letting the agent decide whether to search at all.
+The catalog carries the fixes with the code attached: [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks) for the right document and the wrong chunk, [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion) and [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank) for recall and precision in that order, [Query Rewriting](/book/patterns/retrieval/query-rewriting) for conversational phrasing, [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval) for the authorization filter, [Freshness Routing](/book/patterns/retrieval/freshness-routing) for the questions an index answers stale, [Grounded Citations](/book/patterns/retrieval/grounded-citations) for making a claim checkable, and [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool) for letting the agent decide whether to search at all.
 
 Atlas can now answer policy questions with citations, order questions with live data, and aggregate questions with exact numbers. What it still cannot answer is *"why is the Acme account at risk"*, because that answer isn't in any single record. It's in the relationships between several, and that is Part V.
 
 ---
 
-Next: [When Relationships Are the Query](/docs/graphs/when-relationships-are-the-query), on multi-hop questions that similarity search structurally cannot answer, and how to recognize one.
+Next: [When Relationships Are the Query](/book/graphs/when-relationships-are-the-query), on multi-hop questions that similarity search structurally cannot answer, and how to recognize one.
 
 ## Takeaways
 

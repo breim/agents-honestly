@@ -62,7 +62,7 @@ max_changed_lines: 220
 
 Git worktrees are useful for parallel tasks because each linked tree has its own `HEAD` and index while sharing repository objects. The official [Git worktree documentation](https://git-scm.com/docs/git-worktree) also makes the limitation visible. Linked worktrees share parts of the repository and its configuration. A worktree isolates concurrent state. It is not a security sandbox for hostile code.
 
-For trusted internal code, a disposable worktree inside a restricted runner may be sufficient. For unknown repositories, generated code, or package scripts, use the [execution and credential boundary](/docs/security/sandboxing): disposable VM or equivalent isolation, no ambient secrets, restricted egress, bounded compute, and a broker for authorized operations.
+For trusted internal code, a disposable worktree inside a restricted runner may be sufficient. For unknown repositories, generated code, or package scripts, use the [execution and credential boundary](/book/security/sandboxing): disposable VM or equivalent isolation, no ambient secrets, restricted egress, bounded compute, and a broker for authorized operations.
 
 ## Separate exploration from mutation
 
@@ -224,7 +224,7 @@ The agent reproduces the parsing defect from a stored payload, proposes one patc
 
 ---
 
-Part VIII ends here. Next: [What MCP Is and Is Not](/docs/mcp/what-mcp-is), when the integration belongs to another owner and becomes a shared protocol boundary.
+Part VIII ends here. Next: [What MCP Is and Is Not](/book/mcp/what-mcp-is), when the integration belongs to another owner and becomes a shared protocol boundary.
 
 ## Takeaways
 

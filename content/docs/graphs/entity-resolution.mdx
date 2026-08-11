@@ -4,7 +4,7 @@ description: "\"OpenAI\", \"Open AI\", \"OpenAI, Inc.\": the unglamorous work th
 ---
 
 
-The [last chapter](/docs/graphs/modeling-entities) decided what a Customer *is*. This one decides which records *are* a given Customer, and those are completely different problems.
+The [last chapter](/book/graphs/modeling-entities) decided what a Customer *is*. This one decides which records *are* a given Customer, and those are completely different problems.
 
 Meridian's CRM has "Acme Industrial Ltd." Billing has "ACME INDUSTRIAL LIMITED" with a different address, because billing uses the registered office. A ticket says "Acme." The warehouse has `cust_4471`. An email came from `procurement@acme-ind.com`.
 
@@ -38,7 +38,7 @@ Everything about how you tune this follows from one observation.
 
 </Figure>
 
-A false merge is not a data-quality issue. It is a **correctness and possibly a confidentiality failure**: a traversal scoped to one customer now reaches another's tickets, which is precisely the boundary [Part IV insisted](/docs/retrieval/metadata-and-authorization) must never be crossed by a ranking decision. And it is sticky: once other systems have referenced the merged identifier, unpicking it is a migration.
+A false merge is not a data-quality issue. It is a **correctness and possibly a confidentiality failure**: a traversal scoped to one customer now reaches another's tickets, which is precisely the boundary [Part IV insisted](/book/retrieval/metadata-and-authorization) must never be crossed by a ranking decision. And it is sticky: once other systems have referenced the merged identifier, unpicking it is a migration.
 
 A false split degrades answers quietly. Acme's health looks fine because three of its seven escalations are on the other node.
 
@@ -62,7 +62,7 @@ Comparing every record to every other record is quadratic and impossible at any 
 
 Blocking is what makes it tractable: group records by a cheap key, such as the first three characters of the name, a postcode, or an email domain, and only compare within blocks. Modern implementations often use approximate nearest neighbours over record embeddings as the blocking key, which handles spelling variation that a literal key misses.
 
-And note the shape of ① → ②. Cast wide with something cheap, then apply something expensive to a small candidate set. That is now the **fifth** appearance of this pattern in this book: [ANN then rescore](/docs/retrieval/ann-indexes), [select then rerank](/docs/context/dynamic-selection), [retrieve then cross-encode](/docs/retrieval/hybrid-and-reranking), block then match. It is not a coincidence; it is the general answer whenever an accurate operation is too expensive to run everywhere.
+And note the shape of ① → ②. Cast wide with something cheap, then apply something expensive to a small candidate set. That is now the **fifth** appearance of this pattern in this book: [ANN then rescore](/book/retrieval/ann-indexes), [select then rerank](/book/context/dynamic-selection), [retrieve then cross-encode](/book/retrieval/hybrid-and-reranking), block then match. It is not a coincidence; it is the general answer whenever an accurate operation is too expensive to run everywhere.
 
 One consequence of blocking worth stating plainly: **anything blocking misses can never be matched.** A recall failure at stage ① is invisible to every metric computed at stages ② through ④, because those only ever see candidate pairs. If your entity resolution has a mysterious ceiling, look at blocking first.
 
@@ -127,7 +127,7 @@ Do not try to automate the middle. The middle is where the genuinely ambiguous c
 <Aside type="caution" title="Merges must be reversible">
 Never destructively rewrite source records. A merge is an **assertion** that these five records refer to one entity, with a source, a timestamp, and an author, stored alongside the originals rather than replacing them.
 
-That gives you three things: you can undo a bad merge without a data-recovery project, you can audit why two records were joined, and, connecting to [bitemporal modelling](/docs/graphs/modeling-entities), the merge itself is a fact with a validity window, which is exactly what you need when two companies actually do merge in the real world and the records *should* join as of a date.
+That gives you three things: you can undo a bad merge without a data-recovery project, you can audit why two records were joined, and, connecting to [bitemporal modelling](/book/graphs/modeling-entities), the merge itself is a fact with a validity window, which is exactly what you need when two companies actually do merge in the real world and the records *should* join as of a date.
 </Aside>
 
 ## Measuring it
@@ -138,7 +138,7 @@ That gives you three things: you can undo a bad merge without a data-recovery pr
 
 **Unresolved rate.** What fraction of incoming records fail to attach to any known entity? A rising number means the source changed format or a new data feed arrived unnormalized.
 
-**Downstream sanity checks.** Does any account have two current owners? Does a cluster span two tax IDs? These are ontology violations from [last chapter](/docs/graphs/modeling-entities), and they catch merge errors that pairwise metrics miss.
+**Downstream sanity checks.** Does any account have two current owners? Does a cluster span two tax IDs? These are ontology violations from [last chapter](/book/graphs/modeling-entities), and they catch merge errors that pairwise metrics miss.
 
 ## Atlas, concretely
 
@@ -150,7 +150,7 @@ And the honest note for the plan: this is roughly two-thirds of the effort of At
 
 ---
 
-Next: [Graph Retrieval](/docs/graphs/graph-retrieval), on traversal, neighbourhoods, and returning a subgraph small enough to fit in a prompt.
+Next: [Graph Retrieval](/book/graphs/graph-retrieval), on traversal, neighbourhoods, and returning a subgraph small enough to fit in a prompt.
 
 ## Takeaways
 

@@ -7,7 +7,7 @@ On the 3rd, someone changes a prompt. The new version adds a paragraph of guidan
 
 It goes out on the 4th. Evals pass; quality is slightly better. Nobody thinks about it again.
 
-The invoice arrives on the 1st of the following month and is 40% higher. Eight hundred tokens, re-sent on every turn of every run: [the quadratic from the cost chapter](/docs/production/cost-engineering). By the time anyone can see it in the only artifact that shows total spend, it has been running for twenty-eight days.
+The invoice arrives on the 1st of the following month and is 40% higher. Eight hundred tokens, re-sent on every turn of every run: [the quadratic from the cost chapter](/book/production/cost-engineering). By the time anyone can see it in the only artifact that shows total spend, it has been running for twenty-eight days.
 
 > **The provider's invoice is one number, arriving a month late, with no way to ask which change caused it.**
 
@@ -19,7 +19,7 @@ The load-bearing fact, and the reason this cannot be solved by buying a tool: AI
 
 There is no field for tenant. None for feature. None for run. None for whether the call was a retry, a fallback, or an eval.
 
-Which means attribution is not something you extract from the invoice. **It is constructed at call time, by you, and the invoice is only useful for reconciling the total.** That construction has exactly one good home: the [model gateway](/docs/production/reference-architecture), where every call already passes.
+Which means attribution is not something you extract from the invoice. **It is constructed at call time, by you, and the invoice is only useful for reconciling the total.** That construction has exactly one good home: the [model gateway](/book/production/reference-architecture), where every call already passes.
 
 ## Seven dimensions, and the last one is the point
 
@@ -30,12 +30,12 @@ Which means attribution is not something you extract from the invoice. **It is c
 | **User** | Who is the power user, and is that fine? |
 | **Feature / workflow** | Which product surface spends the money? |
 | **Node / step** | Which step in the graph is expensive? |
-| **Model** | What did the [fallback](/docs/reliability/fallbacks-and-breakers) or the [cascade](/docs/production/cost-engineering) actually cost? |
+| **Model** | What did the [fallback](/book/reliability/fallbacks-and-breakers) or the [cascade](/book/production/cost-engineering) actually cost? |
 | **Outcome** | **Cost per *resolved* ticket, not per call** |
 
 The first six are bookkeeping. The seventh is the one that turns a cost dashboard into a business instrument, and almost nobody has it.
 
-Cost per model call is a number you can drive to zero by being useless. Cost per *successful outcome* is the number that trades correctly against quality. A change that makes runs 20% cheaper and 30% more likely to escalate has made your cost per resolved ticket **worse**, and only the outcome-joined metric shows it. This is the same [unit-economics frame](/docs/production/cost-engineering) as the per-run budget, and it requires joining spend to the run's terminal state, which is why the [six invariants](/docs/reliability/failure-injection) insisted every run reach one.
+Cost per model call is a number you can drive to zero by being useless. Cost per *successful outcome* is the number that trades correctly against quality. A change that makes runs 20% cheaper and 30% more likely to escalate has made your cost per resolved ticket **worse**, and only the outcome-joined metric shows it. This is the same [unit-economics frame](/book/production/cost-engineering) as the per-run budget, and it requires joining spend to the run's terminal state, which is why the [six invariants](/book/reliability/failure-injection) insisted every run reach one.
 
 Two more attributes are worth carrying, because they change how you read everything else:
 
@@ -128,15 +128,15 @@ Three details are easy to get wrong and expensive to fix afterwards.
 
 **Price at call time, from a versioned table.** Storing raw token counts and multiplying by today's price means every historical dashboard silently changes when a vendor adjusts a rate, and your "we cut costs 20% in Q3" chart becomes unfalsifiable. Store the computed number and the price-table version.
 
-**Cached input is a separate meter.** It is priced far below normal input, so folding it into one `inputTokens` field destroys the only signal that tells you whether your [cache prefix discipline](/docs/foundations/prompt-caching) is actually working. Cache hit rate is a cost metric.
+**Cached input is a separate meter.** It is priced far below normal input, so folding it into one `inputTokens` field destroys the only signal that tells you whether your [cache prefix discipline](/book/foundations/prompt-caching) is actually working. Cache hit rate is a cost metric.
 
-**Record the served model, not the requested one.** This is the same field [the fallback chapter](/docs/reliability/fallbacks-and-breakers) required for detecting silent degradation, and it does double duty here: a week where costs dropped and quality dipped is instantly explainable if you can see that 30% of traffic was served by the cheap rung.
+**Record the served model, not the requested one.** This is the same field [the fallback chapter](/book/reliability/fallbacks-and-breakers) required for detecting silent degradation, and it does double duty here: a week where costs dropped and quality dipped is instantly explainable if you can see that 30% of traffic was served by the cheap rung.
 
-These attributes belong on the [OTel spans you are already emitting](/docs/observability/otel-genai). One span attribute set, read by both the trace UI and the cost pipeline, rather than a parallel metrics path that drifts out of agreement with the traces.
+These attributes belong on the [OTel spans you are already emitting](/book/observability/otel-genai). One span attribute set, read by both the trace UI and the cost pipeline, rather than a parallel metrics path that drifts out of agreement with the traces.
 
 ## Report distributions, because the mean is a lie
 
-Run cost is heavy-tailed in a way that request cost is not. Most runs finish in four turns; a few loop to twenty. Because [input cost is roughly quadratic in turns](/docs/production/cost-engineering), those few runs can be a large fraction of total spend.
+Run cost is heavy-tailed in a way that request cost is not. Most runs finish in four turns; a few loop to twenty. Because [input cost is roughly quadratic in turns](/book/production/cost-engineering), those few runs can be a large fraction of total spend.
 
 <Figure caption="The same mean, two different systems. Only one of them has a problem, and only the percentile view shows which." frame={false}>
 
@@ -154,7 +154,7 @@ Run cost is heavy-tailed in a way that request cost is not. Most runs finish in 
 
 </Figure>
 
-So the dashboard shows **p50, p90, p99, and max** per workflow, not an average, and `max` earns its place because it is where you discover a run that spent eighteen dollars and produced nothing. Track the **share of total spend consumed by the top 1% of runs**; when that number climbs, you have a looping-behavior problem being reported as a cost problem, and the fix is a [turn cap](/docs/production/cost-engineering) rather than a cheaper model.
+So the dashboard shows **p50, p90, p99, and max** per workflow, not an average, and `max` earns its place because it is where you discover a run that spent eighteen dollars and produced nothing. Track the **share of total spend consumed by the top 1% of runs**; when that number climbs, you have a looping-behavior problem being reported as a cost problem, and the fix is a [turn cap](/book/production/cost-engineering) rather than a cheaper model.
 
 ## Alert on the leading indicator, not the invoice
 
@@ -165,7 +165,7 @@ The invoice is a lagging indicator by thirty days. The leading indicator is avai
 | **Tokens per minute, by feature** | A deploy that changed prompt size. Minutes, not weeks |
 | **Mean input tokens per turn, by workflow** | The eight-hundred-token paragraph. This is the specific alert that catches the opening scene |
 | **Cost per resolved outcome** | Quality/cost trades going the wrong way |
-| **Cache hit rate drop** | A [prefix invalidated](/docs/foundations/prompt-caching) by an innocuous edit |
+| **Cache hit rate drop** | A [prefix invalidated](/book/foundations/prompt-caching) by an innocuous edit |
 | **Unproductive token share** | A reliability incident, seen from the money side |
 | **Top-1% spend share** | Runs that loop |
 | **Per-tenant spend vs. plan** | One customer consuming their annual contract in March |
@@ -173,7 +173,7 @@ The invoice is a lagging indicator by thirty days. The leading indicator is avai
 The second row is the highest-value single alert in this chapter. Average input tokens per turn is nearly constant for a given workflow, moves only when someone changes the prompt or the tool catalogue, and jumps immediately on deploy. An alert on a 10% shift catches the opening scene the afternoon it ships.
 
 <Aside type="note" title="Put the number in CI, not just on a dashboard">
-Better still: make it a gate. Your [eval suite](/docs/evals/ci-for-agents) already runs the candidate configuration over a fixed dataset, so it can report tokens and cost per fixture alongside quality. A prompt change then arrives in review as *"+3% on the rubric, +38% input tokens"*, which is a trade a human can weigh before it ships.
+Better still: make it a gate. Your [eval suite](/book/evals/ci-for-agents) already runs the candidate configuration over a fixed dataset, so it can report tokens and cost per fixture alongside quality. A prompt change then arrives in review as *"+3% on the rubric, +38% input tokens"*, which is a trade a human can weigh before it ships.
 
 Quality regressions are gated in CI as a matter of course. Cost regressions almost never are, and they are the ones that surface a month later with nobody able to say which change caused them.
 </Aside>
@@ -182,7 +182,7 @@ Quality regressions are gated in CI as a matter of course. Cost regressions almo
 
 The last step is organizational and it is the one that changes behavior.
 
-**Per-tenant cost against per-tenant revenue** is the report that answers whether a customer is profitable, and in usage-based products it is the report that catches the enterprise account whose agent runs cost more than their subscription. It requires the tenant dimension on every call, which is [one more reason](/docs/security/tenant-isolation) tenancy has to ride the whole async chain.
+**Per-tenant cost against per-tenant revenue** is the report that answers whether a customer is profitable, and in usage-based products it is the report that catches the enterprise account whose agent runs cost more than their subscription. It requires the tenant dimension on every call, which is [one more reason](/book/security/tenant-isolation) tenancy has to ride the whole async chain.
 
 **Per-team or per-feature showback** puts the number in front of the people who can move it. A team that sees its feature's monthly spend next to its usage will optimize without being asked; a team that sees a company-wide total will not, because nothing about that number is theirs.
 
@@ -203,13 +203,13 @@ The honest caveat: showback becomes counterproductive the moment it turns into a
 | CI gate | Eval run reports Δ tokens and Δ cost per fixture next to Δ quality |
 | Reconciliation | Monthly: sum of recorded `cost_micros` vs. the invoice, within 2% |
 
-The last row is the one people skip and then regret. If your recorded total does not reconcile with the invoice, some traffic is not going through the gateway: a script, a notebook, an integration someone wired directly. That unmetered path is both a cost blind spot and, given everything [Part XVII](/docs/security/least-privilege) argued, a control blind spot as well.
+The last row is the one people skip and then regret. If your recorded total does not reconcile with the invoice, some traffic is not going through the gateway: a script, a notebook, an integration someone wired directly. That unmetered path is both a cost blind spot and, given everything [Part XVII](/book/security/least-privilege) argued, a control blind spot as well.
 
 The 40% invoice would have been a Slack message on the afternoon of the 4th.
 
 ---
 
-Next: [Detecting Drift](/docs/observability/drift). The model changed, the data changed, or the users changed. Noticing which.
+Next: [Detecting Drift](/book/observability/drift). The model changed, the data changed, or the users changed. Noticing which.
 
 ## Takeaways
 

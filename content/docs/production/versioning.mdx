@@ -34,7 +34,7 @@ The mistake is treating the prompt as the artifact. The prompt is one input to a
 
 So the deployable artifact is the **resolved configuration bundle**, and it gets a content-addressed identity: hash the whole resolved set, record the hash on every run and every span, and store the bundle keyed by hash.
 
-That single field answers the opening question in one query, and it is the join key that makes everything else in this part work: [cost accounting](/docs/observability/cost-accounting) by version, [drift detection](/docs/observability/drift) with a stable baseline, [replay](/docs/observability/replay-debugging) that knows whether a recording is still valid, and rollout comparisons that are comparing two known things.
+That single field answers the opening question in one query, and it is the join key that makes everything else in this part work: [cost accounting](/book/observability/cost-accounting) by version, [drift detection](/book/observability/drift) with a stable baseline, [replay](/book/observability/replay-debugging) that knows whether a recording is still valid, and rollout comparisons that are comparing two known things.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -120,11 +120,11 @@ def resolve_for_run(run_id: str, env) -> ConfigBundle:
 
 Three fields in that struct are the ones teams leave out, and each has cost someone a week:
 
-**`toolCatalogueHash`.** A tool description is prompt text that happens to live in a schema. [Part VIII said so](/docs/tools/tool-discovery) for quality reasons and [Part XVII said so](/docs/security/least-privilege) for security reasons. Editing a description changes the agent's behavior exactly as editing the system prompt does, and it usually ships in a PR reviewed as a code change.
+**`toolCatalogueHash`.** A tool description is prompt text that happens to live in a schema. [Part VIII said so](/book/tools/tool-discovery) for quality reasons and [Part XVII said so](/book/security/least-privilege) for security reasons. Editing a description changes the agent's behavior exactly as editing the system prompt does, and it usually ships in a PR reviewed as a code change.
 
-**`corpusBuild`.** The [drift chapter's](/docs/observability/drift) most common culprit. A re-index changes what the agent reads without changing a byte of your code.
+**`corpusBuild`.** The [drift chapter's](/book/observability/drift) most common culprit. A re-index changes what the agent reads without changing a byte of your code.
 
-**`region`.** Same model string, different endpoint, different serving stack, and a [compliance-relevant](/docs/security/pii-and-compliance) difference besides.
+**`region`.** Same model string, different endpoint, different serving stack, and a [compliance-relevant](/book/security/pii-and-compliance) difference besides.
 
 ## Immutable identities, not semantic versions
 
@@ -140,7 +140,7 @@ The human-readable label lives in the manifest as metadata: an author, a date, a
 
 > **A version without a score is not a version. It is a guess with a hash.**
 
-Every bundle promoted to production should carry the [eval run](/docs/evals/ci-for-agents) that justified it, stored with the bundle. This is what makes six-months-later questions answerable: *why did we ship this* has an artifact, not a memory.
+Every bundle promoted to production should carry the [eval run](/book/evals/ci-for-agents) that justified it, stored with the bundle. This is what makes six-months-later questions answerable: *why did we ship this* has an artifact, not a memory.
 
 ## What rollback actually means here
 
@@ -155,23 +155,23 @@ Rollback is where the classical model breaks, because the system has four layers
 
 The corpus row is the one that needs a decision in advance: an index build that has been deleted is not a rollback target, so retain the previous build long enough to fall back to it, and treat "re-index in place" as a change with no undo.
 
-The last row is the honest limit. You cannot roll back the provider's model. If behavior on a pinned model string shifts, and [it does](/docs/observability/drift), your available moves are to switch to a different pinned version if one is offered, to adapt the prompt around the new behavior, or to fall back to [another rung of the ladder](/docs/reliability/fallbacks-and-breakers). Which reframes what the version pin is for: it is not a guarantee, it is a **record**, and its value is that when behavior changes you can prove the change was not yours.
+The last row is the honest limit. You cannot roll back the provider's model. If behavior on a pinned model string shifts, and [it does](/book/observability/drift), your available moves are to switch to a different pinned version if one is offered, to adapt the prompt around the new behavior, or to fall back to [another rung of the ladder](/book/reliability/fallbacks-and-breakers). Which reframes what the version pin is for: it is not a guarantee, it is a **record**, and its value is that when behavior changes you can prove the change was not yours.
 
 <Aside type="caution" title="Rollback does not un-send">
-A bad prompt shipped at 14:00 and rolled back at 14:40 still produced forty minutes of replies that reached customers, credits that were issued, and [memory writes](/docs/context/memory) that persist.
+A bad prompt shipped at 14:00 and rolled back at 14:40 still produced forty minutes of replies that reached customers, credits that were issued, and [memory writes](/book/context/memory) that persist.
 
-This is [the class ⑤ problem](/docs/tools/read-and-write-tools) at deploy scale, and it is why the next chapter treats rollout as a blast-radius decision rather than a percentage. Fast rollback bounds the damage; it does not reverse it, and any durable state the bad version wrote needs its own cleanup, which is a thing to have thought about before you need it.
+This is [the class ⑤ problem](/book/tools/read-and-write-tools) at deploy scale, and it is why the next chapter treats rollout as a blast-radius decision rather than a percentage. Fast rollback bounds the damage; it does not reverse it, and any durable state the bad version wrote needs its own cleanup, which is a thing to have thought about before you need it.
 </Aside>
 
 ## Decoupling deploy from release
 
 Putting the bundle in a store rather than the binary is the right call. It makes rollback seconds instead of minutes and lets you change a prompt without a deploy pipeline. It also removes the safety rails that code review and CI were providing, so it comes with obligations:
 
-**A config change is a reviewed change.** Same PR flow, same approvals. Otherwise you have built a production-mutation channel that bypasses every control in [Part XVII](/docs/security/least-privilege), and a prompt is exactly the kind of thing an attacker or a well-meaning hurried colleague would want to edit.
+**A config change is a reviewed change.** Same PR flow, same approvals. Otherwise you have built a production-mutation channel that bypasses every control in [Part XVII](/book/security/least-privilege), and a prompt is exactly the kind of thing an attacker or a well-meaning hurried colleague would want to edit.
 
 **A config change runs the eval suite.** Promotion is gated on the score, not on someone's read of the diff.
 
-**A config change is a deploy event.** It appears in the same timeline as code deploys, because [drift diagnosis](/docs/observability/drift) starts with "what changed" and a change invisible to that query is a change that will be blamed on the model.
+**A config change is a deploy event.** It appears in the same timeline as code deploys, because [drift diagnosis](/book/observability/drift) starts with "what changed" and a change invisible to that query is a change that will be blamed on the model.
 
 **One environment cannot silently diverge.** The manifest per environment is itself versioned, so "what is production running" is a stored fact rather than a live read of a mutable key.
 
@@ -183,7 +183,7 @@ Putting the bundle in a store rather than the binary is the right call. It makes
 | Tool catalogue | Hash of all schemas + descriptions | With the code | Deploy |
 | Model | Pinned id + provider + region | In the bundle | Ladder, not rollback |
 | Sampling params | In the bundle | With the bundle | Repoint |
-| Graph | Git SHA + `graphVersion` | Code | [Worker versioning](/docs/durable-execution/determinism-and-retries) |
+| Graph | Git SHA + `graphVersion` | Code | [Worker versioning](/book/durable-execution/determinism-and-retries) |
 | Retrieval config | In the bundle | With the bundle | Repoint |
 | Corpus | Index build id | Two builds retained | Repoint to previous |
 | **The bundle** | `sha256` of all the above | Manifest per environment | **The unit of rollback** |
@@ -193,7 +193,7 @@ The bottom two rows are the chapter. One hash names the whole configuration, one
 
 ---
 
-Next: [Rollout and In-Flight Migration](/docs/production/rollout), shipping a change while thousands of agent runs are mid-execution.
+Next: [Rollout and In-Flight Migration](/book/production/rollout), shipping a change while thousands of agent runs are mid-execution.
 
 ## Takeaways
 

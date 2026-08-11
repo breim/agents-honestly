@@ -15,7 +15,7 @@ That is the whole difference, and it is why compliance for agentic systems is no
 
 ## Map the copies, not the database
 
-The [previous chapter](/docs/security/tenant-isolation) listed your stores on the tenancy axis: which of them can leak *across customers*. This is the same inventory on a different axis: which of them hold personal data at all, how it got there, and who decided.
+The [previous chapter](/book/security/tenant-isolation) listed your stores on the tenancy axis: which of them can leak *across customers*. This is the same inventory on a different axis: which of them hold personal data at all, how it got there, and who decided.
 
 | Store | How personal data arrives | Who chose this |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ The [previous chapter](/docs/security/tenant-isolation) listed your stores on th
 | Trace / observability store | Verbatim prompts and results | An engineer adding instrumentation |
 | Checkpointer | The whole conversation, per thread | The framework, by default |
 | Workflow history | Every activity argument, durably | The durability decision |
-| [Memory / fact store](/docs/context/memory) | Extracted assertions about a person | An extraction prompt |
+| [Memory / fact store](/book/context/memory) | Extracted assertions about a person | An extraction prompt |
 | Compaction summaries | Restated, unlabeled, unstructured | An automatic process |
 | Eval datasets | Sampled production runs | A quality initiative |
 | Model provider's logs | Whatever your contract permits | Your procurement, months ago |
@@ -33,7 +33,7 @@ Read the third column. **Exactly one row was a data-protection decision.** The r
 
 Two rows deserve singling out because they behave worst under a deletion request.
 
-**Compaction summaries and memory records are derived personal data, and they are unstructured.** A row keyed by `customer_id` is deletable. A summary sentence reading *"the customer was upset about the delayed Meridian order and mentioned their new address"* is personal data with no key, no schema, and no marker saying so. If your memory store keeps `subject_id` alongside every fact, as [the memory chapter argued for other reasons](/docs/context/memory), this is tractable. If it does not, you cannot honor an erasure request against it and you will discover that during an audit.
+**Compaction summaries and memory records are derived personal data, and they are unstructured.** A row keyed by `customer_id` is deletable. A summary sentence reading *"the customer was upset about the delayed Meridian order and mentioned their new address"* is personal data with no key, no schema, and no marker saying so. If your memory store keeps `subject_id` alongside every fact, as [the memory chapter argued for other reasons](/book/context/memory), this is tractable. If it does not, you cannot honor an erasure request against it and you will discover that during an audit.
 
 **The eval set is the one that outlives everything.** It was extracted once, lives in a repository with different access rules, gets copied into CI caches and developer laptops, and nothing about your deletion pipeline knows it exists.
 
@@ -139,9 +139,9 @@ def for_prompt(f: Field, vault) -> str:
 </Tab>
 </Tabs>
 
-The classification lives on the **field**, not on the document, and it is assigned at the schema rather than detected at runtime. That distinction is the same one [the untrusted-retrieval chapter](/docs/security/untrusted-retrieval) made about provenance, and it fails for the same reason when you get it backwards: a regex that spots email addresses in free text is a classifier, and a classifier misses. Here the miss is quieter than a security miss. Nobody attacks it, so nothing reveals the gap until a subject-access request asks what you hold.
+The classification lives on the **field**, not on the document, and it is assigned at the schema rather than detected at runtime. That distinction is the same one [the untrusted-retrieval chapter](/book/security/untrusted-retrieval) made about provenance, and it fails for the same reason when you get it backwards: a regex that spots email addresses in free text is a classifier, and a classifier misses. Here the miss is quieter than a security miss. Nobody attacks it, so nothing reveals the gap until a subject-access request asks what you hold.
 
-There is a bonus that has nothing to do with compliance. Handles are shorter than values, stable across turns, and cannot be [hallucinated into a plausible-looking wrong email address](/docs/tools/schema-and-granularity). Pseudonymization improves the agent slightly while making the privacy story dramatically simpler, which is rare enough to be worth noticing.
+There is a bonus that has nothing to do with compliance. Handles are shorter than values, stable across turns, and cannot be [hallucinated into a plausible-looking wrong email address](/book/tools/schema-and-granularity). Pseudonymization improves the agent slightly while making the privacy story dramatically simpler, which is rare enough to be worth noticing.
 
 ## Residency: every model call is a transfer
 
@@ -155,7 +155,7 @@ Four things to settle, and they are procurement decisions with engineering conse
 
 **Training use.** Whether your data trains a model is a contractual question with a durable answer, and it should be recorded next to the endpoint config rather than in someone's memory of a sales call.
 
-**The full subprocessor list.** Not just the model provider: the embedding service, the reranker, the observability vendor, the vector database, the sandbox host. [The retrieval chapter flagged this](/docs/retrieval/metadata-and-authorization) as a thing that arrives quietly when someone adds a reranker to improve relevance. Every one of them is a recipient of personal data.
+**The full subprocessor list.** Not just the model provider: the embedding service, the reranker, the observability vendor, the vector database, the sandbox host. [The retrieval chapter flagged this](/book/retrieval/metadata-and-authorization) as a thing that arrives quietly when someone adds a reranker to improve relevance. Every one of them is a recipient of personal data.
 
 ## Retention is a per-store decision, and the requirements genuinely conflict
 
@@ -163,7 +163,7 @@ Here is where compliance for agents stops being an application of standard pract
 
 | Force | Wants |
 | --- | --- |
-| [Durable execution](/docs/durability/agent-as-workflow) | Long histories: replay and investigation need them |
+| [Durable execution](/book/durability/agent-as-workflow) | Long histories: replay and investigation need them |
 | Debugging | Traces retained long enough to find a rare bug |
 | Data protection | The shortest retention that serves the purpose |
 | Regulated logging | A **minimum** retention, for some system classes |
@@ -182,7 +182,7 @@ Which produces the actual engineering move, and it is a satisfying one because i
 
 > **If the record you must retain contains no personal data, the retention floor and the minimization duty stop competing.**
 
-A required log entry can say *run 4471 issued a credit of 250000 to account handle `acct_a1`, approved by staff 22, under policy v9* and retain for a decade without holding anything about a person. The full conversation, which is what actually contains the personal data, can expire in thirty days. That is one structured audit record written deliberately, plus an operational store with a short life, and it is precisely the split [the escalation and audit chapter](/docs/human-in-the-loop/escalation-and-audit) argued for on evidentiary grounds. The privacy argument lands on the same design from a different direction.
+A required log entry can say *run 4471 issued a credit of 250000 to account handle `acct_a1`, approved by staff 22, under policy v9* and retain for a decade without holding anything about a person. The full conversation, which is what actually contains the personal data, can expire in thirty days. That is one structured audit record written deliberately, plus an operational store with a short life, and it is precisely the split [the escalation and audit chapter](/book/human-in-the-loop/escalation-and-audit) argued for on evidentiary grounds. The privacy argument lands on the same design from a different direction.
 
 So: **retention is set per store, from the purpose of that store**, and written down. Not inherited from whatever the vector database defaulted to.
 
@@ -196,7 +196,7 @@ Three parts of the fan-out are harder than they look:
 
 **Derived data has no key.** A compaction summary or an extracted memory mentioning the subject is personal data with nothing to join on. The only real fix is upstream: record `subject_ids` on every derived artifact at the moment it is created. Retrofitting this is close to impossible, which is why it belongs in the design rather than in the remediation.
 
-**Some stores are append-only by design.** A workflow history is not a table you delete from. That is the property that makes replay work. The available answers are per-run retention that eventually expires the whole history, keeping personal data out of activity arguments in favor of handles, or [crypto-shredding](/docs/security/sandboxing): encrypt per subject and destroy the key, so the ciphertext remains and the data does not. The third is usually the honest answer for durable systems, and it has to be designed in at the start.
+**Some stores are append-only by design.** A workflow history is not a table you delete from. That is the property that makes replay work. The available answers are per-run retention that eventually expires the whole history, keeping personal data out of activity arguments in favor of handles, or [crypto-shredding](/book/security/sandboxing): encrypt per subject and destroy the key, so the ciphertext remains and the data does not. The third is usually the honest answer for durable systems, and it has to be designed in at the start.
 
 **Some stores are not yours.** A provider's abuse buffer is deleted according to their terms, on their schedule. You can contract that away in advance; you cannot delete it on request.
 
@@ -222,7 +222,7 @@ The last two rows are the design paying off. The eval set is permanent and harml
 
 Ten chapters, and one argument running through all of them.
 
-The [threat model](/docs/security/threat-model) established that the trust boundary moved somewhere you cannot put a check. [Injection](/docs/security/prompt-injection) showed that no amount of inspecting text recovers it, and [retrieval](/docs/security/untrusted-retrieval) showed that the hostile text may have been written a year before the query. [Least privilege](/docs/security/least-privilege) and [identity](/docs/security/identity) reduced what a compromised run can reach and as whom; [tenancy](/docs/security/tenant-isolation) and [sandboxing](/docs/security/sandboxing) put the enforcement below the application, where your own bugs cannot reach it. [The supply chain](/docs/security/agentic-supply-chain) added every external component and update channel that can change behavior at runtime, and [adversarial evals](/docs/security/adversarial-evals) made those paths executable tests. This chapter did the same thing to personal data: reduce at the boundary, so every copy downstream inherits the reduction.
+The [threat model](/book/security/threat-model) established that the trust boundary moved somewhere you cannot put a check. [Injection](/book/security/prompt-injection) showed that no amount of inspecting text recovers it, and [retrieval](/book/security/untrusted-retrieval) showed that the hostile text may have been written a year before the query. [Least privilege](/book/security/least-privilege) and [identity](/book/security/identity) reduced what a compromised run can reach and as whom; [tenancy](/book/security/tenant-isolation) and [sandboxing](/book/security/sandboxing) put the enforcement below the application, where your own bugs cannot reach it. [The supply chain](/book/security/agentic-supply-chain) added every external component and update channel that can change behavior at runtime, and [adversarial evals](/book/security/adversarial-evals) made those paths executable tests. This chapter did the same thing to personal data: reduce at the boundary, so every copy downstream inherits the reduction.
 
 The through-line is that **every effective control in this part is structural and every ineffective one is a request.** Filters, careful prompts, instructions not to obey documents, and reminders to be careful with customer data are all the same shape, and they all fail in the same direction, quietly, against exactly the case you needed them for.
 
@@ -237,7 +237,7 @@ Part XVIII assembles the whole thing: every component, every arrow, and which of
 
 ---
 
-Next: [AI Governance](/docs/production/ai-governance), inventory, ownership, impact, evidence, exceptions, literacy, and retirement before the architecture is approved.
+Next: [AI Governance](/book/production/ai-governance), inventory, ownership, impact, evidence, exceptions, literacy, and retirement before the architecture is approved.
 
 ## Takeaways
 

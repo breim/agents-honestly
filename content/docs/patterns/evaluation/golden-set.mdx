@@ -7,7 +7,7 @@ description: "The small curated dataset that gates every release."
 
 Someone changes a prompt. Is it better?
 
-The honest answer, without a dataset, is that nobody knows. The available evidence is that the person who wrote it tried four examples and liked the results, which is [the same four examples that motivated the change](/docs/evals/eval-discipline), so of course it does better on them.
+The honest answer, without a dataset, is that nobody knows. The available evidence is that the person who wrote it tried four examples and liked the results, which is [the same four examples that motivated the change](/book/evals/eval-discipline), so of course it does better on them.
 
 The failure mode is not that changes ship untested. It is that they ship *tested against the case that prompted them*, so every change is an improvement on its own motivating example and a coin flip on everything else. Six months of that produces a prompt nobody can modify, because nobody can say what it currently handles.
 
@@ -54,11 +54,11 @@ Four rules:
 
 **Write the expected *outcome*, not the expected text.** For each case: the answer, the source it must come from, the action it should take, or the fact that it must escalate. Text comparison is meaningless; outcome comparison is checkable.
 
-**Include cases the agent should fail.** Out-of-scope requests, ambiguous tickets, things that must escalate. A set of only-successes measures how well the agent does the easy thing, and [escalation recall is the metric held highest](/docs/capstone/the-brief) precisely because missing one is the expensive error.
+**Include cases the agent should fail.** Out-of-scope requests, ambiguous tickets, things that must escalate. A set of only-successes measures how well the agent does the easy thing, and [escalation recall is the metric held highest](/book/capstone/the-brief) precisely because missing one is the expensive error.
 
-**Promote every production failure.** [Replay](/docs/observability/replay-debugging) turns an incident into a deterministic fixture. This is the source that compounds: the set grows at exactly the rate the system breaks, which beats any sampling strategy designed up front.
+**Promote every production failure.** [Replay](/book/observability/replay-debugging) turns an incident into a deterministic fixture. This is the source that compounds: the set grows at exactly the rate the system breaks, which beats any sampling strategy designed up front.
 
-**Separate what gates from what reports.** Invariants, such as no cross-account data, no credit above cap, no uncited policy claim, fail the build with no threshold and no discussion. Rates are noisy on small samples, so they report as a distribution against a [flake budget](/docs/evals/ci-for-agents); gating a noisy metric on one run produces a suite people re-run until it passes.
+**Separate what gates from what reports.** Invariants, such as no cross-account data, no credit above cap, no uncited policy claim, fail the build with no threshold and no discussion. Rates are noisy on small samples, so they report as a distribution against a [flake budget](/book/evals/ci-for-agents); gating a noisy metric on one run produces a suite people re-run until it passes.
 
 ## Code
 
@@ -149,36 +149,36 @@ async def run_golden(cases: list[GoldenCase], bundle) -> dict:
 
 **Curation is the cost, and it is ongoing.** 250 labeled cases is days of work, and they decay: policies change, the corpus is re-indexed, the product scope moves. Budget review time, and delete fixtures whose expected outcome is no longer correct rather than editing them until they pass.
 
-**Small sets are noisy.** Detecting a three-point change on 250 cases at meaningful confidence is not always possible. That is why rates report rather than gate, and why the [canary](/docs/patterns/evaluation/canary-eval) on real traffic exists: CI has the labels and production has the sample size.
+**Small sets are noisy.** Detecting a three-point change on 250 cases at meaningful confidence is not always possible. That is why rates report rather than gate, and why the [canary](/book/patterns/evaluation/canary-eval) on real traffic exists: CI has the labels and production has the sample size.
 
 **Overfitting is real and quiet.** A set used long enough becomes the target, and the agent gets better at the set without getting better. Keep a holdout slice that is never used for tuning, and rotate promoted cases in continuously so the set is never static.
 
-**Promoted cases carry customer data.** Scrub and pseudonymize at extraction: [the eval-fixture row in the compliance table](/docs/security/pii-and-compliance) is exactly this pipeline, and fixtures outlive the system they came from.
+**Promoted cases carry customer data.** Scrub and pseudonymize at extraction: [the eval-fixture row in the compliance table](/book/security/pii-and-compliance) is exactly this pipeline, and fixtures outlive the system they came from.
 
 ## When not to use it
 
 **Never, once anything ships.** A system without one cannot answer whether a change helped, which means every change is a guess. The genuine question is when to *build* it.
 
-**Before the problem is understood.** [Writing twenty cases is the cheapest available test of whether you understand the task](/docs/first-agent/the-problem), and failing to write them is the signal, not a reason to skip ahead.
+**Before the problem is understood.** [Writing twenty cases is the cheapest available test of whether you understand the task](/book/first-agent/the-problem), and failing to write them is the signal, not a reason to skip ahead.
 
 The real limits are about scope:
 
 **Do not gate on rates too early.** In the first weeks the numbers move for reasons unrelated to your changes. Report them, gate on invariants only, and start gating on rates when the baseline is stable.
 
-**Do not use it to measure production quality.** A curated set measures your changes against a fixed reference. What real traffic is doing needs [online scoring on a sample](/docs/evals/online-evals).
+**Do not use it to measure production quality.** A curated set measures your changes against a fixed reference. What real traffic is doing needs [online scoring on a sample](/book/evals/online-evals).
 
 <Aside type="caution" title="The set is a versioned artifact, and it must be diffable">
 The most common failure of a golden set is not that it is too small. It is that someone changes a fixture's expected outcome to make a failing build pass, and the record of what the system used to guarantee disappears in the same commit that broke it.
 
 So the set lives in version control with the code, changes go through review, and *changing an expectation* is a distinct, visible act that requires a reason. A build turning green because the assertion moved is not a build turning green.
 
-The same discipline that makes [prompts and bundles versioned artifacts](/docs/production/versioning) applies here, and for the same reason: without it, "we tested this" is a claim about a moment nobody can reconstruct.
+The same discipline that makes [prompts and bundles versioned artifacts](/book/production/versioning) applies here, and for the same reason: without it, "we tested this" is a claim about a moment nobody can reconstruct.
 </Aside>
 
 ## Related
 
-- [CI for Agents](/docs/evals/ci-for-agents): set sizing, flake budgets, and what a gate actually needs
-- [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion): asserting on the path, not only the outcome
-- [Judge With Rubric](/docs/patterns/evaluation/judge-with-rubric): scoring the cases whose expected outcome is not mechanical
-- [Replay-Driven Debugging](/docs/observability/replay-debugging): how a production failure becomes a fixture
-- [Canary Eval](/docs/patterns/evaluation/canary-eval): the sample size CI cannot afford
+- [CI for Agents](/book/evals/ci-for-agents): set sizing, flake budgets, and what a gate actually needs
+- [Trajectory Assertion](/book/patterns/evaluation/trajectory-assertion): asserting on the path, not only the outcome
+- [Judge With Rubric](/book/patterns/evaluation/judge-with-rubric): scoring the cases whose expected outcome is not mechanical
+- [Replay-Driven Debugging](/book/observability/replay-debugging): how a production failure becomes a fixture
+- [Canary Eval](/book/patterns/evaluation/canary-eval): the sample size CI cannot afford

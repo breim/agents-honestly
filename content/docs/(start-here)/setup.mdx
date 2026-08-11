@@ -12,10 +12,10 @@ That list is short on purpose, and what is missing from it is an argument rather
 
 | | First needed in | Why it exists |
 | --- | --- | --- |
-| An Anthropic API key | [Part I](/docs/foundations/what-is-an-agent) | Everything else is downstream of one `messages.create` call |
-| The repo | [Part II](/docs/first-agent/the-problem) | Atlas accumulates across twenty parts; it needs somewhere to live |
-| Postgres with pgvector | [Part IV](/docs/retrieval/where-does-the-answer-live) | The warehouse and the policy corpus are the same database |
-| A local Temporal server | [Part X](/docs/durable-execution/why-durable-execution) | You cannot demonstrate crash survival against a process you never crash |
+| An Anthropic API key | [Part I](/book/foundations/what-is-an-agent) | Everything else is downstream of one `messages.create` call |
+| The repo | [Part II](/book/first-agent/the-problem) | Atlas accumulates across twenty parts; it needs somewhere to live |
+| Postgres with pgvector | [Part IV](/book/retrieval/where-does-the-answer-live) | The warehouse and the policy corpus are the same database |
+| A local Temporal server | [Part X](/book/durable-execution/why-durable-execution) | You cannot demonstrate crash survival against a process you never crash |
 
 Do all four now anyway. It is about twenty minutes, and the alternative is four interruptions spread across a book you were trying to read.
 
@@ -24,19 +24,19 @@ Do all four now anyway. It is about twenty minutes, and the alternative is four 
 | | Minimum | Where the floor comes from |
 | --- | --- | --- |
 | Node | 20 | LangGraph.js requires it, and so does its TypeScript 5.4 floor |
-| Python | 3.11 | Three things want it, and one is [the book's own code](/docs/how-to-read); nothing needs newer |
+| Python | 3.11 | Three things want it, and one is [the book's own code](/book/how-to-read); nothing needs newer |
 | Docker | any current | Only used to run Postgres |
 | Temporal CLI | any current | Ships the server and the Web UI in one binary |
 
 Nothing here needs a specific patch version, and pinning one in a book is how you get a chapter that stops working in eight months.
 
-The Python row is worth one more sentence, because the three reasons fail differently. The LangGraph CLI refuses to run; [the plan schema](/docs/patterns/control/plan-then-execute) is a syntax error on sight; and [the Temporal LangGraph plugin](/docs/durability/langgraph-on-temporal) loads anyway and emits a warning, then quietly does not honour `interrupt()`. Only the last one lets you get most of the way through the book before finding out.
+The Python row is worth one more sentence, because the three reasons fail differently. The LangGraph CLI refuses to run; [the plan schema](/book/patterns/control/plan-then-execute) is a syntax error on sight; and [the Temporal LangGraph plugin](/book/durability/langgraph-on-temporal) loads anyway and emits a warning, then quietly does not honour `interrupt()`. Only the last one lets you get most of the way through the book before finding out.
 
 ## 1. A model key
 
 Create one at [platform.claude.com](https://platform.claude.com/). `console.anthropic.com` redirects there. **API Keys → Create Key.** The full value starts with `sk-ant-`, and the console shows it exactly once, so paste it somewhere before closing the dialog.
 
-Billing is prepaid credits; there is no free tier. Set a spend cap while you are in there. The API bills per token, and an agent is a loop around a billable function. That combination rewards a ceiling. Running all of Part II end to end against the twenty-ticket sample costs a couple of dollars. The figure is illustrative; [Tokens](/docs/foundations/tokens) shows how to do the arithmetic yourself rather than trusting a number in a book.
+Billing is prepaid credits; there is no free tier. Set a spend cap while you are in there. The API bills per token, and an agent is a loop around a billable function. That combination rewards a ceiling. Running all of Part II end to end against the twenty-ticket sample costs a couple of dollars. The figure is illustrative; [Tokens](/book/foundations/tokens) shows how to do the arithmetic yourself rather than trusting a number in a book.
 
 Then export it and install the SDK:
 
@@ -101,7 +101,7 @@ print(response.usage)
 </Tab>
 </Tabs>
 
-Print `usage` even here, on a call that does nothing. It is one extra line, and a number sitting in that field the whole time answers every cost question in the book: [context growth](/docs/foundations/context-window), [caching](/docs/foundations/prompt-caching), [cost accounting](/docs/observability/cost-accounting). The habit is cheaper to form now than to retrofit in Part XV.
+Print `usage` even here, on a call that does nothing. It is one extra line, and a number sitting in that field the whole time answers every cost question in the book: [context growth](/book/foundations/context-window), [caching](/book/foundations/prompt-caching), [cost accounting](/book/observability/cost-accounting). The habit is cheaper to form now than to retrofit in Part XV.
 
 <Aside type="caution" title="The key is a payment instrument">
 It is organization-scoped and it bills whoever holds it. Keep it in a gitignored `.env`, never in `.env.example`, and never in a code sample you paste anywhere. A leaked key is not a security incident in the abstract. It is an invoice.
@@ -145,10 +145,10 @@ SELECT '[1,2,3]'::vector <=> '[1,2,4]'::vector AS cosine_distance;
 
 If that returns a number, Part IV will work. If it errors on the `<=>` operator, the extension is not installed in *this* database.
 
-**One database, two jobs.** Meridian's forty-million-row warehouse and its twelve hundred policy documents both live here. That is a position rather than a convenience. The [chapter on where the answer lives](/docs/retrieval/where-does-the-answer-live) argues that splitting structured facts into a warehouse and unstructured text into a separate vector service is the most common and most expensive early architecture mistake. Running one Postgres from the start is what makes the alternative easy to try.
+**One database, two jobs.** Meridian's forty-million-row warehouse and its twelve hundred policy documents both live here. That is a position rather than a convenience. The [chapter on where the answer lives](/book/retrieval/where-does-the-answer-live) argues that splitting structured facts into a warehouse and unstructured text into a separate vector service is the most common and most expensive early architecture mistake. Running one Postgres from the start is what makes the alternative easy to try.
 
 <Aside type="note" title="Your corpus survives `down`, not `down -v`">
-The volume is named, so `docker compose down` stops the container and keeps the data. `docker compose down -v` deletes the volume, which means re-embedding the corpus. The chapter that makes that expensive is [Chunking](/docs/retrieval/chunking).
+The volume is named, so `docker compose down` stops the container and keeps the data. `docker compose down -v` deletes the volume, which means re-embedding the corpus. The chapter that makes that expensive is [Chunking](/book/retrieval/chunking).
 </Aside>
 
 ## 3. A Temporal server you can crash
@@ -172,12 +172,12 @@ gRPC on `localhost:7233`, Web UI on [localhost:8233](http://localhost:8233/), an
 **The `--db-filename` flag is not optional for this book.** Without it, `start-dev` uses an in-memory database and every workflow history evaporates when you press Ctrl-C. That is fine for a tutorial and useless here, because Part X's entire claim is that a workflow outlives the process running it. Killing the worker is the experiment; killing the history along with it is cheating.
 
 <Aside type="caution" title="This is a dev server, and it says so">
-`start-dev` is one process backed by SQLite. Production Temporal is a cluster with a real database, separate frontend, history, and matching services, and its own failure modes. See [Scale and QoS](/docs/durability/scale-and-qos). Nothing in this chapter is a deployment recommendation.
+`start-dev` is one process backed by SQLite. Production Temporal is a cluster with a real database, separate frontend, history, and matching services, and its own failure modes. See [Scale and QoS](/book/durability/scale-and-qos). Nothing in this chapter is a deployment recommendation.
 </Aside>
 
 ## 4. The repo, and why it is two of everything
 
-The source repository includes a runnable companion at `labs/atlas/`. It is a small, provider-free kernel with shared TypeScript and Python fixtures, not a second copy of every listing below. Start there when you want executable checks immediately; grow the full project shape below as the chapters introduce each boundary. [The lab environment chapter](/docs/capstone/lab-environment) explains the contract between the companion and the production architecture.
+The source repository includes a runnable companion at `labs/atlas/`. It is a small, provider-free kernel with shared TypeScript and Python fixtures, not a second copy of every listing below. Start there when you want executable checks immediately; grow the full project shape below as the chapters introduce each boundary. [The lab environment chapter](/book/capstone/lab-environment) explains the contract between the companion and the production architecture.
 
 ```
 atlas/
@@ -255,12 +255,12 @@ The pinned versions are illustrative; install current ones. Three packages and a
 
 | | Arrives in | Because |
 | --- | --- | --- |
-| `@langchain/langgraph` · `langgraph` | [Part VII](/docs/langgraph/state-nodes-edges) | Part II writes the loop by hand first, so that adopting a framework is a decision with a stated price |
-| `@temporalio/*` · `temporalio` | [Part X](/docs/durable-execution/temporal-in-forty-minutes) | Durability is a property you should first feel the absence of |
-| `ai` · `@ai-sdk/anthropic` · `@ai-sdk/react` | [Part XIII](/docs/interface/ai-sdk) | There is no interface until there is something worth streaming |
-| OpenTelemetry · `@opentelemetry/*` | [Part XV](/docs/observability/otel-genai) | Instrumenting a system you cannot yet describe produces spans nobody reads |
+| `@langchain/langgraph` · `langgraph` | [Part VII](/book/langgraph/state-nodes-edges) | Part II writes the loop by hand first, so that adopting a framework is a decision with a stated price |
+| `@temporalio/*` · `temporalio` | [Part X](/book/durable-execution/temporal-in-forty-minutes) | Durability is a property you should first feel the absence of |
+| `ai` · `@ai-sdk/anthropic` · `@ai-sdk/react` | [Part XIII](/book/interface/ai-sdk) | There is no interface until there is something worth streaming |
+| OpenTelemetry · `@opentelemetry/*` | [Part XV](/book/observability/otel-genai) | Instrumenting a system you cannot yet describe produces spans nobody reads |
 
-This ordering is the book's argument expressed as a dependency file. If LangGraph were installed here, you would reasonably conclude it is required. It is not. It is a trade, and [What a Framework Buys You](/docs/first-agent/what-a-framework-buys) is where you get to make it with the hand-written version in front of you for comparison.
+This ordering is the book's argument expressed as a dependency file. If LangGraph were installed here, you would reasonably conclude it is required. It is not. It is a trade, and [What a Framework Buys You](/book/first-agent/what-a-framework-buys) is where you get to make it with the hand-written version in front of you for comparison.
 
 ## One command that checks all four
 
@@ -290,7 +290,7 @@ exit $fail
 Four checks, and each one tests the thing rather than a proxy for it: the key is exported, the *extension* is registered in *this* database, and the Temporal frontend answers a health RPC. A container that is `Up` and a database that can do vector math are different claims, and setup chapters that check the first one are why people lose an afternoon in Part IV.
 
 <Aside type="tip" title="Reading rather than building?">
-Every sample in this book is complete on the page. The companion lab exists so you can run the failure cases without reconstructing the surrounding harness, not to hide missing code. You can read the whole thing without running any of it. The two places where a running system genuinely changes what you learn are [Part X](/docs/durable-execution/why-durable-execution), where the lesson is what a process dying does to an in-flight agent, and [Part XIV](/docs/evals/eval-discipline), where the lesson is a number you have to produce yourself.
+Every sample in this book is complete on the page. The companion lab exists so you can run the failure cases without reconstructing the surrounding harness, not to hide missing code. You can read the whole thing without running any of it. The two places where a running system genuinely changes what you learn are [Part X](/book/durable-execution/why-durable-execution), where the lesson is what a process dying does to an in-flight agent, and [Part XIV](/book/evals/eval-discipline), where the lesson is a number you have to produce yourself.
 </Aside>
 
 ## References
@@ -300,7 +300,7 @@ Every sample in this book is complete on the page. The companion lab exists so y
 
 ---
 
-Next: Part I, [What an Agent Actually Is](/docs/foundations/what-is-an-agent), which spends its whole length on the one call you just made.
+Next: Part I, [What an Agent Actually Is](/book/foundations/what-is-an-agent), which spends its whole length on the one call you just made.
 
 ## Takeaways
 

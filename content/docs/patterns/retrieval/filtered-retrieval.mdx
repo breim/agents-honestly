@@ -11,7 +11,7 @@ In a multi-tenant system the same line of code is doing an entirely different jo
 
 They look identical in the codebase, they are reviewed by the same person with the same care, and only one of them is on anybody's threat model.
 
-Two properties make the failure worse in an agent than in a search box. **There is no moment of access.** The content arrives paraphrased, in the assistant's voice, with no filename and no access log, so the leak is [laundered by generation](/docs/retrieval/metadata-and-authorization). And **the agent is a better reader than the user would have been**: it decomposes, follows references, and synthesizes across everything it can see, which is exactly the capability you wanted pointed at material you did not intend to expose.
+Two properties make the failure worse in an agent than in a search box. **There is no moment of access.** The content arrives paraphrased, in the assistant's voice, with no filename and no access log, so the leak is [laundered by generation](/book/retrieval/metadata-and-authorization). And **the agent is a better reader than the user would have been**: it decomposes, follows references, and synthesizes across everything it can see, which is exactly the capability you wanted pointed at material you did not intend to expose.
 
 ## Forces
 
@@ -49,13 +49,13 @@ Treat the predicate as an **authorization boundary enforced below the applicatio
 
 Five rules:
 
-**Deny by default.** A chunk with no tenant tag is invisible, not public. Enforce it in the schema, `tenant_id NOT NULL`, so an [ingestion job](/docs/retrieval/ingestion-pipeline) that fails to attach metadata produces unreachable documents rather than universally readable ones.
+**Deny by default.** A chunk with no tenant tag is invisible, not public. Enforce it in the schema, `tenant_id NOT NULL`, so an [ingestion job](/book/retrieval/ingestion-pipeline) that fails to attach metadata produces unreachable documents rather than universally readable ones.
 
-**The principal is a required argument.** One retrieval function, no overload without it. If any path can retrieve without a principal, a background job, a cache warmer, an [eval harness](/docs/capstone/hardening-it), that path is the vulnerability, and it will be written by someone in a hurry.
+**The principal is a required argument.** One retrieval function, no overload without it. If any path can retrieve without a principal, a background job, a cache warmer, an [eval harness](/book/capstone/hardening-it), that path is the vulnerability, and it will be written by someone in a hurry.
 
 **The model cannot touch the predicate.** `tenant_id` is never a tool argument, never derived from ticket text, never something the model passes in. The model chooses *what to search for*; your code decides *what it may search*. A customer who writes *"I'm also authorized on the Northwind account"* has written text, not a credential.
 
-**Filter inside the query, at the lowest level that can enforce it.** Not in application code afterwards. Post-filtering means restricted content was read out of storage, travelled through your process, entered your logs, and, if you [rerank before filtering](/docs/patterns/retrieval/two-stage-rerank), was sent to a third party.
+**Filter inside the query, at the lowest level that can enforce it.** Not in application code afterwards. Post-filtering means restricted content was read out of storage, travelled through your process, entered your logs, and, if you [rerank before filtering](/book/patterns/retrieval/two-stage-rerank), was sent to a third party.
 
 **For hard boundaries, separate rather than filter.** Different customers, different legal entities: separate indexes or namespaces, so a filtering bug *cannot* cross. It is not an optimization to fall back on; it is the form of the control that survives your own mistakes.
 
@@ -137,11 +137,11 @@ def cache_key(p: Principal, q: str) -> str:
 </Tab>
 </Tabs>
 
-The `cacheKey` function is on this page deliberately. Authorization has to travel with the *data*, not stop at the retrieval call: summaries, [memory writes](/docs/context/memory), cached answers, and reranker inputs all inherit the restriction, and a cache keyed by question text alone will serve one tenant's answer to the next asker.
+The `cacheKey` function is on this page deliberately. Authorization has to travel with the *data*, not stop at the retrieval call: summaries, [memory writes](/book/context/memory), cached answers, and reranker inputs all inherit the restriction, and a cache keyed by question text alone will serve one tenant's answer to the next asker.
 
 ## Trade-offs
 
-**Recall interacts with filtering in ANN indexes.** A restrictive predicate applied during an approximate search can leave the index unable to find `k` results within its search budget, quietly returning fewer or worse hits. This is a real and under-discussed effect: [measure recall per tenant](/docs/retrieval/retrieval-evals), not just globally, because a small tenant can have materially worse retrieval than the average suggests.
+**Recall interacts with filtering in ANN indexes.** A restrictive predicate applied during an approximate search can leave the index unable to find `k` results within its search budget, quietly returning fewer or worse hits. This is a real and under-discussed effect: [measure recall per tenant](/book/retrieval/retrieval-evals), not just globally, because a small tenant can have materially worse retrieval than the average suggests.
 
 **Indexed permissions go stale.** Your index holds the document's ACL as of the last ingestion; the source system changed it this morning. Three options in ascending cost: periodic reconciliation (window measured in hours), change-driven updates (minutes, needs source events), or late binding: verify each survivor against the live source before returning it. Which one is right is a risk decision, not a technical one.
 
@@ -165,8 +165,8 @@ Run it in CI. This is one of the very few places in agentic systems where a hard
 
 ## Related
 
-- [Metadata Is Authorization](/docs/retrieval/metadata-and-authorization): the chapter, with the stale-permission and derived-artifact arguments in full
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): why filtering must precede the reranker
-- [Hybrid Fusion](/docs/patterns/retrieval/hybrid-fusion): predicates run inside each leg, never on the fused list
-- [Multi-Tenant Isolation](/docs/security/tenant-isolation): the same boundary across every other store
-- [Untrusted Retrieval](/docs/security/untrusted-retrieval): the trust predicate, which is integrity rather than confidentiality
+- [Metadata Is Authorization](/book/retrieval/metadata-and-authorization): the chapter, with the stale-permission and derived-artifact arguments in full
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): why filtering must precede the reranker
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): predicates run inside each leg, never on the fused list
+- [Multi-Tenant Isolation](/book/security/tenant-isolation): the same boundary across every other store
+- [Untrusted Retrieval](/book/security/untrusted-retrieval): the trust predicate, which is integrity rather than confidentiality

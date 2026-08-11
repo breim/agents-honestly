@@ -9,7 +9,7 @@ At 02:04 the on-call for the support platform gets paged. Interactive runs are t
 
 The quota was never the problem. **Nothing decided who gets it.**
 
-That is what this chapter is about, and it is the last of the three reliability mechanics: [retries](/docs/reliability/timeouts-and-retries) control how you re-attempt, [breakers](/docs/reliability/fallbacks-and-breakers) control when you stop attempting, and admission control decides what gets attempted at all.
+That is what this chapter is about, and it is the last of the three reliability mechanics: [retries](/book/reliability/timeouts-and-retries) control how you re-attempt, [breakers](/book/reliability/fallbacks-and-breakers) control when you stop attempting, and admission control decides what gets attempted at all.
 
 ## Your limit is not requests
 
@@ -24,7 +24,7 @@ Providers meter on several axes at once, and typically as a **token bucket**. Ca
 | **Output TPM** | Output tokens per minute, on its own smaller budget |
 | Concurrency | Simultaneous in-flight requests, on some tiers |
 
-Now recall the shape of agent traffic from [the cost chapter](/docs/production/cost-engineering): the whole transcript is re-sent every turn, so a run's input tokens grow roughly with the square of its turn count while its request count grows linearly.
+Now recall the shape of agent traffic from [the cost chapter](/book/production/cost-engineering): the whole transcript is re-sent every turn, so a run's input tokens grow roughly with the square of its turn count while its request count grows linearly.
 
 > **Agents exhaust input-token quota long before they exhaust request quota. Rate limiting by requests per second measures the axis you are not running out of.**
 
@@ -78,7 +78,7 @@ Rejection at the door is also the *honest* signal. A caller told "not now, retry
 
 ## Shed load client-side, before the provider does it for you
 
-A `429` is the provider deciding for you, and it is the worst place to find out: you have already paid the round trip, the retry machinery engages, and, as [the retry chapter](/docs/reliability/timeouts-and-retries) covered, that is exactly when amplification starts.
+A `429` is the provider deciding for you, and it is the worst place to find out: you have already paid the round trip, the retry machinery engages, and, as [the retry chapter](/book/reliability/timeouts-and-retries) covered, that is exactly when amplification starts.
 
 Run your own limiter sized **below** the provider's, so you shed load deliberately and never see a `429` in normal operation. Then a `429` becomes what it should be: a signal that your model of your own quota is wrong, which is worth alerting on.
 
@@ -161,14 +161,14 @@ def admit(run, used, quota, tenant_cap) -> tuple[bool, int]:
 
 Two allocations do the work, and both are policy rather than mechanism.
 
-**Priority shares** give interactive traffic a floor that batch work cannot cross. The 2am incident does not happen when the eval job is capped at 10% of input TPM, and, critically, the eval job still finishes, just later, which is exactly right for a workload with no deadline. Put the batch work on a [batch endpoint](/docs/patterns/cost/batch-api-offload) where it is cheaper and metered separately, and the problem mostly disappears.
+**Priority shares** give interactive traffic a floor that batch work cannot cross. The 2am incident does not happen when the eval job is capped at 10% of input TPM, and, critically, the eval job still finishes, just later, which is exactly right for a workload with no deadline. Put the batch work on a [batch endpoint](/book/patterns/cost/batch-api-offload) where it is cheaper and metered separately, and the problem mostly disappears.
 
-**Per-tenant caps** stop one customer's burst from consuming a shared quota. In a multi-tenant deployment this is [fairness](/docs/patterns/scale/tenant-fairness), and it is the same argument as the [isolation chapter's](/docs/security/tenant-isolation): a shared resource with no per-tenant bound is a cross-tenant failure waiting for traffic.
+**Per-tenant caps** stop one customer's burst from consuming a shared quota. In a multi-tenant deployment this is [fairness](/book/patterns/scale/tenant-fairness), and it is the same argument as the [isolation chapter's](/book/security/tenant-isolation): a shared resource with no per-tenant bound is a cross-tenant failure waiting for traffic.
 
 <Aside type="caution" title="Retries are load, and they are not in your admission control">
 The subtle interaction: your limiter meters *new* work, while retries are generated inside runs that were already admitted. Under degradation, retry traffic rises exactly when there is least room for it, and it bypasses the door.
 
-Which is why [the retry budget](/docs/reliability/timeouts-and-retries) and admission control are one system, not two. Count retries against the same quota, and when the retry budget is exhausted, fail through. The [breaker](/docs/reliability/fallbacks-and-breakers) is a better answer than a queue at that point.
+Which is why [the retry budget](/book/reliability/timeouts-and-retries) and admission control are one system, not two. Count retries against the same quota, and when the retry budget is exhausted, fail through. The [breaker](/book/reliability/fallbacks-and-breakers) is a better answer than a queue at that point.
 </Aside>
 
 ## Propagate the pressure
@@ -177,11 +177,11 @@ Backpressure that stops at your gateway is not backpressure; it is a queue with 
 
 **Upstream, tell the truth.** Return a real `429`-equivalent with a `Retry-After` to your own callers. A caller who knows can defer; a caller who is stalled cannot.
 
-**Downstream, remember tools are rate limited too.** Your database, your search index, and the third-party APIs behind your tools all have limits, and an agent that fans out over two hundred documents can flatten a service that was fine with human traffic. [Downstream rate limiting](/docs/patterns/scale/downstream-rate-limiting) belongs in the same dispatcher as everything else from [Part XVII](/docs/security/least-privilege).
+**Downstream, remember tools are rate limited too.** Your database, your search index, and the third-party APIs behind your tools all have limits, and an agent that fans out over two hundred documents can flatten a service that was fine with human traffic. [Downstream rate limiting](/book/patterns/scale/downstream-rate-limiting) belongs in the same dispatcher as everything else from [Part XVII](/book/security/least-privilege).
 
-**Bound the fan-out itself.** A [map-reduce over documents](/docs/patterns/scale/mapreduce-tree) with unbounded parallelism is a self-inflicted burst. Cap it, and cap it against the token budget rather than a thread count.
+**Bound the fan-out itself.** A [map-reduce over documents](/book/patterns/scale/mapreduce-tree) with unbounded parallelism is a self-inflicted burst. Cap it, and cap it against the token budget rather than a thread count.
 
-**Shed by value, not by arrival order.** When you must drop work, drop the cheapest to lose: a speculative pre-fetch before a user's live question, a nightly backfill before an SLA-bound ticket. This requires knowing what a run is worth, which is the same per-run value the [cost cap](/docs/production/cost-engineering) was derived from.
+**Shed by value, not by arrival order.** When you must drop work, drop the cheapest to lose: a speculative pre-fetch before a user's live question, a nightly backfill before an SLA-bound ticket. This requires knowing what a run is worth, which is the same per-run value the [cost cap](/book/production/cost-engineering) was derived from.
 
 ## What to watch
 
@@ -217,7 +217,7 @@ That is the whole chapter. Capacity problems in agentic systems are almost never
 
 ---
 
-Next: [Failure Injection](/docs/reliability/failure-injection), kill the worker mid-run, fail the third tool call, do it on purpose before production does it for you.
+Next: [Failure Injection](/book/reliability/failure-injection), kill the worker mid-run, fail the third tool call, do it on purpose before production does it for you.
 
 ## Takeaways
 

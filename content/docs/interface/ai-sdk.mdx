@@ -6,7 +6,7 @@ description: "Generation, streaming, tools, structured output, and where it over
 Everything so far has been backend. Part XIII is about what a person sees while an eight-minute durable run happens somewhere behind them, and it starts with the library that owns that boundary in TypeScript.
 
 <Aside type="note" title="TypeScript only, and that is the reason it is here">
-There is no Python equivalent, which [How to Read This Book](/docs/how-to-read) named as the reason most production systems end up split along exactly this line: TypeScript for the user-facing side, Python for retrieval, ingestion, and evaluation.
+There is no Python equivalent, which [How to Read This Book](/book/how-to-read) named as the reason most production systems end up split along exactly this line: TypeScript for the user-facing side, Python for retrieval, ingestion, and evaluation.
 
 So this chapter has no dual-track sample. The gap is the point rather than an omission.
 </Aside>
@@ -32,7 +32,7 @@ The detail that should make this book's readers sit up:
 
 The SDK makes you supply one, `stopWhen: stepCountIs(n)`, and the guidance that ships with it maps almost exactly onto the versions of Atlas from Part II: **1** for a one-tool-then-answer interface, **5** for a chat, **10–20** for an autonomous agent.
 
-[Atlas v1 was `stepCountIs(1)`](/docs/first-agent/first-tools). [Atlas v2 was `stepCountIs(12)`](/docs/first-agent/the-loop-by-hand). The argument that a loop whose only stopping condition is the model's judgement has delegated its termination to a probability distribution is now a parameter you cannot omit. That is a good outcome for an ecosystem to have converged on.
+[Atlas v1 was `stepCountIs(1)`](/book/first-agent/first-tools). [Atlas v2 was `stepCountIs(12)`](/book/first-agent/the-loop-by-hand). The argument that a loop whose only stopping condition is the model's judgement has delegated its termination to a probability distribution is now a parameter you cannot omit. That is a good outcome for an ecosystem to have converged on.
 
 Be precise about what it does *not* cover, though. There are two first-party stop conditions, `stepCountIs` and `hasToolCall`, and Atlas v0 had three bounds. **Cost and deadline are still yours.** A step cap does not stop a run whose steps are individually expensive, and it does not notice that ninety seconds have passed.
 
@@ -53,7 +53,7 @@ Be precise about what it does *not* cover, though. There are two first-party sto
 
 The SDK now ships `ToolLoopAgent`. It is a production tool-execution loop that calls the model, runs the requested tools, feeds results back, and repeats, defaulting to twenty steps.
 
-That is an agent loop. LangGraph is an agent loop. [A Temporal workflow](/docs/durability/agent-as-workflow) is an agent loop. If you adopted the AI SDK for streaming and LangGraph for topology, you now have two, and possibly three, and only one of them can be in charge.
+That is an agent loop. LangGraph is an agent loop. [A Temporal workflow](/book/durability/agent-as-workflow) is an agent loop. If you adopted the AI SDK for streaming and LangGraph for topology, you now have two, and possibly three, and only one of them can be in charge.
 
 The centres of gravity are genuinely different, and that is what makes the decision tractable:
 
@@ -69,7 +69,7 @@ The overlap is the loop, and the resolution follows from everything in Parts X a
 
 For a system with a durable backend, that means **neither** framework's loop. The workflow owns iteration; the AI SDK owns the wire and the interface; LangGraph, if present, owns topology inside an activity. Running `ToolLoopAgent` in a route handler in front of a Temporal workflow gives you two loops with different bounds, different retry semantics, and two answers to "how many steps did this take."
 
-[LangChain, Honestly](/docs/langgraph/langchain-honestly) made the general version of this argument. The specific version here is that **the AI SDK grew a loop for the same reason LangGraph did, because everyone needs one. And the fact that you can use a library's loop is not a reason to.**
+[LangChain, Honestly](/book/langgraph/langchain-honestly) made the general version of this argument. The specific version here is that **the AI SDK grew a loop for the same reason LangGraph did, because everyone needs one. And the fact that you can use a library's loop is not a reason to.**
 
 ## What it is uniquely good at
 
@@ -98,19 +98,19 @@ Budget for that rather than being surprised by it. This is also a reason to keep
 Meridian's support console uses the AI SDK for exactly three things:
 
 - **`useChat` and the transport**, so an agent watching a ticket sees streamed output that survives a page refresh.
-- **Rendering streamed parts**: text, tool calls, and the [approval card](/docs/human-in-the-loop/approval-gates). That is [the next chapter and the one after](/docs/interface/generative-ui-and-approvals).
+- **Rendering streamed parts**: text, tool calls, and the [approval card](/book/human-in-the-loop/approval-gates). That is [the next chapter and the one after](/book/interface/generative-ui-and-approvals).
 - **A provider factory**, so the model behind the console is configuration.
 
 And not for:
 
-- **The loop.** That is the Temporal workflow, which owns steps, cost, deadline, retries, and the [outcome union](/docs/first-agent/the-loop-by-hand).
-- **Tool execution.** The SDK can execute tools; Atlas's tools are activities, because [they have compensations and idempotency keys](/docs/durability/compensation) that a route handler cannot provide.
+- **The loop.** That is the Temporal workflow, which owns steps, cost, deadline, retries, and the [outcome union](/book/first-agent/the-loop-by-hand).
+- **Tool execution.** The SDK can execute tools; Atlas's tools are activities, because [they have compensations and idempotency keys](/book/durability/compensation) that a route handler cannot provide.
 
 The boundary is a sentence: **the AI SDK carries bytes to the browser; the workflow decides what happens.** Where that line blurs, the symptom is consistent: two step counters that disagree, and nobody able to say which run actually happened.
 
 ---
 
-Next: [Streaming UX](/docs/interface/streaming-ux), token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
+Next: [Streaming UX](/book/interface/streaming-ux), token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
 
 ## Takeaways
 

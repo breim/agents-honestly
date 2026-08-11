@@ -26,7 +26,7 @@ Every one of these is a check-then-act race, and no amount of retry logic in the
 - **The workflow's existence is not knowable in advance** without a race.
 - **A dropped customer message is a visible product failure**, not a degraded one.
 - **The event may need to be handled before the agent has initialized** anything.
-- **Duplicate delivery is normal.** Webhooks are [at-least-once](/docs/reliability/idempotency-in-practice).
+- **Duplicate delivery is normal.** Webhooks are [at-least-once](/book/reliability/idempotency-in-practice).
 
 ## Solution
 
@@ -160,7 +160,7 @@ class TicketAgent:
 </Tab>
 </Tabs>
 
-The `_seen` set is not optional. Webhook providers retry on any non-2xx and occasionally on success, so the same reply arrives more than once. Unlike a [tool call](/docs/reliability/idempotency-in-practice), a duplicated inbound message does not fail loudly. It makes the agent answer the same question twice.
+The `_seen` set is not optional. Webhook providers retry on any non-2xx and occasionally on success, so the same reply arrives more than once. Unlike a [tool call](/book/reliability/idempotency-in-practice), a duplicated inbound message does not fail loudly. It makes the agent answer the same question twice.
 
 ## Trade-offs
 
@@ -170,7 +170,7 @@ The `_seen` set is not optional. Webhook providers retry on any non-2xx and occa
 
 **Signals can be lost if the handler throws.** An exception in the handler fails the workflow task and the signal may be redelivered, but a handler that throws deterministically will loop. Keep handlers trivial: dedupe, append, return.
 
-**The workflow ID becomes a public contract.** Anything that can construct `ticket-9104` can signal it, so signal payloads are [untrusted input](/docs/security/threat-model) and the sender's authority is checked at the API boundary, not inside the workflow.
+**The workflow ID becomes a public contract.** Anything that can construct `ticket-9104` can signal it, so signal payloads are [untrusted input](/book/security/threat-model) and the sender's authority is checked at the API boundary, not inside the workflow.
 
 ## When not to use it
 
@@ -178,7 +178,7 @@ The `_seen` set is not optional. Webhook providers retry on any non-2xx and occa
 
 **When the event should never create work.** A status webhook that is purely informational should not spawn an agent run for a ticket nobody is working on. Route it to a table, and let the next real trigger read it.
 
-**When you need a response.** Signals are fire-and-forget. If the caller has to know what the agent decided, that is [an update](/docs/patterns/durability/update-request-response), which is a different operation and now generally available.
+**When you need a response.** Signals are fire-and-forget. If the caller has to know what the agent decided, that is [an update](/book/patterns/durability/update-request-response), which is a different operation and now generally available.
 
 **When ordering across senders is load-bearing.** If two sources emit events whose relative order changes the outcome, put a sequencer in front rather than hoping for delivery order.
 
@@ -187,13 +187,13 @@ On a cold start, the sequence is: workflow created, **signal handler invoked**, 
 
 So a handler that reads `this.state.tenant` will find `undefined` on precisely the first message, the one that started the workflow, and work perfectly for every subsequent one. Which means it passes every test written against a running workflow and fails only for brand-new tickets in production.
 
-Initialize anything a handler touches in the constructor or in the handler itself. The same caution applies after a [workflow reset](/docs/durable-execution/signals-and-children), where preserved signals are replayed against a workflow that has not initialized yet.
+Initialize anything a handler touches in the constructor or in the handler itself. The same caution applies after a [workflow reset](/book/durable-execution/signals-and-children), where preserved signals are replayed against a workflow that has not initialized yet.
 </Aside>
 
 ## Related
 
-- [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow): why the entity ID is the workflow ID
-- [Updatable SLA Timer](/docs/patterns/durability/sla-timer): the reply that arrives here is what resets the clock
-- [Request-Response via Update](/docs/patterns/durability/update-request-response): when the caller needs an answer back
-- [Approval Gate](/docs/patterns/durability/approval-gate): the same signal mechanism, waiting on a person instead of a customer
-- [Signals and Children](/docs/durable-execution/signals-and-children): the three ways to talk to a running execution
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): why the entity ID is the workflow ID
+- [Updatable SLA Timer](/book/patterns/durability/sla-timer): the reply that arrives here is what resets the clock
+- [Request-Response via Update](/book/patterns/durability/update-request-response): when the caller needs an answer back
+- [Approval Gate](/book/patterns/durability/approval-gate): the same signal mechanism, waiting on a person instead of a customer
+- [Signals and Children](/book/durable-execution/signals-and-children): the three ways to talk to a running execution

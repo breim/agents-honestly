@@ -7,7 +7,7 @@ The literature offers a dozen multi-agent topologies. Two survive contact with p
 
 **Supervisor**: one agent owns the task, delegates units of work, and synthesizes. **Handoff**: control transfers from one agent to another, and the receiver owns what happens next.
 
-Everything else, debate, blackboard, hierarchical committees, agent societies, is a variation that adds boundaries, and [the previous chapter](/docs/multi-agent/the-coordination-tax) priced what each boundary costs.
+Everything else, debate, blackboard, hierarchical committees, agent societies, is a variation that adds boundaries, and [the previous chapter](/book/multi-agent/the-coordination-tax) priced what each boundary costs.
 
 ## The two shapes
 
@@ -53,19 +53,19 @@ This is the section the chapter exists for, because the topologies are easy to d
 
 ### The supervisor's failure is the supervisor
 
-**Its context is the ceiling.** Everything the workers return flows back to one place. If the supervisor must reconcile twenty worker outputs, it needs a context large enough for twenty summaries plus its own plan plus its history. And you have rebuilt the [context budget problem](/docs/context/context-as-budget) one level up, with less control over what fills it. A supervisor that cannot hold the reduction is a supervisor that summarizes the summaries, which is [compaction of compacted material](/docs/context/compaction) and loses accordingly.
+**Its context is the ceiling.** Everything the workers return flows back to one place. If the supervisor must reconcile twenty worker outputs, it needs a context large enough for twenty summaries plus its own plan plus its history. And you have rebuilt the [context budget problem](/book/context/context-as-budget) one level up, with less control over what fills it. A supervisor that cannot hold the reduction is a supervisor that summarizes the summaries, which is [compaction of compacted material](/book/context/compaction) and loses accordingly.
 
-**The plan is fixed early, from the least information.** The supervisor decomposes the task before any worker has reported. That decision is made at the moment of maximum ignorance and is rarely revisited, so a bad decomposition is not recovered. The workers execute it faithfully and return coherent answers to the wrong questions. This is the largest single family in the [failure taxonomy](/docs/multi-agent/when-not-to), and it is a supervisor pathology specifically.
+**The plan is fixed early, from the least information.** The supervisor decomposes the task before any worker has reported. That decision is made at the moment of maximum ignorance and is rarely revisited, so a bad decomposition is not recovered. The workers execute it faithfully and return coherent answers to the wrong questions. This is the largest single family in the [failure taxonomy](/book/multi-agent/when-not-to), and it is a supervisor pathology specifically.
 
 **It is a single point of failure with a bill attached.** The supervisor is on the critical path for every step. Its failure kills the run, and its retries re-spend the whole reduction.
 
-**But**: it fails *legibly*. There is one trace with a spine, one place that decided, and one place to look. Given that agentic failures are usually [silent and plausible](/docs/reliability/error-taxonomy), a topology whose failures have an obvious owner is worth a lot.
+**But**: it fails *legibly*. There is one trace with a spine, one place that decided, and one place to look. Given that agentic failures are usually [silent and plausible](/book/reliability/error-taxonomy), a topology whose failures have an obvious owner is worth a lot.
 
 ### The handoff's failure is that nobody is holding it
 
 **No termination condition.** With no central owner, "we are done" is a judgment each agent makes independently, and the common pathology is the hot potato: billing hands to refunds, refunds decides it is a billing question, and the loop runs until a budget stops it. Missing termination is a *named* failure mode in the empirical taxonomy for exactly this reason.
 
-**Context evaporates at each transfer.** Triage read the ticket. Billing receives triage's summary. Refunds receives billing's summary of triage's summary. Three hops in, the agent making the decision is four compressions away from what the customer actually wrote: [the coordination tax](/docs/multi-agent/the-coordination-tax) charged three times, compounding.
+**Context evaporates at each transfer.** Triage read the ticket. Billing receives triage's summary. Refunds receives billing's summary of triage's summary. Three hops in, the agent making the decision is four compressions away from what the customer actually wrote: [the coordination tax](/book/multi-agent/the-coordination-tax) charged three times, compounding.
 
 **Ambiguous ownership at the seams.** Two agents whose responsibilities overlap will both act or neither will. Both is a duplicate effect; neither is a dropped ticket. Both are invisible in a per-agent view.
 
@@ -79,9 +79,9 @@ Three rules make it hold up:
 
 **Workers get disjoint inputs and never talk to each other.** The moment workers coordinate you have paid for a handoff topology inside a supervisor topology and gained nothing. Disjointness is what keeps the tax at the token multiplier instead of the correctness one.
 
-**Verification reads sources, not conclusions.** Anthropic's system runs a separate citation pass that checks claims against the actual documents. This is the single most valuable structural addition available: a verifier reading worker summaries is [a second vote](/docs/context/context-poisoning), and a verifier reading sources is a check.
+**Verification reads sources, not conclusions.** Anthropic's system runs a separate citation pass that checks claims against the actual documents. This is the single most valuable structural addition available: a verifier reading worker summaries is [a second vote](/book/context/context-poisoning), and a verifier reading sources is a check.
 
-**The supervisor owns the budget and the termination.** One [run budget](/docs/production/cost-engineering) spent down by everyone, one place that decides the work is complete, and a hard cap that produces a partial result rather than an infinite loop.
+**The supervisor owns the budget and the termination.** One [run budget](/book/production/cost-engineering) spent down by everyone, one place that decides the work is complete, and a hard cap that produces a partial result rather than an infinite loop.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -157,25 +157,25 @@ Handoff is right when ownership is genuinely separate: different teams, differen
 
 **References, not summaries.** The transfer carries the ticket ID, the retrieved chunk IDs, and the run ID, so the receiver reads the *source* rather than the sender's compression. This eliminates the compounding-loss failure at its root and is cheaper than the prose it replaces.
 
-**A typed, versioned transfer contract.** [Schema-validated](/docs/foundations/structured-output), with an explicit reason for the transfer and explicit ownership of what the receiver must decide. Prose handoffs are where inter-agent misalignment lives.
+**A typed, versioned transfer contract.** [Schema-validated](/book/foundations/structured-output), with an explicit reason for the transfer and explicit ownership of what the receiver must decide. Prose handoffs are where inter-agent misalignment lives.
 
-**Idempotent transfers.** A handoff is a message, and messages get delivered twice. The receiver dedupes on the transfer ID, the same [effectively-once discipline](/docs/reliability/idempotency-in-practice) as any other effect, because a duplicated handoff is a duplicated action.
+**Idempotent transfers.** A handoff is a message, and messages get delivered twice. The receiver dedupes on the transfer ID, the same [effectively-once discipline](/book/reliability/idempotency-in-practice) as any other effect, because a duplicated handoff is a duplicated action.
 
 <Aside type="caution" title="Tracing has to span the topology, and it does not by default">
 One trace ID across every agent, with the transfer recorded as a span carrying what was passed and why. Both topologies need it and handoff needs it more, because its bugs live in the gaps between agents.
 
-The [eight questions a trace must answer](/docs/observability/what-a-trace-must-answer) get strictly harder here: "where did it go wrong" now has to be answerable across process boundaries owned by different teams. That is another line item in the coordination tax, and it is usually discovered during the first cross-agent incident.
+The [eight questions a trace must answer](/book/observability/what-a-trace-must-answer) get strictly harder here: "where did it go wrong" now has to be answerable across process boundaries owned by different teams. That is another line item in the coordination tax, and it is usually discovered during the first cross-agent incident.
 </Aside>
 
 ## Atlas, concretely
 
-Atlas is a single agent, for [reasons the next chapter makes explicit](/docs/multi-agent/when-not-to). Two places where it would legitimately reach for these shapes:
+Atlas is a single agent, for [reasons the next chapter makes explicit](/book/multi-agent/when-not-to). Two places where it would legitimately reach for these shapes:
 
 | Task | Topology | Why |
 | --- | --- | --- |
 | Quarterly backlog analysis over 4,000 tickets | **Supervisor** | Disjoint items, parallel, batch-priced, reduce in code |
-| Untrusted ticket text vs. tool-holding agent | Neither, formally | A [quarantine boundary](/docs/security/prompt-injection), not a collaboration |
-| Ticket triage → billing → refunds | **Rejected** | Three transfers, three compressions, no owner. It is [a routing edge](/docs/workflows/routing-and-orchestration) |
+| Untrusted ticket text vs. tool-holding agent | Neither, formally | A [quarantine boundary](/book/security/prompt-injection), not a collaboration |
+| Ticket triage → billing → refunds | **Rejected** | Three transfers, three compressions, no owner. It is [a routing edge](/book/workflows/routing-and-orchestration) |
 
 The third row is the one worth dwelling on, because it is the design that gets proposed in every support-automation review. Triage, billing, and refunds are not three agents. They are three branches of one agent's control flow, sharing one context, with no transfer, no summary, and no ambiguity about who owns the ticket. Drawing them as agents costs three boundaries and buys an org chart.
 
@@ -185,7 +185,7 @@ The third row is the one worth dwelling on, because it is the design that gets p
 
 ---
 
-Next: [When Not To](/docs/multi-agent/when-not-to), solve it as a workflow first, and promote to multiple agents only when isolation or ownership demands it.
+Next: [When Not To](/book/multi-agent/when-not-to), solve it as a workflow first, and promote to multiple agents only when isolation or ownership demands it.
 
 ## Takeaways
 

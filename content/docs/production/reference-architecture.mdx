@@ -41,9 +41,9 @@ The good news is that the answer is determined almost entirely by two questions,
 
 *Asynchronous* is the common one: runs take minutes, so they cannot live in a request. You need somewhere to put the work and somewhere to keep the state. A queue and a state table get you here, and this is where most production agents actually belong.
 
-*Transactional* is the cell teams forget, because it looks like Tier 1. The run finishes inside the request and still moves something in the world. It needs no queue and no state table. Nothing outlives the response. What it needs is everything that makes an effect safe to repeat: [idempotency keys](/docs/reliability/idempotency-in-practice), the [dispatcher choke point](/docs/security/least-privilege), and an audit record. A client retrying a timed-out `POST` does not know whether your agent finished, and neither does your agent.
+*Transactional* is the cell teams forget, because it looks like Tier 1. The run finishes inside the request and still moves something in the world. It needs no queue and no state table. Nothing outlives the response. What it needs is everything that makes an effect safe to repeat: [idempotency keys](/book/reliability/idempotency-in-practice), the [dispatcher choke point](/book/security/least-privilege), and an audit record. A client retrying a timed-out `POST` does not know whether your agent finished, and neither does your agent.
 
-**Tier 3: durable.** Runs take hours or days, pause for humans, and move money. Now a crash mid-run has to be survivable without repeating effects, and you want [durable execution](/docs/durable-execution/why-durable-execution) rather than a queue plus hope.
+**Tier 3: durable.** Runs take hours or days, pause for humans, and move money. Now a crash mid-run has to be survivable without repeating effects, and you want [durable execution](/book/durable-execution/why-durable-execution) rather than a queue plus hope.
 
 The honest observation about this diagram: **the vertical axis is the one people get wrong.** Teams size for volume and discover that duration is what broke them. A thousand short runs need a bigger box. Ten runs that each pause for two days need a different architecture.
 
@@ -54,31 +54,31 @@ The honest observation about this diagram: **the vertical axis is the one people
 | **API / ingress** | Always | — |
 | **Model gateway** | You have more than one caller | **Low, and it is worth doing at day one**, see below |
 | **Worker pool** | Runs exceed a request timeout | Low, it's a refactor |
-| **Postgres** | Always. Runs, results, [idempotency](/docs/reliability/idempotency-in-practice), [audit](/docs/human-in-the-loop/escalation-and-audit) | — |
+| **Postgres** | Always. Runs, results, [idempotency](/book/reliability/idempotency-in-practice), [audit](/book/human-in-the-loop/escalation-and-audit) | — |
 | **Object storage** | You handle files or store rendered artifacts | Low |
-| **Vector index** | [Retrieval over unstructured text](/docs/retrieval/where-does-the-answer-live) is genuinely needed | Low, but see the warning below |
+| **Vector index** | [Retrieval over unstructured text](/book/retrieval/where-does-the-answer-live) is genuinely needed | Low, but see the warning below |
 | **Queue** | Tier 2 | Low |
 | **Durable execution** | Tier 3: pauses, effects, long runs | **High**, it changes how nodes are written |
 | **Tracing** | The first time you debug a bad run | **High**, you cannot trace the past |
 | **Eval harness** | Before your second prompt change | **Very high**, you have no baseline |
-| **Policy / dispatcher layer** | The first write tool | **Very high**, [Part XVII](/docs/security/threat-model) all lands here |
+| **Policy / dispatcher layer** | The first write tool | **Very high**, [Part XVII](/book/security/threat-model) all lands here |
 
 The last four rows are the chapter's actual content. Everything above them is a normal web service and can be added on a Tuesday. Those four are expensive later for different reasons, and it is worth being specific about each:
 
 **Tracing is retroactively impossible.** The bug you are chasing happened last week and produced no record. Nothing you deploy today recovers it. This is the single cheapest thing on the list to add early and the most painful to lack.
 
-**Evals are worse.** Not because they are hard to build, but because their value is comparative: the number only means something against yesterday's number. A team that adds evals in month six has an eval suite and no history, which tells them how they are doing and not whether it is getting better. [Datasets](/docs/evals/datasets) start accumulating on day one or they start six months late.
+**Evals are worse.** Not because they are hard to build, but because their value is comparative: the number only means something against yesterday's number. A team that adds evals in month six has an eval suite and no history, which tells them how they are doing and not whether it is getting better. [Datasets](/book/evals/datasets) start accumulating on day one or they start six months late.
 
-**Durable execution changes the code, not the deployment.** Adopting Temporal is not an infrastructure decision you can defer behind an interface. It imposes [determinism constraints on how nodes are written](/docs/durable-execution/determinism-and-retries). Retrofitting it means rewriting the agent, which is why the tier question deserves a real answer up front even if you build Tier 2 first.
+**Durable execution changes the code, not the deployment.** Adopting Temporal is not an infrastructure decision you can defer behind an interface. It imposes [determinism constraints on how nodes are written](/book/durable-execution/determinism-and-retries). Retrofitting it means rewriting the agent, which is why the tier question deserves a real answer up front even if you build Tier 2 first.
 
-**The dispatcher is where the whole security part lands.** [Taint](/docs/security/prompt-injection), [argument scoping](/docs/security/least-privilege), [delegation](/docs/security/identity), [idempotency keys](/docs/tools/idempotency), [risk tiers](/docs/human-in-the-loop/risk-tiers). Every one of those is a check in the path between the model's tool call and the effect. If tool calls dispatch from four different places in your codebase, you have four places to implement all of it, and you will implement it in three.
+**The dispatcher is where the whole security part lands.** [Taint](/book/security/prompt-injection), [argument scoping](/book/security/least-privilege), [delegation](/book/security/identity), [idempotency keys](/book/tools/idempotency), [risk tiers](/book/human-in-the-loop/risk-tiers). Every one of those is a check in the path between the model's tool call and the effect. If tool calls dispatch from four different places in your codebase, you have four places to implement all of it, and you will implement it in three.
 
 > **One choke point for tool execution, from the first write tool. It is the cheapest structural decision in this book and the most expensive to retrofit.**
 
 <Aside type="caution" title="The vector index is the most over-provisioned box on the diagram">
-Adding it is cheap. The expensive part is that it quietly commits you to an [ingestion pipeline](/docs/retrieval/ingestion-pipeline), a chunking strategy, a re-embedding path, [retrieval evals](/docs/retrieval/retrieval-evals), a permissions model, and, as [Part XVII established](/docs/security/untrusted-retrieval), a new attacker-writable surface.
+Adding it is cheap. The expensive part is that it quietly commits you to an [ingestion pipeline](/book/retrieval/ingestion-pipeline), a chunking strategy, a re-embedding path, [retrieval evals](/book/retrieval/retrieval-evals), a permissions model, and, as [Part XVII established](/book/security/untrusted-retrieval), a new attacker-writable surface.
 
-[Where does the answer live](/docs/retrieval/where-does-the-answer-live) is the chapter that decides this, and its answer is frequently "a SQL query." Deploy the index when you have a retrieval problem, not when you have a corpus.
+[Where does the answer live](/book/retrieval/where-does-the-answer-live) is the chapter that decides this, and its answer is frequently "a SQL query." Deploy the index when you have a retrieval problem, not when you have a corpus.
 </Aside>
 
 ## The shape of the thing
@@ -112,9 +112,9 @@ Adding it is cheap. The expensive part is that it quietly commits you to an [ing
 
 Two properties of this drawing matter more than the boxes.
 
-**Every arrow leaving toward the world passes through the dispatcher.** That is not an aesthetic choice; it is the thing that makes the security part implementable and the [trace](/docs/observability/what-a-trace-must-answer) complete.
+**Every arrow leaving toward the world passes through the dispatcher.** That is not an aesthetic choice; it is the thing that makes the security part implementable and the [trace](/book/observability/what-a-trace-must-answer) complete.
 
-**State is a plane, not a box.** The run's state lives in several stores with different durability and retention, and, as [tenancy](/docs/security/tenant-isolation) and [compliance](/docs/security/pii-and-compliance) both showed, forgetting one of them is how the boundary leaks. Draw them together so the list stays visible.
+**State is a plane, not a box.** The run's state lives in several stores with different durability and retention, and, as [tenancy](/book/security/tenant-isolation) and [compliance](/book/security/pii-and-compliance) both showed, forgetting one of them is how the boundary leaks. Draw them together so the list stays visible.
 
 ## The model gateway, because it is the cheapest lever here
 
@@ -122,17 +122,17 @@ One box deserves its own section, because it is small, nearly free, and quietly 
 
 A gateway is a thin internal service every model call goes through. Not a vendor product necessarily. A hundred lines and a config file will do. What it buys:
 
-- **One place for retries, timeouts, and the retry budget**, which is [exactly what the last part asked for](/docs/reliability/timeouts-and-retries), and impossible if six services each call the provider directly.
-- **One place for [fallbacks](/docs/reliability/fallbacks-and-breakers)** to another model or provider.
+- **One place for retries, timeouts, and the retry budget**, which is [exactly what the last part asked for](/book/reliability/timeouts-and-retries), and impossible if six services each call the provider directly.
+- **One place for [fallbacks](/book/reliability/fallbacks-and-breakers)** to another model or provider.
 - **One place cost is attributed**: per run, per tenant, per feature.
-- **One place [model versions are pinned](/docs/production/versioning)**, so "we upgraded the model" is a config change with a rollback rather than a deploy across six repos.
-- **One place [region and retention terms](/docs/security/pii-and-compliance) are enforced.**
+- **One place [model versions are pinned](/book/production/versioning)**, so "we upgraded the model" is a config change with a rollback rather than a deploy across six repos.
+- **One place [region and retention terms](/book/security/pii-and-compliance) are enforced.**
 
 Five chapters' worth of control from one box, added at the start for almost nothing. If you take one thing from this chapter and you are Tier 1, take this.
 
 ## What people build too early, and too late
 
-**Too early:** a multi-agent topology ([the next part](/docs/multi-agent/when-not-to) is about why), a vector database, a fine-tuned model, a custom orchestration framework, and a Kubernetes install for a service handling four requests a minute.
+**Too early:** a multi-agent topology ([the next part](/book/multi-agent/when-not-to) is about why), a vector database, a fine-tuned model, a custom orchestration framework, and a Kubernetes install for a service handling four requests a minute.
 
 **Too late:** tracing, evals, the dispatcher choke point, cost attribution, and a `runs` table with enough columns to reconstruct what happened.
 
@@ -146,22 +146,22 @@ The asymmetry is not a coincidence. The too-early list is **capability**, things
 | --- | --- |
 | Tier | 3: runs pause for approval, `issue_credit` moves money |
 | API | Existing support platform; runs created from ticket events |
-| Orchestrator | LangGraph nodes, [running as Temporal activities](/docs/durability/langgraph-on-temporal) |
+| Orchestrator | LangGraph nodes, [running as Temporal activities](/book/durability/langgraph-on-temporal) |
 | Model gateway | Internal, ~200 lines: retries, budget, pinning, cost attribution |
 | Dispatcher | Single choke point; taint, scope, delegation, idempotency, tiers |
 | Postgres | Runs, idempotency, audit records, ticket state |
-| Vector index | Yes, two namespaces, split by [trust](/docs/security/untrusted-retrieval) |
+| Vector index | Yes, two namespaces, split by [trust](/book/security/untrusted-retrieval) |
 | Object storage | Rendered approval cards, customer attachments |
 | Durable execution | Temporal. The approval pause is the reason |
-| Tracing | OTel from day one, [chunk IDs and tool arguments recorded](/docs/observability/otel-genai) |
-| Evals | [CI suite](/docs/evals/ci-for-agents) plus a growing dataset from production |
+| Tracing | OTel from day one, [chunk IDs and tool arguments recorded](/book/observability/otel-genai) |
+| Evals | [CI suite](/book/evals/ci-for-agents) plus a growing dataset from production |
 | Sandbox | Only for proration math, behind a flag |
 
 Nine of those twelve rows would be absent from a Tier 1 build, and that is the point of the tier question. Atlas needs them because a run pauses for two days and then moves money, not because agents in general need them.
 
 ---
 
-Next: [Versioning Prompts, Models, and Graphs](/docs/production/versioning), treating all three as deployable artifacts with rollback, not as strings in a file.
+Next: [Versioning Prompts, Models, and Graphs](/book/production/versioning), treating all three as deployable artifacts with rollback, not as strings in a file.
 
 ## Takeaways
 

@@ -4,7 +4,7 @@ description: "Sampling, reproducibility you can and cannot buy, and what it does
 ---
 
 
-The [last chapter](/docs/foundations/structured-output) bought you a guarantee about shape. This one takes away the guarantee you actually wanted: that the same input produces the same output.
+The [last chapter](/book/foundations/structured-output) bought you a guarantee about shape. This one takes away the guarantee you actually wanted: that the same input produces the same output.
 
 It does not, it cannot be made to on a hosted API, and the reasons are more interesting, and more actionable, than "it's random."
 
@@ -75,11 +75,11 @@ Before blaming either of the above, check whether the input really was identical
 | "Fails on long conversations" | Different history; compaction fired, or the context grew past where attention holds |
 | "Fails intermittently under load" | A tool timed out and returned an error the model reasoned from |
 
-Every row is a bug you can fix, and none of them is the model being moody. **Diagnose before you blame the dice.** This is what [tracing](/docs/observability/what-a-trace-must-answer) is for, and the single most common outcome of adding it is discovering that your "nondeterministic" agent was deterministically receiving different inputs.
+Every row is a bug you can fix, and none of them is the model being moody. **Diagnose before you blame the dice.** This is what [tracing](/book/observability/what-a-trace-must-answer) is for, and the single most common outcome of adding it is discovering that your "nondeterministic" agent was deterministically receiving different inputs.
 
 ## Why one flipped token becomes a different run
 
-For a single completion, variance is cosmetic: a synonym, a reordered clause. In [the loop](/docs/foundations/what-is-an-agent) it is structural, because the model's output is not the answer. It is the **control flow**.
+For a single completion, variance is cosmetic: a synonym, a reordered clause. In [the loop](/book/foundations/what-is-an-agent) it is structural, because the model's output is not the answer. It is the **control flow**.
 
 A token that changes `get_order` to `search_orders` doesn't change the wording of a reply. It changes which tool ran, which result entered the context, and therefore every decision after it. The two runs are no longer the same run with different prose; they are different programs.
 
@@ -97,7 +97,7 @@ A token that changes `get_order` to `search_orders` doesn't change the wording o
 
 Both may be correct. They cost different amounts, take different numbers of steps, and touch different systems, and one of them issued a refund. This is why "flaky agent" is a category error: the agent is doing exactly what it is designed to do, which is decide at run time. Variance in a decision-making component is not a defect to be eliminated. It is the operating condition.
 
-Two engineering consequences follow immediately, and both get their own parts of this book. Repeated steps must be safe to repeat, because a retried run may take a different path through the same side effects. That's [idempotency](/docs/tools/idempotency). And a run that dies at step six must not restart at step one and take a *different* path. That's [durable execution](/docs/durable-execution/why-durable-execution).
+Two engineering consequences follow immediately, and both get their own parts of this book. Repeated steps must be safe to repeat, because a retried run may take a different path through the same side effects. That's [idempotency](/book/tools/idempotency). And a run that dies at step six must not restart at step one and take a *different* path. That's [durable execution](/book/durable-execution/why-durable-execution).
 
 ## What this does to testing
 
@@ -150,10 +150,10 @@ assert grounded / len(runs) > 0.95                   # a rate, not a value
 Note the shape of those assertions. Three kinds, and they are the whole vocabulary:
 
 - **Must always hold.** No unauthorized tool, no unbounded loop, output parses. These are hard failures at any rate below 100%, and most of them belong in the harness rather than the test, because they are safety properties you should be *enforcing*, not merely observing.
-- **Must hold often enough.** Correctness, grounding, tone. Measured as a rate against a threshold you chose deliberately. This is [scoring](/docs/evals/scoring), and it is a different discipline from unit testing.
+- **Must hold often enough.** Correctness, grounding, tone. Measured as a rate against a threshold you chose deliberately. This is [scoring](/book/evals/scoring), and it is a different discipline from unit testing.
 - **Must not regress.** Today's rate against last week's. The only version of this that survives contact with a nondeterministic system.
 
-That last one is why [evals](/docs/evals/eval-discipline) exist as a separate practice rather than a folder of tests. A test suite answers "did I break it?" with a boolean. An eval suite answers it with a number and a confidence interval, and for a probabilistic component that is the only honest answer available.
+That last one is why [evals](/book/evals/eval-discipline) exist as a separate practice rather than a folder of tests. A test suite answers "did I break it?" with a boolean. An eval suite answers it with a number and a confidence interval, and for a probabilistic component that is the only honest answer available.
 
 ## The reframe
 
@@ -165,7 +165,7 @@ Every one of those is ordinary distributed-systems engineering, applied to a com
 
 ---
 
-Next: [Choosing and Adapting Models](/docs/foundations/choosing-and-adapting-models), choosing by measured task fit, and knowing when a model change is the wrong fix.
+Next: [Choosing and Adapting Models](/book/foundations/choosing-and-adapting-models), choosing by measured task fit, and knowing when a model change is the wrong fix.
 
 ## Takeaways
 

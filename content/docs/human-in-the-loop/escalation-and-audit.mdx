@@ -7,7 +7,7 @@ Two questions close Part XII. The first is what happens when the timer wins. The
 
 ## When nobody approves
 
-[The previous chapters](/docs/human-in-the-loop/approval-gates) left the wait as a condition raced against a timer, and promised that the answer to the timer winning is never *"ask again."* Re-raising an approval nobody answered produces a second unanswered approval and consumes more of a budget that is already the [scarce resource in this part](/docs/human-in-the-loop/risk-tiers).
+[The previous chapters](/book/human-in-the-loop/approval-gates) left the wait as a condition raced against a timer, and promised that the answer to the timer winning is never *"ask again."* Re-raising an approval nobody answered produces a second unanswered approval and consumes more of a budget that is already the [scarce resource in this part](/book/human-in-the-loop/risk-tiers).
 
 The governing principle comes from access control, and it is worth stating as an invariant:
 
@@ -38,9 +38,9 @@ Every gate must answer three questions, and a gate that answers fewer than three
 
 </Figure>
 
-**Auto-deny is not the end of the case**, and this is where designs quietly lose work. The refund was not issued, but the customer is still waiting and the ticket is still open. Denial routes into a human workflow; it does not route into nothing. A system that treats "timed out" as "handled" has produced [exactly the silent failure](/docs/durable-execution/everything-that-breaks) this book keeps finding under new names.
+**Auto-deny is not the end of the case**, and this is where designs quietly lose work. The refund was not issued, but the customer is still waiting and the ticket is still open. Denial routes into a human workflow; it does not route into nothing. A system that treats "timed out" as "handled" has produced [exactly the silent failure](/book/durable-execution/everything-that-breaks) this book keeps finding under new names.
 
-One detail that costs nothing and helps a lot: **a timeout denial and a judgement denial are different events, and you should tell the agent which.** *"Denied: no reviewer responded within 48 business hours"* is not *"denied: carrier liability must be confirmed first."* The first should not cause the model to revise its reasoning, because nothing about its reasoning was rejected. And if you hand it the generic denial, [it will helpfully revise anyway](/docs/tools/errors-as-instructions).
+One detail that costs nothing and helps a lot: **a timeout denial and a judgement denial are different events, and you should tell the agent which.** *"Denied: no reviewer responded within 48 business hours"* is not *"denied: carrier liability must be confirmed first."* The first should not cause the model to revise its reasoning, because nothing about its reasoning was rejected. And if you hand it the generic denial, [it will helpfully revise anyway](/book/tools/errors-as-instructions).
 
 ## Logs are not an audit trail
 
@@ -66,11 +66,11 @@ Two of those rows are routinely missing, and both are ones this book has argued 
 
 **Whether the gate was hard or soft.** A record showing that an action proceeded is much less useful than one showing it proceeded *because it was below the tier threshold* versus *because a person approved it* versus *because the reviewer's window expired and policy allowed it*. Those are three different stories about your controls, and only the record can distinguish them.
 
-**What the reviewer was shown.** [The approval card is assembled at render time](/docs/human-in-the-loop/approval-gates) from state that has since moved: balances settle, documents get superseded, the account changes. Storing a *reference* to the card proves nothing, because re-rendering it next year produces a different card. **Store the rendered card**, as bytes, alongside the decision. It is the only way to demonstrate that the decision was informed rather than merely recorded.
+**What the reviewer was shown.** [The approval card is assembled at render time](/book/human-in-the-loop/approval-gates) from state that has since moved: balances settle, documents get superseded, the account changes. Storing a *reference* to the card proves nothing, because re-rendering it next year produces a different card. **Store the rendered card**, as bytes, alongside the decision. It is the only way to demonstrate that the decision was informed rather than merely recorded.
 
 ## The event history is most of this, and not all of it
 
-[Part XI observed](/docs/durability/agent-as-workflow) that the event history is the audit log you were going to build, produced as a by-product of replay. That remains true and is worth being precise about, because it is not the whole requirement.
+[Part XI observed](/book/durability/agent-as-workflow) that the event history is the audit log you were going to build, produced as a by-product of replay. That remains true and is worth being precise about, because it is not the whole requirement.
 
 **What the history gives you for free:** every input, every result, every retry, every timer, in order, durably, with the exact arguments each activity received.
 
@@ -78,7 +78,7 @@ Two of those rows are routinely missing, and both are ones this book has argued 
 
 So you write the audit record **deliberately**, as its own activity, rather than inferring it from the history later. The history is the base; the audit trail is a designed artifact on top of it.
 
-And the flip side [already flagged in Part XI](/docs/durability/agent-as-workflow) applies with more force here. The history is also a durable copy of every payload you passed through it. Retention that is right for durability may be wrong for personal data, which makes retention a decision rather than a default. "Keep everything forever" is not caution. It is an accumulating liability.
+And the flip side [already flagged in Part XI](/book/durability/agent-as-workflow) applies with more force here. The history is also a durable copy of every payload you passed through it. Retention that is right for durability may be wrong for personal data, which makes retention a decision rather than a default. "Keep everything forever" is not caution. It is an accumulating liability.
 
 <Aside type="caution" title="The regulatory schedule changed in 2026">
 The EU AI Act describes logging obligations for **high-risk** AI systems, including automatic recording of events and, where Article 19 applies, a retention floor of at least six months. Those requirements did **not** generally take effect on the old August 2026 schedule. As of August 2026, the European Commission's [implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act) places the Annex III high-risk rules on 2 December 2027 and rules for high-risk systems embedded in regulated products on 2 August 2028. Article 50 transparency rules follow a separate schedule and apply from 2 August 2026.
@@ -90,7 +90,7 @@ The direction of travel is the durable part, and it is not ambiguous: recorded, 
 
 ## Atlas, concretely
 
-**Escalation.** Approvals go to the on-duty reviewer, reassign to the queue lead at 24 hours with a reminder, and auto-deny at 48, matching the approval's own expiry, so the two cannot disagree. Auto-denied cases land in a human queue tagged `expired-approval`, which is reviewed daily and is a metric rather than a folder. If that queue grows, the [thresholds are wrong](/docs/human-in-the-loop/risk-tiers), not the reviewers.
+**Escalation.** Approvals go to the on-duty reviewer, reassign to the queue lead at 24 hours with a reminder, and auto-deny at 48, matching the approval's own expiry, so the two cannot disagree. Auto-denied cases land in a human queue tagged `expired-approval`, which is reviewed daily and is a metric rather than a folder. If that queue grows, the [thresholds are wrong](/book/human-in-the-loop/risk-tiers), not the reviewers.
 
 **Audit.** One `record_decision` activity, called at every governance point, writing: the ticket, the action and arguments, the tier and posture that applied, whether a gate fired and which kind, the reviewer and their decision, the rendered card as stored bytes, the documents consulted with their versions, and the outcome. Retained separately from the event history, on a schedule set by policy rather than by convenience.
 
@@ -105,7 +105,7 @@ Part XII ends here. The agent can now be stopped by a person, waits for them wit
 
 ---
 
-Next: [The Vercel AI SDK](/docs/interface/ai-sdk), Part XIII, and what the user sees while a durable backend does its work.
+Next: [The Vercel AI SDK](/book/interface/ai-sdk), Part XIII, and what the user sees while a durable backend does its work.
 
 ## Takeaways
 

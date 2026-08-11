@@ -20,7 +20,7 @@ Adding backoff to a retry policy is the well-known half of the fix. The half tha
 - **Randomness costs nothing**: one call to a random number generator.
 - **Too much randomness wastes time** if it can delay a retry far beyond what recovery required.
 - **The provider may know better than you.** `Retry-After` is information, not a suggestion.
-- **Agents amplify this**: [four retry layers](/docs/reliability/timeouts-and-retries) plus a fan-out means one blip can produce thousands of aligned retries.
+- **Agents amplify this**: [four retry layers](/book/reliability/timeouts-and-retries) plus a fan-out means one blip can produce thousands of aligned retries.
 
 ## Solution
 
@@ -52,7 +52,7 @@ Four rules:
 
 **Sample from `[0, ceiling]`, not `ceiling ± wobble`.** Adding a small random offset to a fixed delay leaves the fleet largely aligned. Full jitter spreads uniformly across the whole window, which is what actually breaks the correlation.
 
-**Cap the ceiling.** Exponential growth without a cap produces a retry scheduled beyond any plausible recovery, and beyond the run's [deadline](/docs/patterns/control/bounded-autonomy), which makes the wait pure waste. Thirty seconds is a common ceiling for interactive work.
+**Cap the ceiling.** Exponential growth without a cap produces a retry scheduled beyond any plausible recovery, and beyond the run's [deadline](/book/patterns/control/bounded-autonomy), which makes the wait pure waste. Thirty seconds is a common ceiling for interactive work.
 
 **Honour `Retry-After` above your own arithmetic**, and then jitter it. The provider's number is better information than any curve, and if every client obeys it exactly you have re-synchronized the herd on the provider's own schedule. Wait the header's value plus a small random additional amount.
 
@@ -141,17 +141,17 @@ Jittering the `Retry-After` value is the part most implementations miss. A heade
 
 **Full jitter can retry very early.** A sample near zero means retrying almost immediately, which for a genuine outage is a wasted call. That is the trade: some early attempts fail cheaply in exchange for the fleet never spiking. If early retries are expensive, a model call, consider a floor.
 
-**Randomness makes reproduction harder.** A test asserting retry timing needs a seeded generator. Inject the RNG rather than calling it globally, which is also required if the code runs inside [a durable workflow](/docs/durable-execution/determinism-and-retries).
+**Randomness makes reproduction harder.** A test asserting retry timing needs a seeded generator. Inject the RNG rather than calling it globally, which is also required if the code runs inside [a durable workflow](/book/durable-execution/determinism-and-retries).
 
-**It does not reduce total load.** Jitter spreads the same number of retries. During a real outage, the thing that reduces load is [the breaker](/docs/patterns/failure/tool-circuit-breaker) and the [retry budget](/docs/reliability/timeouts-and-retries). Jitter only stops the load arriving in spikes.
+**It does not reduce total load.** Jitter spreads the same number of retries. During a real outage, the thing that reduces load is [the breaker](/book/patterns/failure/tool-circuit-breaker) and the [retry budget](/book/reliability/timeouts-and-retries). Jitter only stops the load arriving in spikes.
 
 ## When not to use it
 
-**In workflow code that must replay deterministically.** `Math.random()` is [a source of divergence](/docs/durable-execution/determinism-and-retries). Use the SDK's replay-safe random, or let the platform's own retry policy apply the jitter.
+**In workflow code that must replay deterministically.** `Math.random()` is [a source of divergence](/book/durable-execution/determinism-and-retries). Use the SDK's replay-safe random, or let the platform's own retry policy apply the jitter.
 
 **When the delay is a business rule.** *"Retry the payment at 09:00 tomorrow"* is a schedule, not a backoff. Jittering it is wrong.
 
-**When the operation is not retryable at all.** [Context-length errors, refusals, and unknown-outcome writes](/docs/patterns/failure/non-retryable-model-errors) never reach this function.
+**When the operation is not retryable at all.** [Context-length errors, refusals, and unknown-outcome writes](/book/patterns/failure/non-retryable-model-errors) never reach this function.
 
 **When there is one client.** A single-instance job cannot form a herd with itself. Jitter is harmless there and is not buying anything.
 
@@ -160,13 +160,13 @@ The AWS simulations that made this canonical, Marc Brooker's work, now baked int
 
 The reason is that backoff changes *when* each client retries and jitter changes *whether they retry together*. A correlated failure produces a correlated retry schedule, and no amount of exponential growth decorrelates identical clients running identical code from identical timestamps.
 
-Which is why this is one of the few places in this book where a one-line change, multiply the delay by a random number in `[0, 1]`, is the whole fix, and why leaving it out is one of the most common production incidents in distributed systems. Agents make it worse only in scale: [four retry layers](/docs/reliability/timeouts-and-retries) and a fan-out means one blip can synchronize thousands of calls instead of hundreds.
+Which is why this is one of the few places in this book where a one-line change, multiply the delay by a random number in `[0, 1]`, is the whole fix, and why leaving it out is one of the most common production incidents in distributed systems. Agents make it worse only in scale: [four retry layers](/book/reliability/timeouts-and-retries) and a fan-out means one blip can synchronize thousands of calls instead of hundreds.
 </Aside>
 
 ## Related
 
-- [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries): the two phases this jitter is applied within
-- [Tool Circuit Breaker](/docs/patterns/failure/tool-circuit-breaker): what actually reduces load when the dependency is down
-- [Timeouts, Retries, and Backoff](/docs/reliability/timeouts-and-retries): the chapter, including retry budgets and the four layers
-- [Downstream Rate Limiting](/docs/patterns/scale/downstream-rate-limiting): avoiding the 429 that starts this in the first place
-- [Determinism and Retries](/docs/durable-execution/determinism-and-retries): why `Math.random()` cannot live in workflow code
+- [Fast and Slow Retries](/book/patterns/failure/fast-slow-retries): the two phases this jitter is applied within
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): what actually reduces load when the dependency is down
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the chapter, including retry budgets and the four layers
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): avoiding the 429 that starts this in the first place
+- [Determinism and Retries](/book/durable-execution/determinism-and-retries): why `Math.random()` cannot live in workflow code

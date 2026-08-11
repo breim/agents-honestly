@@ -9,7 +9,7 @@ A single approval gate is one person's judgment standing between an agent and an
 
 That is enough for a $200 credit. It is not enough for a $200,000 one, or for a bulk operation touching four hundred accounts, or for anything a regulator will later ask about, because the failure mode of a single approver is not that they are malicious. It is that they are the three-hundredth approval of the morning.
 
-[The documented pattern](/docs/human-in-the-loop/risk-tiers) is a reviewer averaging eleven seconds per decision. Add an adversary who can flood the queue with benign requests until rubber-stamping is the established habit, and the gate you built for safety is a control that has quietly stopped functioning while everyone believes oversight exists.
+[The documented pattern](/book/human-in-the-loop/risk-tiers) is a reviewer averaging eleven seconds per decision. Add an adversary who can flood the queue with benign requests until rubber-stamping is the established habit, and the gate you built for safety is a control that has quietly stopped functioning while everyone believes oversight exists.
 
 There is also a case single approval cannot address at all: the approver *is* the problem. An insider who can both initiate and approve has no boundary in front of them.
 
@@ -52,11 +52,11 @@ Require **two distinct human signatures from different principals**, on the same
 
 Four rules:
 
-**Enforce distinctness in code, on principals.** Not on display names, not on "please have someone else check." The dispatcher rejects a second signature from the same principal that initiated or first approved, and the check runs on the [delegated identity](/docs/patterns/security/identity-propagation) rather than on anything the client sends.
+**Enforce distinctness in code, on principals.** Not on display names, not on "please have someone else check." The dispatcher rejects a second signature from the same principal that initiated or first approved, and the check runs on the [delegated identity](/book/patterns/security/identity-propagation) rather than on anything the client sends.
 
-**Give the second approver different information.** This is the rule that makes dual control worth its cost. A reviewer reading the same summary as the first is [a second vote, not a check](/docs/multi-agent/when-not-to), the same failure as a verifier reading another agent's conclusion. The second approver should see the underlying records, not the agent's rendering of them.
+**Give the second approver different information.** This is the rule that makes dual control worth its cost. A reviewer reading the same summary as the first is [a second vote, not a check](/book/multi-agent/when-not-to), the same failure as a verifier reading another agent's conclusion. The second approver should see the underlying records, not the agent's rendering of them.
 
-**Record both rendered cards, as bytes.** [Re-rendering later produces a different card](/docs/human-in-the-loop/escalation-and-audit) because balances settle and documents get superseded. What each approver actually saw is the artifact that demonstrates the decisions were informed.
+**Record both rendered cards, as bytes.** [Re-rendering later produces a different card](/book/human-in-the-loop/escalation-and-audit) because balances settle and documents get superseded. What each approver actually saw is the artifact that demonstrates the decisions were informed.
 
 **Keep the population small and the trigger rare.** Dual control that fires often becomes two rubber stamps instead of one, which is worse than a single gate because it costs twice as much attention to produce the same non-review.
 
@@ -148,7 +148,7 @@ The `view: 'source'` requirement is the design decision that separates this patt
 
 ## Trade-offs
 
-**Latency, roughly doubled and often worse.** Two people must be available, and the second may only start after the first finishes. On an [SLA-bound path](/docs/patterns/durability/sla-timer) this can consume the whole window, which is why the trigger has to be rare.
+**Latency, roughly doubled and often worse.** Two people must be available, and the second may only start after the first finishes. On an [SLA-bound path](/book/patterns/durability/sla-timer) this can consume the whole window, which is why the trigger has to be rare.
 
 **Availability becomes a scheduling problem.** Nights, weekends, and holidays need a defined answer: a named backup, a documented break-glass with heightened logging, or an honest "this waits until Monday." Undefined is the version that produces a 2am incident with no one to call.
 
@@ -158,26 +158,26 @@ The `view: 'source'` requirement is the design decision that separates this patt
 
 ## When not to use it
 
-**Below tier 3.** [The tier matrix](/docs/human-in-the-loop/risk-tiers) reserves two signatures for irreversible-and-wide, and everything else is a single gate or autonomous. Widening it is the most common way this pattern is misapplied.
+**Below tier 3.** [The tier matrix](/book/human-in-the-loop/risk-tiers) reserves two signatures for irreversible-and-wide, and everything else is a single gate or autonomous. Widening it is the most common way this pattern is misapplied.
 
 **When you cannot staff it.** A second approver who does not exist is a run that hangs. If there is no second population, the honest control is a lower autonomous cap plus stronger detection, not a gate nobody can service.
 
 **When a deterministic check would do.** "Two people must agree the amount is under the contract limit" is a predicate. Reserve human signatures for judgment.
 
-**As compensation for a missing boundary.** Dual control on top of an agent with unbounded [argument scope](/docs/patterns/security/tool-permission-boundary) is asking two humans to be the authorization layer, at machine speed. Fix the scope first; the gate is for what remains.
+**As compensation for a missing boundary.** Dual control on top of an agent with unbounded [argument scope](/book/patterns/security/tool-permission-boundary) is asking two humans to be the authorization layer, at machine speed. Fix the scope first; the gate is for what remains.
 
 <Aside type="note" title="The second signature is only worth anything if it sees something different">
 This is the point on which real dual control and ceremonial dual control diverge, and the shape of the argument recurs throughout this book.
 
-[A verifier reading another agent's conclusion is a second vote.](/docs/multi-agent/when-not-to) [A grounding check against a summary is not a check.](/docs/patterns/retrieval/grounded-citations) A second approver reading the first approver's card is the same failure with people in it. Correlated errors do not cancel, and two correlated judgments are worth barely more than one.
+[A verifier reading another agent's conclusion is a second vote.](/book/multi-agent/when-not-to) [A grounding check against a summary is not a check.](/book/patterns/retrieval/grounded-citations) A second approver reading the first approver's card is the same failure with people in it. Correlated errors do not cancel, and two correlated judgments are worth barely more than one.
 
 So the design requirement is not "another human." It is **another view**: the source records rather than the agent's rendering, and ideally a different role with a different reason to be skeptical. If you cannot arrange that, be honest that you have bought accountability rather than assurance, which is still worth something, and is not what dual control claims to provide.
 </Aside>
 
 ## Related
 
-- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): which cell of the matrix requires two signatures
-- [Approval Gate](/docs/patterns/durability/approval-gate): the single-signature mechanism this extends
-- [Escalation and Audit](/docs/human-in-the-loop/escalation-and-audit): storing the rendered cards, and what an audit record must contain
-- [Identity Propagation](/docs/patterns/security/identity-propagation): where the principals being compared come from
-- [Tool Permission Boundary](/docs/patterns/security/tool-permission-boundary): fix the scope first; this gate is for what remains
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): which cell of the matrix requires two signatures
+- [Approval Gate](/book/patterns/durability/approval-gate): the single-signature mechanism this extends
+- [Escalation and Audit](/book/human-in-the-loop/escalation-and-audit): storing the rendered cards, and what an audit record must contain
+- [Identity Propagation](/book/patterns/security/identity-propagation): where the principals being compared come from
+- [Tool Permission Boundary](/book/patterns/security/tool-permission-boundary): fix the scope first; this gate is for what remains

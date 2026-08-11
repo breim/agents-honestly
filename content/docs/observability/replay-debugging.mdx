@@ -5,7 +5,7 @@ description: "Event histories as ground truth: re-running a real failure against
 
 Ticket #9063, last Tuesday. Atlas escalated a straightforward refund that it should have handled, and the customer waited two days for a person to do something the agent was built to do.
 
-You have the trace. It has all eight answers [the trace chapter](/docs/observability/what-a-trace-must-answer) demanded: the prompt, the model, the tools, the tokens, the money, the timing, and where it went sideways. That was step nine, where the agent read a policy chunk and concluded it lacked authority.
+You have the trace. It has all eight answers [the trace chapter](/book/observability/what-a-trace-must-answer) demanded: the prompt, the model, the tools, the tokens, the money, the timing, and where it went sideways. That was step nine, where the agent read a policy chunk and concluded it lacked authority.
 
 You form a hypothesis and write a fix. Now the actual question:
 
@@ -45,7 +45,7 @@ The mistake that wastes weeks is using re-run for the first question. You change
 
 ## What has to be recorded
 
-Replay only works if every nondeterministic input to the run was captured. [Durable execution](/docs/durable-execution/determinism-and-retries) already forces this discipline for its own reasons: the event history records every activity's arguments and results so that re-execution converges. Replay-driven debugging is that machinery pointed at a different problem.
+Replay only works if every nondeterministic input to the run was captured. [Durable execution](/book/durable-execution/determinism-and-retries) already forces this discipline for its own reasons: the event history records every activity's arguments and results so that re-execution converges. Replay-driven debugging is that machinery pointed at a different problem.
 
 The list of boundaries to capture:
 
@@ -58,12 +58,12 @@ The list of boundaries to capture:
 | Randomness, IDs | The values generated | Obviously |
 | Human decision | What was shown, what was chosen, when | People |
 
-The retrieval row is the one most often half-done. Recording "we retrieved 5 chunks" makes the run unreplayable, because the corpus has since been re-indexed and the same query now returns different text. Record the IDs *and* the content, and note that this is the same instrumentation [incident scoping needed](/docs/security/untrusted-retrieval) to answer "which runs saw the poisoned document." Two requirements, one field.
+The retrieval row is the one most often half-done. Recording "we retrieved 5 chunks" makes the run unreplayable, because the corpus has since been re-indexed and the same query now returns different text. Record the IDs *and* the content, and note that this is the same instrumentation [incident scoping needed](/book/security/untrusted-retrieval) to answer "which runs saw the poisoned document." Two requirements, one field.
 
 <Aside type="note" title="If you are not on durable execution">
-You do not need Temporal for this. A `run_events` table with `(run_id, seq, kind, request, response)` appended by the [dispatcher and the model gateway](/docs/production/reference-architecture) gives you the same capability, and it is a day of work.
+You do not need Temporal for this. A `run_events` table with `(run_id, seq, kind, request, response)` appended by the [dispatcher and the model gateway](/book/production/reference-architecture) gives you the same capability, and it is a day of work.
 
-What you cannot do is reconstruct it later. This is the [tracing argument](/docs/production/reference-architecture) again: last Tuesday's run either recorded its boundaries or it is permanently unreplayable, and no deploy today changes that.
+What you cannot do is reconstruct it later. This is the [tracing argument](/book/production/reference-architecture) again: last Tuesday's run either recorded its boundaries or it is permanently unreplayable, and no deploy today changes that.
 </Aside>
 
 ## The replay harness
@@ -155,7 +155,7 @@ class RecordedModelClient:
 
 **Divergence detection is the part that makes this trustworthy**, and it is what separates a replay harness from a mock. If your fix changes the prompt, whether by adding a tool to the catalogue, swapping the system prompt, or reordering the context, the recorded response was generated for a different question, and replaying it produces a result that looks valid and means nothing. Better to fail loudly and move that case to re-run.
 
-**Two checks, because neither can see the other's failure.** `promptDelta` compares prompts, so it catches the code change that rebuilt the question. It is blind to a model upgrade, or to a change in whatever knob shapes generation on that model, which alter no prompt text at all and make every recorded response stale at once. On current frontier models that knob is [`effort` rather than temperature](/docs/foundations/nondeterminism), which changes what you compare and not whether you have to. A harness that only compares prompts will replay last month's recording against a new model and report a clean pass. That is why the harness checks the serving slice separately, once, and exactly: [the `config_hash` on the run row](/docs/production/versioning) is what turns that check into a lookup rather than an archaeology exercise.
+**Two checks, because neither can see the other's failure.** `promptDelta` compares prompts, so it catches the code change that rebuilt the question. It is blind to a model upgrade, or to a change in whatever knob shapes generation on that model, which alter no prompt text at all and make every recorded response stale at once. On current frontier models that knob is [`effort` rather than temperature](/book/foundations/nondeterminism), which changes what you compare and not whether you have to. A harness that only compares prompts will replay last month's recording against a new model and report a clean pass. That is why the harness checks the serving slice separately, once, and exactly: [the `config_hash` on the run row](/book/production/versioning) is what turns that check into a lookup rather than an archaeology exercise.
 
 Which gives the honest boundary of the technique: **replay is valid as long as the prompt, the model, and its sampling parameters are unchanged.** Fix a parser, a router, a guard, an idempotency key, a post-retrieval filter, an error handler, then replay. Change the question or who answers it, then re-run.
 
@@ -171,11 +171,11 @@ The workflow that makes this compound, rather than being a one-off debugging tri
 
 **4 · Fix, and replay again.** Milliseconds per iteration, deterministic, free.
 
-**5 · Promote.** The fixture joins the [regression corpus](/docs/evals/datasets), and every future commit replays it.
+**5 · Promote.** The fixture joins the [regression corpus](/book/evals/datasets), and every future commit replays it.
 
 Step five is where this stops being debugging and becomes the bridge between Part XV and Part XIV. **Your production failures are the best eval dataset you will ever have.** They are real, they are distributed like your actual traffic, and each one is a bug that genuinely happened. A team that promotes every incident into the corpus accumulates a suite that no synthetic dataset matches, at the rate their system actually breaks.
 
-The [dataset chapter's](/docs/evals/datasets) caveats apply on the way in: these fixtures contain customer data, so scrub and pseudonymize at extraction. The [eval-set row](/docs/security/pii-and-compliance) in the compliance table is exactly this pipeline.
+The [dataset chapter's](/book/evals/datasets) caveats apply on the way in: these fixtures contain customer data, so scrub and pseudonymize at extraction. The [eval-set row](/book/security/pii-and-compliance) in the compliance table is exactly this pipeline.
 
 ## Shadow replay: testing a change against last week
 
@@ -187,11 +187,11 @@ Take a thousand recorded production runs, replay each against both the current a
 | --- | --- | --- |
 | Refactor the dispatcher | Replay | Any behavior change is a bug, so expect zero diffs |
 | Add a guard or a policy check | Replay | Exactly which historical runs it would have blocked |
-| Tighten [argument scoping](/docs/security/least-privilege) | Replay | The false-positive rate on real traffic, before enforcing |
+| Tighten [argument scoping](/book/security/least-privilege) | Replay | The false-positive rate on real traffic, before enforcing |
 | Change the prompt | **Re-run** | Replay is invalid; the recorded responses are stale |
 | Upgrade the model | **Re-run** | Same |
 
-Row three is the single most useful application in this chapter. [The least-privilege chapter](/docs/security/least-privilege) asked for shadow mode before enforcing a mined policy; replay is how you get that answer in an afternoon instead of a week, against traffic that already happened, with no risk to anyone.
+Row three is the single most useful application in this chapter. [The least-privilege chapter](/book/security/least-privilege) asked for shadow mode before enforcing a mined policy; replay is how you get that answer in an afternoon instead of a week, against traffic that already happened, with no risk to anyone.
 
 And row one is the quiet one: for a pure refactor, the correct expected diff is **zero**, which turns "I don't think I changed behavior" into an assertion.
 
@@ -223,7 +223,7 @@ The zero-diff gate on refactors is the row that pays for itself fastest. Most ch
 
 ---
 
-Next: [Token and Cost Accounting](/docs/observability/cost-accounting), per-request, per-user, per-tenant, per-feature, and the dashboard that stops a bad deploy becoming a bad invoice.
+Next: [Token and Cost Accounting](/book/observability/cost-accounting), per-request, per-user, per-tenant, per-feature, and the dashboard that stops a bad deploy becoming a bad invoice.
 
 ## Takeaways
 

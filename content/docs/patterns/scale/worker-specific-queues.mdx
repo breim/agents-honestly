@@ -7,9 +7,9 @@ description: "Pin work to the worker that holds the GPU, the cache, or the file.
 
 A document-processing run has three steps: download a 200 MB PDF, extract and OCR its pages, and summarize the result.
 
-Each step is [an activity](/docs/patterns/durability/tool-as-activity), and activities are dispatched to whichever worker polls first. So step one downloads the file to worker A's local disk, step two runs on worker C, which does not have it, and either fails or downloads it again.
+Each step is [an activity](/book/patterns/durability/tool-as-activity), and activities are dispatched to whichever worker polls first. So step one downloads the file to worker A's local disk, step two runs on worker C, which does not have it, and either fails or downloads it again.
 
-The workaround everyone reaches for is to push the file through the activity boundary, which fails sooner and harder than people expect: a single payload is capped at 2 MB, so a 200 MB file is rejected outright rather than bloating the [event history](/docs/patterns/durability/continue-as-new-memory). The other workaround is object storage round trips, which is correct and costs two transfers per step for data that was already sitting on a local disk.
+The workaround everyone reaches for is to push the file through the activity boundary, which fails sooner and harder than people expect: a single payload is capped at 2 MB, so a 200 MB file is rejected outright rather than bloating the [event history](/book/patterns/durability/continue-as-new-memory). The other workaround is object storage round trips, which is correct and costs two transfers per step for data that was already sitting on a local disk.
 
 The same shape appears with any resource that is not uniformly available: a GPU on four of forty workers, a warm model in memory, a checked-out repository, a licensed binary.
 
@@ -59,7 +59,7 @@ Four rules:
 
 **Always release, in a `finally`.** A session that is acquired and never freed removes a worker from availability until the process restarts, and it does so silently. This is the leak this pattern is most likely to produce.
 
-**Handle the pinned worker dying.** The whole point is that the state is not durable, so a worker failing mid-sequence means the local file is gone. The recovery is to re-acquire and redo the sequence from the start, which means the sequence must be safe to repeat, the same [idempotency](/docs/tools/idempotency) requirement as anywhere else.
+**Handle the pinned worker dying.** The whole point is that the state is not durable, so a worker failing mid-sequence means the local file is gone. The recovery is to re-acquire and redo the sequence from the start, which means the sequence must be safe to repeat, the same [idempotency](/book/tools/idempotency) requirement as anywhere else.
 
 ## Code
 
@@ -143,7 +143,7 @@ Some SDKs provide this as a built-in **worker session** API, which handles the d
 
 **Load balancing is gone for the pinned span.** The pinned worker may be busy while others idle. Cap concurrent sessions per worker, or one worker accumulates every long document while thirty-nine sit empty.
 
-**A worker failure costs the whole sequence.** Local state is not durable by definition, so recovery is redo-from-scratch. That is acceptable for a five-minute OCR and unacceptable for a two-hour job, at which point the answer is [checkpointing to durable storage](/docs/patterns/durability/resumable-activity), not a longer pin.
+**A worker failure costs the whole sequence.** Local state is not durable by definition, so recovery is redo-from-scratch. That is acceptable for a five-minute OCR and unacceptable for a two-hour job, at which point the answer is [checkpointing to durable storage](/book/patterns/durability/resumable-activity), not a longer pin.
 
 **It is easy to over-apply.** A pin is not needed for a warm HTTP connection or a small cache; it is needed for state that is expensive to move and cannot be recomputed. Object storage round trips are frequently cheaper than the operational cost of pinning.
 
@@ -169,8 +169,8 @@ The practical consequence is that "my workflow is already sticky, so my activiti
 
 ## Related
 
-- [Tool as Activity](/docs/patterns/durability/tool-as-activity): why payloads should be references, and what the boundary costs
-- [Resumable Activity](/docs/patterns/durability/resumable-activity): durable checkpoints, for when the sequence is too long to pin
-- [Fan-Out Over Items](/docs/patterns/scale/fan-out): the pooled default this pattern deliberately gives up
-- [Priority Task Queues](/docs/patterns/scale/priority-queues): routing by urgency rather than by capability
-- [Sandboxing and Credential Boundaries](/docs/security/sandboxing): one sandbox per run, destroyed after, for the same locality reasons
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): why payloads should be references, and what the boundary costs
+- [Resumable Activity](/book/patterns/durability/resumable-activity): durable checkpoints, for when the sequence is too long to pin
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): the pooled default this pattern deliberately gives up
+- [Priority Task Queues](/book/patterns/scale/priority-queues): routing by urgency rather than by capability
+- [Sandboxing and Credential Boundaries](/book/security/sandboxing): one sandbox per run, destroyed after, for the same locality reasons

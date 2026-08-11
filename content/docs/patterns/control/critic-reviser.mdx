@@ -5,7 +5,7 @@ description: "A second model with a different prompt reviews the first one."
 
 ## Problem
 
-[Reflection](/docs/patterns/control/reflection) works when there is an external signal, a schema, a test, a citation check. Some of the things you actually want to catch have no such check.
+[Reflection](/book/patterns/control/reflection) works when there is an external signal, a schema, a test, a citation check. Some of the things you actually want to catch have no such check.
 
 *Does this reply address what the customer asked, or a nearby question?* *Is the tone right for someone on their third follow-up?* *Does this cite the current policy or one that reads similarly?* No validator produces those findings. A person would catch all three in ten seconds.
 
@@ -52,7 +52,7 @@ A second call with a **different prompt, a different role, and, critically, diff
 
 Four rules:
 
-**Give the critic the sources, not the summary.** This is the rule the pattern lives or dies on. A critic reading the draft alone shares every blind spot the generator had; a critic reading the retrieved chunks and tool results can see that the draft says something they do not support. The same argument appears in [multi-agent verification](/docs/multi-agent/when-not-to) and [dual control](/docs/patterns/security/dual-control): correlated reviewers do not catch correlated errors.
+**Give the critic the sources, not the summary.** This is the rule the pattern lives or dies on. A critic reading the draft alone shares every blind spot the generator had; a critic reading the retrieved chunks and tool results can see that the draft says something they do not support. The same argument appears in [multi-agent verification](/book/multi-agent/when-not-to) and [dual control](/book/patterns/security/dual-control): correlated reviewers do not catch correlated errors.
 
 **Demand structured findings, not a score.** `{ claim, problem, evidence }` per issue. A number is unactionable and a paragraph is unparseable; a list of specific defects can be counted, fed to the reviser, and asserted against. It also makes leniency visible: a critic returning zero findings on everything is a critic you can detect.
 
@@ -152,43 +152,43 @@ async def critic_reviser(draft: str, ctx):
 </Tab>
 </Tabs>
 
-The `sources` and `toolResults` lines are the pattern. Remove them and this becomes an expensive [intrinsic self-review](/docs/patterns/control/reflection), which is [measured not to help](https://arxiv.org/abs/2310.01798), the model count changed and the information did not.
+The `sources` and `toolResults` lines are the pattern. Remove them and this becomes an expensive [intrinsic self-review](/book/patterns/control/reflection), which is [measured not to help](https://arxiv.org/abs/2310.01798), the model count changed and the information did not.
 
 ## Trade-offs
 
 **Two to four extra model calls per response.** Critique, revise, re-critique, possibly again. On a path where the reply matters this is justifiable; across all traffic it is a large multiplier.
 
-**Critic leniency is the default failure.** Without calibration you get a critic that finds nothing and a system that feels reviewed. Keep a small set of deliberately-broken fixtures in [CI](/docs/evals/ci-for-agents) and assert the critic catches them, a critic that stops catching them has drifted.
+**Critic leniency is the default failure.** Without calibration you get a critic that finds nothing and a system that feels reviewed. Keep a small set of deliberately-broken fixtures in [CI](/book/evals/ci-for-agents) and assert the critic catches them, a critic that stops catching them has drifted.
 
-**A different prompt is weaker independence than a different model.** Same weights, same blind spots, different instructions. Using a different model family for the critic buys more genuine independence and costs operational complexity plus a second [drift surface](/docs/observability/drift).
+**A different prompt is weaker independence than a different model.** Same weights, same blind spots, different instructions. Using a different model family for the critic buys more genuine independence and costs operational complexity plus a second [drift surface](/book/observability/drift).
 
 **The reviser can break what was right.** Targeted findings limit the damage. Re-critiquing after revision catches the case where the fix introduced a new problem, and it is why the loop re-checks rather than trusting the revision.
 
 ## When not to use it
 
-**When a deterministic check exists.** Schema, citation resolution, amount grounding, [use those first](/docs/patterns/control/reflection). They are free, total, and cannot be lenient. Reserve the critic for what they cannot express.
+**When a deterministic check exists.** Schema, citation resolution, amount grounding, [use those first](/book/patterns/control/reflection). They are free, total, and cannot be lenient. Reserve the critic for what they cannot express.
 
 **On high-volume, low-stakes paths.** Doubling or tripling cost to polish a status update is a bad trade.
 
 **When the critic cannot be given independent inputs.** If there are no sources to hand it, a purely generative task with no grounding, the critique is a second sample of the same judgment. Be honest that you are buying variance reduction rather than verification.
 
-**As a substitute for evals.** A critic is a runtime check on one response and tells you nothing about whether quality is drifting. [Sampled scoring](/docs/evals/online-evals) is what answers that, and a team watching critic-finding rates is measuring their critic.
+**As a substitute for evals.** A critic is a runtime check on one response and tells you nothing about whether quality is drifting. [Sampled scoring](/book/evals/online-evals) is what answers that, and a team watching critic-finding rates is measuring their critic.
 
 <Aside type="note" title="The critic is a model, so it needs everything a model needs">
 It is easy to treat the critic as infrastructure, a check, a filter, a piece of the harness. It is not. It is a second model call with a prompt, a version, and a failure mode.
 
-Which means it belongs in the [config bundle](/docs/production/versioning) with a pinned model and a hashed prompt; it needs its own [eval set](/docs/evals/ci-for-agents), scored against known-good and known-bad fixtures; it drifts when the provider changes something underneath it, and a [frozen canary](/docs/observability/drift) is the only thing that will tell you; and its findings are [prompt text](/docs/tools/errors-as-instructions) that the reviser reasons over, so a badly-worded finding produces a badly-targeted revision.
+Which means it belongs in the [config bundle](/book/production/versioning) with a pinned model and a hashed prompt; it needs its own [eval set](/book/evals/ci-for-agents), scored against known-good and known-bad fixtures; it drifts when the provider changes something underneath it, and a [frozen canary](/book/observability/drift) is the only thing that will tell you; and its findings are [prompt text](/book/tools/errors-as-instructions) that the reviser reasons over, so a badly-worded finding produces a badly-targeted revision.
 
 A silently-degraded critic is worse than no critic, because the system continues to report that everything was reviewed.
 </Aside>
 
 ## Related
 
-- [Reflection](/docs/patterns/control/reflection): the cheaper version, and why the external signal is the whole thing
-- [Dual Control](/docs/patterns/security/dual-control): the same independence argument, with humans
-- [When Not To](/docs/multi-agent/when-not-to): why a reviewer reading a conclusion is a second vote
-- [Evaluator-Optimizer](/docs/workflows/evaluator-optimizer): the chapter, with bounded iteration and convergence
-- [Scoring](/docs/evals/scoring): rubrics, and calibrating a model that judges
+- [Reflection](/book/patterns/control/reflection): the cheaper version, and why the external signal is the whole thing
+- [Dual Control](/book/patterns/security/dual-control): the same independence argument, with humans
+- [When Not To](/book/multi-agent/when-not-to): why a reviewer reading a conclusion is a second vote
+- [Evaluator-Optimizer](/book/workflows/evaluator-optimizer): the chapter, with bounded iteration and convergence
+- [Scoring](/book/evals/scoring): rubrics, and calibrating a model that judges
 
 ## References
 

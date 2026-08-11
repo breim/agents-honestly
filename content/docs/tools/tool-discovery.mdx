@@ -5,7 +5,7 @@ description: "What to do when there are two hundred tools and eleven are relevan
 
 Every chapter in Part VIII has assumed you designed the catalogue. This one is about the catalogue you didn't, because that is where two hundred tools actually comes from.
 
-[Part III already set the policy](/docs/context/dynamic-selection): pointers not payloads, static profiles where categories are stable, and the caching tension that makes naive per-request selection a bad trade. This chapter is the mechanism underneath it, at the scale where profiles stop being enough.
+[Part III already set the policy](/book/context/dynamic-selection): pointers not payloads, static profiles where categories are stable, and the caching tension that makes naive per-request selection a bad trade. This chapter is the mechanism underneath it, at the scale where profiles stop being enough.
 
 ## Nobody writes two hundred tools
 
@@ -13,17 +13,17 @@ They connect five servers.
 
 An MCP tool definition costs roughly **200–500 tokens**. Five servers at thirty tools each is **30,000–60,000 tokens before the user's first message**; one widely-used official server ships around 42,000 tokens of definitions on its own. None of that is anyone's fault. Each server was built to be useful alone, by people with no knowledge of what else you would connect, and every one of them is complete because completeness is the right call for a component you publish.
 
-The pattern is familiar. [Auto-generating tools from an OpenAPI spec](/docs/tools/tools-are-apis-for-models) produced sixty tools for one system; the server ecosystem industrialized that and made it one line of configuration per system. The failure did not change. It just got easier to reach and harder to see, because the schemas are not in your repository.
+The pattern is familiar. [Auto-generating tools from an OpenAPI spec](/book/tools/tools-are-apis-for-models) produced sixty tools for one system; the server ecosystem industrialized that and made it one line of configuration per system. The failure did not change. It just got easier to reach and harder to see, because the schemas are not in your repository.
 
 ## What it costs, measured
 
 Two separate costs, and the second one surprises people:
 
-**Tokens.** Fixed overhead on every request for the life of the conversation. Being in the prefix means it [caches well](/docs/foundations/prompt-caching), so the dollar cost is softer than it looks, but a cached token is still a token the model attends to.
+**Tokens.** Fixed overhead on every request for the life of the conversation. Being in the prefix means it [caches well](/book/foundations/prompt-caching), so the dollar cost is softer than it looks, but a cached token is still a token the model attends to.
 
 **Accuracy.** This is the real bill. Selection quality degrades once a catalogue passes roughly **30–50 tools**, and the collapse is not gentle. One measurement of agents facing bloated tool sets recorded selection accuracy falling from **43% to under 14%**, a threefold degradation caused by nothing but the size of the menu.
 
-That extends the numbers [Part II gave for small catalogues](/docs/first-agent/first-tools) into the range where most production agents actually live once integrations land. Those numbers: ten to fifteen tools for smaller models, twenty to thirty for larger, against benchmarks that average three candidates.
+That extends the numbers [Part II gave for small catalogues](/book/first-agent/first-tools) into the range where most production agents actually live once integrations land. Those numbers: ten to fifteen tools for smaller models, twenty to thirty for larger, against benchmarks that average three candidates.
 
 ## First move: don't have two hundred tools
 
@@ -33,7 +33,7 @@ Discovery machinery is what you reach for when consolidation has failed or is un
 
 **Prefer several narrow servers to one broad one.** Teams that split into domain-specific servers, each exposing a small and relevant surface, report per-session schema overhead dropping by roughly half. Same tools, better partitioning. (The larger reductions you will see quoted, 80% and above, belong to *deferred loading*, not to partitioning. That mechanism is what the rest of this chapter is about.)
 
-**Consolidate the ones you own.** That is the entire preceding half of Part VIII: [a tool is a job, not an endpoint](/docs/tools/tools-are-apis-for-models), and three chained calls that always occur together are one tool.
+**Consolidate the ones you own.** That is the entire preceding half of Part VIII: [a tool is a job, not an endpoint](/book/tools/tools-are-apis-for-models), and three chained calls that always occur together are one tool.
 
 Do those three and a great many catalogues land back under fifty, where none of the rest of this chapter is necessary.
 
@@ -109,7 +109,7 @@ That constraint is not an implementation quirk. An agent whose every capability 
 
 ## Why this survives the cache and profile-swapping doesn't
 
-[Part III's warning](/docs/context/dynamic-selection) was that tools render at position zero, so varying them per request invalidates the entire cached prefix. You save 3,000 tokens of schema and start paying full price for the other 40,000.
+[Part III's warning](/book/context/dynamic-selection) was that tools render at position zero, so varying them per request invalidates the entire cached prefix. You save 3,000 tokens of schema and start paying full price for the other 40,000.
 
 Tool search sidesteps that, and the reason is worth stating precisely: **discovered schemas are appended, not substituted.** The resident set at position zero never changes, so the prefix stays valid; the loaded tool arrives after the cached span, in the same position a new message would. It is the "an addition at the end is cheap, a substitution at the front is not" principle, implemented.
 
@@ -126,9 +126,9 @@ Atlas uses a profile. An Atlas connected to four vendor servers would use both: 
 
 Search quality is entirely a function of names and descriptions, which is uncomfortable when the catalogue is someone else's and its descriptions were written to be read by a human browsing a README.
 
-This is where [namespacing](/docs/tools/tools-are-apis-for-models) stops being a nicety. A keyword search over `crm_`, `wms_`, and `erp_` prefixes has something to match on; a search over `listItems`, `getData`, and `fetchRecords` does not. When you control the wrapper, renaming and re-describing third-party tools *is* the integration work. It is the same "curate aggressively" conclusion from the start of this part, arriving at the point where it is least convenient and most necessary.
+This is where [namespacing](/book/tools/tools-are-apis-for-models) stops being a nicety. A keyword search over `crm_`, `wms_`, and `erp_` prefixes has something to match on; a search over `listItems`, `getData`, and `fetchRecords` does not. When you control the wrapper, renaming and re-describing third-party tools *is* the integration work. It is the same "curate aggressively" conclusion from the start of this part, arriving at the point where it is least convenient and most necessary.
 
-The failure mode to expect: a team enables tool search across two hundred vaguely-described vendor tools, watches it pick badly, and concludes the mechanism doesn't work. It worked exactly as well as the index it was given, the same diagnosis [Part III gave for just-in-time loading generally](/docs/context/dynamic-selection).
+The failure mode to expect: a team enables tool search across two hundred vaguely-described vendor tools, watches it pick badly, and concludes the mechanism doesn't work. It worked exactly as well as the index it was given, the same diagnosis [Part III gave for just-in-time loading generally](/book/context/dynamic-selection).
 
 ## What breaks
 
@@ -136,9 +136,9 @@ The failure mode to expect: a team enables tool search across two hundred vaguel
 
 **Discovery costs a round trip.** The step where the model searches is a step it did not spend working. On a short task that overhead can exceed the savings.
 
-**Descriptions you don't own are text you don't control.** A search index built from third-party descriptions is an index an outsider can influence, including by naming and describing a tool so that it wins searches it should lose. That is a real class of attack against tool ecosystems, and it belongs to [Part IX](/docs/mcp/what-mcp-is) and [prompt injection](/docs/security/prompt-injection); the piece that belongs here is that deferring a tool hides it from the model and **not** from your threat model.
+**Descriptions you don't own are text you don't control.** A search index built from third-party descriptions is an index an outsider can influence, including by naming and describing a tool so that it wins searches it should lose. That is a real class of attack against tool ecosystems, and it belongs to [Part IX](/book/mcp/what-mcp-is) and [prompt injection](/book/security/prompt-injection); the piece that belongs here is that deferring a tool hides it from the model and **not** from your threat model.
 
-**Deferred is not disabled.** Anything loadable is callable, so the [blast radius](/docs/tools/read-and-write-tools) is the whole declared catalogue regardless of what is resident. If a vendor server exposes a destructive operation you never intend to use, the fix is the allowlist, not `defer_loading`.
+**Deferred is not disabled.** Anything loadable is callable, so the [blast radius](/book/tools/read-and-write-tools) is the whole declared catalogue regardless of what is resident. If a vendor server exposes a destructive operation you never intend to use, the fix is the allowlist, not `defer_loading`.
 
 ## Atlas, concretely
 
@@ -148,11 +148,11 @@ That is the honest ending, and it is the point. Nothing in Part VIII pushed Atla
 
 The trigger is specific, though, and Meridian will hit it: connecting the Jira server for engineering escalations, the Slack server for internal notifications, and the carrier's tracking server takes the catalogue past ninety tools, none of which Meridian wrote, and none of which will consolidate. At that point the sequence is the one this chapter argued: allowlist each server down to what is used, keep the profile for the seven tools Meridian owns, and put search over the rest.
 
-The number that tells you it is time is not the tool count. It is **selection accuracy on your own ticket set**, the measurement [Part II told you to take](/docs/first-agent/first-tools) rather than trusting a benchmark, and the only one that knows where your catalogue's cliff actually is.
+The number that tells you it is time is not the tool count. It is **selection accuracy on your own ticket set**, the measurement [Part II told you to take](/book/first-agent/first-tools) rather than trusting a benchmark, and the only one that knows where your catalogue's cliff actually is.
 
 ---
 
-Next: [Enterprise Integrations](/docs/tools/enterprise-integrations). Live APIs, replicated data, webhooks, CDC, and the reconciliation work behind every useful tool.
+Next: [Enterprise Integrations](/book/tools/enterprise-integrations). Live APIs, replicated data, webhooks, CDC, and the reconciliation work behind every useful tool.
 
 ## Takeaways
 

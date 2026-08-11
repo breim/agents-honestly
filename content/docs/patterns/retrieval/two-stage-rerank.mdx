@@ -7,7 +7,7 @@ description: "Retrieve cheap and wide, then rescore narrow and expensive."
 
 The right chunk is in the top 50 and it is ranked eleventh.
 
-Sending the top 5 misses it. Sending the top 20 includes it, along with fifteen chunks that scored highly *because they resemble the answer*, which is the most expensive material you can put in a prompt: near-misses compete for attention with the thing they resemble, and [degradation tracks confusability](/docs/context/context-as-budget).
+Sending the top 5 misses it. Sending the top 20 includes it, along with fifteen chunks that scored highly *because they resemble the answer*, which is the most expensive material you can put in a prompt: near-misses compete for attention with the thing they resemble, and [degradation tracks confusability](/book/context/context-as-budget).
 
 Turning up `k` is not the fix. It trades a recall problem for a precision problem, and the precision problem is the one that produces confidently wrong answers rather than "I don't know."
 
@@ -48,7 +48,7 @@ Two stages with different objectives: **retrieve for recall, rerank for precisio
 
 Four rules:
 
-**Filter before you rerank, never after.** A hosted reranker receives every candidate you send it, including ones that were about to be dropped. Sending restricted content to a vendor and then filtering the response is [not an authorization boundary](/docs/retrieval/metadata-and-authorization), it is a display preference.
+**Filter before you rerank, never after.** A hosted reranker receives every candidate you send it, including ones that were about to be dropped. Sending restricted content to a vendor and then filtering the response is [not an authorization boundary](/book/retrieval/metadata-and-authorization), it is a display preference.
 
 **Size the first stage from recall@k, not intuition.** Measure how deep you have to go before the correct chunk is present in the candidate set essentially always. That number is your `k`. Reported practice puts the useful ceiling around 50: beyond that, latency rises and recall does not.
 
@@ -140,17 +140,17 @@ Recording both `candidates` and `kept` is what makes the pipeline debuggable lat
 
 **Latency, non-linearly in candidate count.** A small cross-encoder over 50 short passages is tens of milliseconds; over 200 it is several times that. This is why `CANDIDATES` is a measured number rather than "as many as possible."
 
-**Cost per query.** Hosted rerankers price per query-plus-documents unit, so the second stage has a per-search cost that a vector search does not. On a run doing [three searches](/docs/patterns/context/retrieval-on-demand), that is three units.
+**Cost per query.** Hosted rerankers price per query-plus-documents unit, so the second stage has a per-search cost that a vector search does not. On a run doing [three searches](/book/patterns/context/retrieval-on-demand), that is three units.
 
-**Another dependency in the request path.** A reranker that is slow or down now gates every retrieval. It needs the same [breaker and fallback](/docs/reliability/fallbacks-and-breakers) treatment as any dependency, and the fallback is simply: skip stage two and send the fused top-N.
+**Another dependency in the request path.** A reranker that is slow or down now gates every retrieval. It needs the same [breaker and fallback](/book/reliability/fallbacks-and-breakers) treatment as any dependency, and the fallback is simply: skip stage two and send the fused top-N.
 
-**A vendor sees your corpus, one query at a time.** Add it to the [subprocessor list](/docs/security/pii-and-compliance). This is the component that most often arrives without a review, because it is added to improve a metric.
+**A vendor sees your corpus, one query at a time.** Add it to the [subprocessor list](/book/security/pii-and-compliance). This is the component that most often arrives without a review, because it is added to improve a metric.
 
-**LLM-as-reranker is a different trade.** More accurate on nuanced relevance and able to follow instructions like *prefer the current version*, and slower, more expensive per candidate, and [nondeterministic](/docs/foundations/nondeterminism), so the same candidate set can order differently across runs. Reasonable for a small candidate set on a high-value path; not a default.
+**LLM-as-reranker is a different trade.** More accurate on nuanced relevance and able to follow instructions like *prefer the current version*, and slower, more expensive per candidate, and [nondeterministic](/book/foundations/nondeterminism), so the same candidate set can order differently across runs. Reasonable for a small candidate set on a high-value path; not a default.
 
 ## When not to use it
 
-**When recall is the actual problem.** If the correct chunk is not in the top 50, reranking is the wrong stage entirely. Fix [chunking](/docs/retrieval/chunking), [fusion](/docs/patterns/retrieval/hybrid-fusion), or the corpus.
+**When recall is the actual problem.** If the correct chunk is not in the top 50, reranking is the wrong stage entirely. Fix [chunking](/book/retrieval/chunking), [fusion](/book/patterns/retrieval/hybrid-fusion), or the corpus.
 
 **When the corpus is small.** With a few hundred chunks, retrieve more and let the model read them. Two stages over a tiny index is infrastructure for a problem you do not have.
 
@@ -158,18 +158,18 @@ Recording both `candidates` and `kept` is what makes the pipeline debuggable lat
 
 **When latency is the binding constraint.** Sub-second interactive paths may not have two hundred milliseconds to spend. Consider reranking only when the first-stage scores are ambiguous: a cheap heuristic that skips the second stage on confident retrievals.
 
-**When you have no retrieval evals.** Without recall@k and nDCG you cannot tell whether the reranker helped, and you will not be able to justify keeping it or removing it. [Measure first](/docs/retrieval/retrieval-evals).
+**When you have no retrieval evals.** Without recall@k and nDCG you cannot tell whether the reranker helped, and you will not be able to justify keeping it or removing it. [Measure first](/book/retrieval/retrieval-evals).
 
 <Aside type="note" title="The shape recurs, which is why it is worth internalizing">
-Retrieve wide and cheap, then cut narrow and expensive. The same structure appears when [rescoring quantized vectors](/docs/retrieval/ann-indexes), when [selecting context](/docs/context/dynamic-selection), and, in a different register, in the [model cascade](/docs/patterns/cost/model-cascade), where a cheap model handles the easy cases and an expensive one handles what survives.
+Retrieve wide and cheap, then cut narrow and expensive. The same structure appears when [rescoring quantized vectors](/book/retrieval/ann-indexes), when [selecting context](/book/context/dynamic-selection), and, in a different register, in the [model cascade](/book/patterns/cost/model-cascade), where a cheap model handles the easy cases and an expensive one handles what survives.
 
 It keeps recurring because recall and precision want opposite settings of the same knob, and the only way to have both is to want them at different stages. Whenever you find yourself tuning one parameter to satisfy two conflicting objectives, that is the signal to split the stage.
 </Aside>
 
 ## Related
 
-- [Hybrid Fusion](/docs/patterns/retrieval/hybrid-fusion): produces the candidate list this stage rescores
-- [Query Rewriting](/docs/patterns/retrieval/query-rewriting): the resolved query is what the reranker should score against
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): why the predicates must run before the reranker sees anything
-- [Model Cascade](/docs/patterns/cost/model-cascade): the same cheap-then-expensive shape applied to generation
-- [Hybrid and Reranking](/docs/retrieval/hybrid-and-reranking): the chapter, including why a cross-encoder cannot be an index
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): produces the candidate list this stage rescores
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): the resolved query is what the reranker should score against
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): why the predicates must run before the reranker sees anything
+- [Model Cascade](/book/patterns/cost/model-cascade): the same cheap-then-expensive shape applied to generation
+- [Hybrid and Reranking](/book/retrieval/hybrid-and-reranking): the chapter, including why a cross-encoder cannot be an index

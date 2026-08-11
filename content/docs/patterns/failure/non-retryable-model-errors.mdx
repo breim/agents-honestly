@@ -9,7 +9,7 @@ A run at turn nineteen sends a prompt that is 214,813 tokens against a 200,000-t
 
 The retry policy sees a failed call and retries. The same oversized prompt fails identically. It retries again. Three attempts, three rejections, three charges for a request the provider never processed, and eleven seconds of latency spent learning something that was knowable before the first call.
 
-The same code path treats a content refusal identically: the model declined, the retry sends the same request, it declines again. And the third attempt is worse than a waste, because a system that retries refusals is a system that will eventually get one to pass, which means the retry loop is now [searching for a way around a control](/docs/security/prompt-injection).
+The same code path treats a content refusal identically: the model declined, the retry sends the same request, it declines again. And the third attempt is worse than a waste, because a system that retries refusals is a system that will eventually get one to pass, which means the retry loop is now [searching for a way around a control](/book/security/prompt-injection).
 
 One `catch` block, three completely different failures, one wrong response to all of them.
 
@@ -57,9 +57,9 @@ Four rules:
 
 **Classify at the adapter, with your own stable codes.** The code that made the call knows what it called and what the protocol meant. Assign a code you own: `context_too_long`, `refused`, `bad_arguments`, so metrics, alerts, and the retry policy key on something that survives a vendor rewording their message.
 
-**Declare non-retryable types to the retry machinery.** Do not rely on a `catch` deciding correctly every time. [Activity retry policies take an explicit list](/docs/patterns/durability/tool-as-activity); the SDK then stops on the first attempt instead of looping.
+**Declare non-retryable types to the retry machinery.** Do not rely on a `catch` deciding correctly every time. [Activity retry policies take an explicit list](/book/patterns/durability/tool-as-activity); the SDK then stops on the first attempt instead of looping.
 
-**Split "permanent" into yours and the model's.** `context_too_long` is your bug and the recovery is [compaction](/docs/patterns/context/context-compaction). `account 9917 not found` is the model's mistake and the recovery is [returning the error as an instruction](/docs/tools/errors-as-instructions). A transport retry there produces three identical failures before the model ever sees one.
+**Split "permanent" into yours and the model's.** `context_too_long` is your bug and the recovery is [compaction](/book/patterns/context/context-compaction). `account 9917 not found` is the model's mistake and the recovery is [returning the error as an instruction](/book/tools/errors-as-instructions). A transport retry there produces three identical failures before the model ever sees one.
 
 **Never retry a refusal.** Route it to a human. A rephrase-and-retry loop is a workaround for a control, and if the refusal was correct you have built the thing that eventually defeats it.
 
@@ -155,11 +155,11 @@ MODEL_RETRY = RetryPolicy(
 
 **Misclassification is costly in both directions.** Marking a transient error non-retryable fails runs that would have succeeded on attempt two; marking a permanent one retryable burns money on guaranteed failures. The asymmetry favours caution on the retryable side. A run that fails and escalates is recoverable, a loop that spends a hundred dollars is not.
 
-**Vendor error shapes drift.** New codes appear, messages change, and a classifier tuned to one provider is wrong for the [fallback](/docs/patterns/failure/fallback-model-ladder). Keep one classifier per provider and treat an unclassified error as *permanent*. Failing closed is cheaper than looping.
+**Vendor error shapes drift.** New codes appear, messages change, and a classifier tuned to one provider is wrong for the [fallback](/book/patterns/failure/fallback-model-ladder). Keep one classifier per provider and treat an unclassified error as *permanent*. Failing closed is cheaper than looping.
 
 **`bad_request` hides two things.** It is usually your serialization bug, occasionally something the model produced. Log the body, alert on the rate, and split the code once you can tell them apart. Otherwise a real regression looks like normal noise.
 
-**The model-fixable class is not a retry at all.** It belongs in the [dispatcher](/docs/capstone/building-it), returning a result rather than raising. Putting it in the retry policy is a category error that costs three round trips.
+**The model-fixable class is not a retry at all.** It belongs in the [dispatcher](/book/capstone/building-it), returning a result rather than raising. Putting it in the retry policy is a category error that costs three round trips.
 
 ## When not to use it
 
@@ -167,7 +167,7 @@ MODEL_RETRY = RetryPolicy(
 
 **When the SDK already classifies faithfully.** Some clients distinguish these correctly. Verify rather than assume. Check what it does with a context-length error specifically, because that is the one most often folded into a generic `400`.
 
-**As a substitute for preventing the error.** `context_too_long` should mostly not happen: [trigger compaction on a threshold](/docs/patterns/context/rolling-summary) rather than discovering the ceiling by hitting it. Classification is the safety net, not the design.
+**As a substitute for preventing the error.** `context_too_long` should mostly not happen: [trigger compaction on a threshold](/book/patterns/context/rolling-summary) rather than discovering the ceiling by hitting it. Classification is the safety net, not the design.
 
 <Aside type="caution" title="The refusal loop is a security bug wearing a reliability costume">
 Of the four classes, the refusal is the one where a wrong retry policy stops being expensive and starts being dangerous.
@@ -176,13 +176,13 @@ Retrying a refusal means sending a slightly different request until one is accep
 
 Two consequences. If the refusal was correct, you have built the loop that eventually defeats it. If it was wrong, you have hidden a product problem behind a retry instead of fixing the prompt or the routing.
 
-Either way the right response is the same: [escalate](/docs/patterns/control/escalation-ladder), record the refusal with the request, and let a person look at the pattern. A rising refusal rate is [a drift signal](/docs/observability/drift) worth reading, and a retry loop erases it.
+Either way the right response is the same: [escalate](/book/patterns/control/escalation-ladder), record the refusal with the request, and let a person look at the pattern. A rising refusal rate is [a drift signal](/book/observability/drift) worth reading, and a retry loop erases it.
 </Aside>
 
 ## Related
 
-- [An Error Taxonomy for Agents](/docs/reliability/error-taxonomy): the five classes, and the fifth one that never raises
-- [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries): what to do with the errors that *are* retryable
-- [Tool as Activity](/docs/patterns/durability/tool-as-activity): where the non-retryable list is declared
-- [Errors as Instructions](/docs/tools/errors-as-instructions): the model-fixable class, written for its actual consumer
-- [Fallback Model Ladder](/docs/patterns/failure/fallback-model-ladder): why only transient failures may fall back
+- [An Error Taxonomy for Agents](/book/reliability/error-taxonomy): the five classes, and the fifth one that never raises
+- [Fast and Slow Retries](/book/patterns/failure/fast-slow-retries): what to do with the errors that *are* retryable
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): where the non-retryable list is declared
+- [Errors as Instructions](/book/tools/errors-as-instructions): the model-fixable class, written for its actual consumer
+- [Fallback Model Ladder](/book/patterns/failure/fallback-model-ladder): why only transient failures may fall back

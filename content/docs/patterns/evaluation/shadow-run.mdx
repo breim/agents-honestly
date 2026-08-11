@@ -5,11 +5,11 @@ description: "Run the new version against live traffic without showing anyone th
 
 ## Problem
 
-A prompt change passes the [golden set](/docs/patterns/evaluation/golden-set). Two hundred and fifty curated cases, all green.
+A prompt change passes the [golden set](/book/patterns/evaluation/golden-set). Two hundred and fifty curated cases, all green.
 
 That is a real signal and a narrow one. The fixtures were written by your team, from tickets someone chose, at a moment that has passed. Real traffic contains phrasings nobody anticipated, attachment shapes nobody curated, and a distribution that has drifted since the set was built. A change can be better on all 250 and worse on the eleven percent of live tickets that arrive as forwarded email threads.
 
-The obvious next step is [a canary](/docs/patterns/evaluation/canary-eval), but that exposes real customers to an unvalidated version. Between "tested on fixtures" and "serving customers" there is a gap, and for a change with any risk you want something in it.
+The obvious next step is [a canary](/book/patterns/evaluation/canary-eval), but that exposes real customers to an unvalidated version. Between "tested on fixtures" and "serving customers" there is a gap, and for a change with any risk you want something in it.
 
 ## Forces
 
@@ -54,7 +54,7 @@ Four rules:
 
 **Stub every write in shadow execution.** The candidate must not issue credits, send replies, or mutate state. Route its class ④–⑤ calls to a counter that records what it *would* have done, which is also the most interesting output, because a candidate proposing a different action is exactly what you want to see before it serves anyone.
 
-**Know which variant answers your question.** Replay is valid only while the prompt, the model, and its sampling parameters are unchanged: the recorded responses were generated for a different question, or by a different answerer, so replaying them past that line produces results that look valid and mean nothing. [Detect both kinds of divergence](/docs/observability/replay-debugging) and fail loudly rather than reporting a number: a model swap moves no prompt text, so comparing prompts alone will not catch it.
+**Know which variant answers your question.** Replay is valid only while the prompt, the model, and its sampling parameters are unchanged: the recorded responses were generated for a different question, or by a different answerer, so replaying them past that line produces results that look valid and mean nothing. [Detect both kinds of divergence](/book/observability/replay-debugging) and fail loudly rather than reporting a number: a model swap moves no prompt text, so comparing prompts alone will not catch it.
 
 **Sample, and stratify.** Shadow execution doubles tokens, so 1–2% of traffic is plenty, but sample across routes and tenants rather than uniformly, or the rare path you were worried about contributes four runs.
 
@@ -161,13 +161,13 @@ async def _run_shadow(req, ctx, bundle, stable) -> None:
 
 **Stubbing has to be complete and it is easy to get wrong.** A single unstubbed write in the candidate path means the shadow issued a real credit. Enforce it structurally: the shadow context gets a dispatcher that *cannot* execute class ④–⑤, rather than a flag every tool remembers to check.
 
-**Replay goes stale the moment the prompt or the model moves.** This is the limit that surprises people: the cheap, deterministic, free variant covers dispatcher, policy, and post-retrieval changes and cannot cover the two changes you most want to test. [Divergence detection](/docs/observability/replay-debugging) is what stops it silently answering the wrong question.
+**Replay goes stale the moment the prompt or the model moves.** This is the limit that surprises people: the cheap, deterministic, free variant covers dispatcher, policy, and post-retrieval changes and cannot cover the two changes you most want to test. [Divergence detection](/book/observability/replay-debugging) is what stops it silently answering the wrong question.
 
 **Diffs need triage.** A thousand shadow runs produce hundreds of small differences, most of them noise from nondeterminism. Group by decision type, look at outcome flips first, and expect that reading them is a person's afternoon rather than a dashboard.
 
 ## When not to use it
 
-**For a pure refactor, use replay alone.** The expected diff is zero, no model calls are needed, and it costs nothing. [The zero-diff assertion](/docs/observability/replay-debugging) is a stronger check than any sampled comparison.
+**For a pure refactor, use replay alone.** The expected diff is zero, no model calls are needed, and it costs nothing. [The zero-diff assertion](/book/observability/replay-debugging) is a stronger check than any sampled comparison.
 
 **When the change is low-risk and the golden set covers it.** A tightened tool description with clean fixtures does not need a shadow phase. Reserve it for changes whose blast radius justifies the setup.
 
@@ -176,7 +176,7 @@ async def _run_shadow(req, ctx, bundle, stable) -> None:
 **When traffic is too low to be representative.** Ten shadow runs a day is anecdote. Below a useful sample, go straight from fixtures to a small canary with tight gates.
 
 <Aside type="note" title="The gap this fills is the one where confidence actually comes from">
-The rungs are: [fixtures](/docs/patterns/evaluation/golden-set), replay, shadow execution, [canary](/docs/patterns/evaluation/canary-eval), full. Each one trades exposure for realism.
+The rungs are: [fixtures](/book/patterns/evaluation/golden-set), replay, shadow execution, [canary](/book/patterns/evaluation/canary-eval), full. Each one trades exposure for realism.
 
 Fixtures have no exposure and no realism: your distribution, your phrasings, your moment. A canary has full realism and real exposure. Shadow execution is the only rung with **real traffic and zero exposure**, which makes it the only place you can be wrong about a prompt change for free.
 
@@ -187,8 +187,8 @@ That is a materially better basis for a rollout decision than a fixture pass rat
 
 ## Related
 
-- [Canary Eval](/docs/patterns/evaluation/canary-eval): the next rung, where real customers are served
-- [Golden Set](/docs/patterns/evaluation/golden-set): the rung below, with no exposure and no realism
-- [Replay-Driven Debugging](/docs/observability/replay-debugging): the replay variant, and why divergence detection matters
-- [Rollout and In-Flight Migration](/docs/production/rollout): the full ladder and the blast-radius gating
-- [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion): the decision fields worth diffing
+- [Canary Eval](/book/patterns/evaluation/canary-eval): the next rung, where real customers are served
+- [Golden Set](/book/patterns/evaluation/golden-set): the rung below, with no exposure and no realism
+- [Replay-Driven Debugging](/book/observability/replay-debugging): the replay variant, and why divergence detection matters
+- [Rollout and In-Flight Migration](/book/production/rollout): the full ladder and the blast-radius gating
+- [Trajectory Assertion](/book/patterns/evaluation/trajectory-assertion): the decision fields worth diffing

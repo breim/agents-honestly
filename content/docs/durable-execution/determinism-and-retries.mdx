@@ -3,7 +3,7 @@ title: "Determinism, Retries, and Timers"
 description: "The rules that make replay work, and the retry policies you will actually configure."
 ---
 
-[The previous chapter](/docs/durable-execution/temporal-in-forty-minutes) gave you the nouns. This one gives you the constraints and the knobs, the two things that decide whether a durable system behaves well in production, and the one gotcha that makes a broken workflow look stuck rather than failed.
+[The previous chapter](/book/durable-execution/temporal-in-forty-minutes) gave you the nouns. This one gives you the constraints and the knobs, the two things that decide whether a durable system behaves well in production, and the one gotcha that makes a broken workflow look stuck rather than failed.
 
 Still no AI in sight.
 
@@ -115,7 +115,7 @@ The policy fields are few:
 | `maximumAttempts` | Give up after N | 0 (unlimited) or a small number |
 | `nonRetryableErrorTypes` | Error types that skip retrying entirely | **The one you will actually set** |
 
-Three of those four timing defaults are reasonable and most teams leave them alone. `maximumAttempts` is the one to look at, because **it defaults to unlimited**. An activity that fails the same way forever retries forever, and the execution's status reads `RUNNING` the entire time. That is [the failure this book says survives to month six](/docs/durable-execution/everything-that-breaks), arriving as a default rather than as a bug. It is a defensible default for a platform whose job is to eventually succeed, and it is not one to inherit without deciding.
+Three of those four timing defaults are reasonable and most teams leave them alone. `maximumAttempts` is the one to look at, because **it defaults to unlimited**. An activity that fails the same way forever retries forever, and the execution's status reads `RUNNING` the entire time. That is [the failure this book says survives to month six](/book/durable-execution/everything-that-breaks), arriving as a default rather than as a bug. It is a defensible default for a platform whose job is to eventually succeed, and it is not one to inherit without deciding.
 
 The last field is where the engineering is, because retrying is only correct for a subset of failures:
 
@@ -123,7 +123,7 @@ The last field is where the engineering is, because retrying is only correct for
 
 A 429 or a connection reset should back off and try again. "Credit limit exceeded," "account not found," and "invalid parameter" will fail identically on every attempt. Retrying them burns the retry budget, delays the real outcome, and in the worst case masks a bug behind an eventual timeout.
 
-That is the same distinction [errors-as-instructions](/docs/tools/errors-as-instructions) drew for a model deciding what to do next. Here the consumer is a retry policy rather than a model, and it needs the same information: **can trying again possibly help?**
+That is the same distinction [errors-as-instructions](/book/tools/errors-as-instructions) drew for a model deciding what to do next. Here the consumer is a retry policy rather than a model, and it needs the same information: **can trying again possibly help?**
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -205,11 +205,11 @@ Pick by asking whether it is acceptable for an execution that started last Tuesd
 
 The refund workflow, configured: thirty seconds start-to-close on each activity, ten minutes schedule-to-close on `issueCredit` because a refund that has not settled in ten minutes is a human's problem, `CreditLimitExceeded` and `AccountNotFound` listed as non-retryable, no heartbeat because nothing here runs long enough to need one, and no schedule-to-start because the answer to a deep queue is another worker.
 
-Still a plain program. The step that makes it an agent is [Part XI](/docs/durability/agent-as-workflow): one activity whose output is not a function of its input, and which therefore must sit on the activity side of every rule in this chapter.
+Still a plain program. The step that makes it an agent is [Part XI](/book/durability/agent-as-workflow): one activity whose output is not a function of its input, and which therefore must sit on the activity side of every rule in this chapter.
 
 ---
 
-Next: [Signals, Updates, and Child Workflows](/docs/durable-execution/signals-and-children), getting data into a running workflow, getting answers out, and decomposing the big ones.
+Next: [Signals, Updates, and Child Workflows](/book/durable-execution/signals-and-children), getting data into a running workflow, getting answers out, and decomposing the big ones.
 
 ## Takeaways
 

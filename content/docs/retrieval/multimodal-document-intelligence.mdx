@@ -147,7 +147,7 @@ Use three levels deliberately:
 | Detected regions plus labels | Locate objects, text, and sections |
 | Original pixels passed to a multimodal model | Inspect the visual evidence for this question |
 
-Do not send the original image on every query because it exists. Retrieve by caption and metadata first, then load pixels on demand when the question depends on them. This is [dynamic context selection](/docs/context/dynamic-selection) applied to media.
+Do not send the original image on every query because it exists. Retrieve by caption and metadata first, then load pixels on demand when the question depends on them. This is [dynamic context selection](/book/context/dynamic-selection) applied to media.
 
 The result should distinguish observation from inference:
 
@@ -178,7 +178,7 @@ Chunk on semantic and speaker boundaries, then include a small overlap in time. 
 
 A joint image-text embedding lets a text query retrieve a visually similar image. It does not replace metadata, OCR, or direct inspection.
 
-Use it when the query is genuinely visual: "show pallets damaged like this one" or "find diagrams with this connector layout." Use OCR plus lexical search for serial numbers. Use structured fields for dates and account IDs. The routing table from [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live) still applies inside a single image.
+Use it when the query is genuinely visual: "show pallets damaged like this one" or "find diagrams with this connector layout." Use OCR plus lexical search for serial numbers. Use structured fields for dates and account IDs. The routing table from [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live) still applies inside a single image.
 
 Version multimodal embeddings exactly as text embeddings. A model change means a new index, a measured migration, and a rollback path.
 
@@ -206,7 +206,7 @@ Pixels, metadata, filenames, QR codes, captions, and transcripts are untrusted i
 
 Keep trust labels on every derived unit and propagate them into retrieval. Never concatenate extracted text into instructions. Never let a high-confidence OCR score raise the authority of the source. Confidence says the parser likely read the bytes correctly; it says nothing about whether the bytes were honest.
 
-The attack path and defenses are covered in [Prompt Injection](/docs/security/prompt-injection) and [Adversarial Evals](/docs/security/adversarial-evals). The ingestion requirement is simple: derivation may change format, never trust.
+The attack path and defenses are covered in [Prompt Injection](/book/security/prompt-injection) and [Adversarial Evals](/book/security/adversarial-evals). The ingestion requirement is simple: derivation may change format, never trust.
 
 <FrameworkCheck decision="Keep extraction as a deterministic, versioned pipeline. Use model calls for hard pages inside Activities, and keep the agent out of the ingestion control flow.">
 <FrameworkOption name="plain">
@@ -234,7 +234,7 @@ Every chunk carries document, version, page, region, extractor version, tenant, 
 
 ---
 
-Next: [Evaluating Retrieval](/docs/retrieval/retrieval-evals), covering recall, precision, evidence fidelity, and whether the answer survived the trip from source to context.
+Next: [Evaluating Retrieval](/book/retrieval/retrieval-evals), covering recall, precision, evidence fidelity, and whether the answer survived the trip from source to context.
 
 ## Takeaways
 

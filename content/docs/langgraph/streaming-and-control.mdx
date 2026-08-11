@@ -7,7 +7,7 @@ Two features that look unrelated and belong in one chapter, because each is near
 
 ## Streaming matters more for agents than for chat
 
-From [Part I](/docs/foundations/tokens): output length dominates latency, and decode is sequential. For a single chat completion that means a few seconds before the first token.
+From [Part I](/book/foundations/tokens): output length dominates latency, and decode is sequential. For a single chat completion that means a few seconds before the first token.
 
 For an agent it compounds. A four-step Atlas run is four model calls plus tool execution, and the first user-visible word arrives after all of it. Twenty to forty seconds of nothing is not a slow interface; it's an interface a user assumes is broken.
 
@@ -33,7 +33,7 @@ They combine. You can subscribe to several at once, and a real UI usually wants 
 The one to be careful with is `values`.
 
 <Aside type="caution" title="`values` streams your whole state, every superstep">
-It dumps the complete state after each node. If you ignored [the last-chapter rule](/docs/langgraph/reducers-and-state) about keeping blobs out of state, that means the full content of every retrieved document, every tool payload, and every file, repeatedly, into your logs and across your network.
+It dumps the complete state after each node. If you ignored [the last-chapter rule](/book/langgraph/reducers-and-state) about keeping blobs out of state, that means the full content of every retrieved document, every tool payload, and every file, repeatedly, into your logs and across your network.
 
 Prefer `updates` in production. Use `values` when debugging, deliberately, and notice that if `values` is expensive for you, that's your state schema telling you something.
 </Aside>
@@ -44,15 +44,15 @@ Streaming through subgraphs needs an explicit opt-in. By default the parent aggr
 
 The half that gets skipped, and where the incidents are.
 
-**Raw tool results.** They contain internals and IDs. The real risk is data that passed an [authorization filter](/docs/retrieval/metadata-and-authorization) into the agent's context but was never meant for the user's screen. The agent seeing a record and the user seeing a record are different permissions. Stream a summary you generated deliberately, not the payload.
+**Raw tool results.** They contain internals and IDs. The real risk is data that passed an [authorization filter](/book/retrieval/metadata-and-authorization) into the agent's context but was never meant for the user's screen. The agent seeing a record and the user seeing a record are different permissions. Stream a summary you generated deliberately, not the payload.
 
-**Intermediate conclusions that may be revised.** This is the sharp one. Recall the [poisoning example](/docs/context/context-poisoning): Atlas computes a credit of $540 at step four, and a later check corrects it to $180.
+**Intermediate conclusions that may be revised.** This is the sharp one. Recall the [poisoning example](/book/context/context-poisoning): Atlas computes a credit of $540 at step four, and a later check corrects it to $180.
 
 In a non-streamed system that correction is invisible. The user sees $180. Streamed, the user watched $540 appear on their screen. You cannot unsay it. Even if the final message is right, the customer has now seen a number they will quote back to you.
 
 > **Streaming converts every intermediate state into a commitment.** Anything you stream, you have said.
 
-So: stream *progress* freely, stream *prose* once it's final, and never stream a number, decision, or promise that a later node can overturn. The [verification loop](/docs/workflows/evaluator-optimizer) runs before the compose output reaches a human, not after. That ordering is a streaming design decision as much as a workflow one.
+So: stream *progress* freely, stream *prose* once it's final, and never stream a number, decision, or promise that a later node can overturn. The [verification loop](/book/workflows/evaluator-optimizer) runs before the compose output reaches a human, not after. That ordering is a streaming design decision as much as a workflow one.
 
 **Reasoning, by default.** Visible deliberation is compelling in a demo and creates support tickets in production, because the model explores options it then rejects. "I could issue a full refund here" is a sentence a customer will screenshot.
 
@@ -60,11 +60,11 @@ So: stream *progress* freely, stream *prose* once it's final, and never stream a
 
 Two distinct operations, and conflating them causes surprises.
 
-**Interrupt** stops at a safe boundary and keeps the state. The run is paused, resumable, and everything completed stays completed. This is the same mechanism as [human-in-the-loop](/docs/langgraph/persistence) pausing, invoked from outside.
+**Interrupt** stops at a safe boundary and keeps the state. The run is paused, resumable, and everything completed stays completed. This is the same mechanism as [human-in-the-loop](/book/langgraph/persistence) pausing, invoked from outside.
 
 **Rollback** discards work back to a prior checkpoint. The run isn't paused, it's rewound.
 
-The distinction matters most where it always matters in this book: **side effects don't roll back.** Rewinding graph state to before the `issue_credit` node does not un-issue the credit. The state machine forgets; the payments provider does not. Rollback is safe for pure work and dangerous for anything that touched the world. If that sounds like the [node-replay hazard](/docs/langgraph/persistence) from last chapter, it's the same hazard from the other direction.
+The distinction matters most where it always matters in this book: **side effects don't roll back.** Rewinding graph state to before the `issue_credit` node does not un-issue the credit. The state machine forgets; the payments provider does not. Rollback is safe for pure work and dangerous for anything that touched the world. If that sounds like the [node-replay hazard](/book/langgraph/persistence) from last chapter, it's the same hazard from the other direction.
 
 Cancellation also has a granularity limit worth knowing: the in-flight node either finishes or dies mid-execution, and neither is free. A node that was halfway through a three-call sequence leaves the world in a state your graph has no record of. Which is, once again, the argument for **one effect per node**.
 
@@ -88,7 +88,7 @@ Bounds on an autonomous loop come in three layers, and each catches what the one
 
 </Figure>
 
-The layering is the design. Layer ① produces a `halted` [outcome](/docs/first-agent/the-loop-by-hand) that routes to a human, a *result*. Layers ② and ③ produce errors, and **an error from those is a bug report about layer ①**, not a capacity issue. If your recursion limit fires regularly, your edge function is wrong; raising the limit is treating the alarm.
+The layering is the design. Layer ① produces a `halted` [outcome](/book/first-agent/the-loop-by-hand) that routes to a human, a *result*. Layers ② and ③ produce errors, and **an error from those is a bug report about layer ①**, not a capacity issue. If your recursion limit fires regularly, your edge function is wrong; raising the limit is treating the alarm.
 
 Layer ③ needs one thing the others don't: something outside the run has to be watching. A budget guard that lives inside the node it's guarding doesn't fire when the node hangs.
 
@@ -118,7 +118,7 @@ Note the split: the *operator* gets full visibility and control; the *customer* 
 
 ---
 
-Next: [Graph Topologies](/docs/langgraph/graph-topologies). Pipeline, router, loop, fan-out/fan-in, supervisor, human gate, subgraph: the shapes and what each one costs.
+Next: [Graph Topologies](/book/langgraph/graph-topologies). Pipeline, router, loop, fan-out/fan-in, supervisor, human gate, subgraph: the shapes and what each one costs.
 
 ## Takeaways
 

@@ -14,7 +14,7 @@ What happens instead is documented and unsurprising. One reported reviewer had a
 So the approval gate you built for safety has quietly become a rubber stamp, and the system is now *less* safe than one with no gate at all, because everyone believes there is oversight.
 
 <Aside type="caution" title="Approval fatigue is a documented attack, not just a UX problem">
-OWASP's agentic threat guidance classifies **"Overwhelming HITL"** as a deliberate attack vector: flood the reviewer with low-risk requests until rubber-stamping is the established habit, then place the action you actually want inside the stream. It carries a number in both of their agentic lists: **T10** in the threat taxonomy, and **ASI09, Human-Agent Trust Exploitation**, in [the Top 10 the threat-model chapter uses as a coverage check](/docs/security/threat-model). Which is worth knowing when someone asks whether an approval queue is a security control or a UX detail.
+OWASP's agentic threat guidance classifies **"Overwhelming HITL"** as a deliberate attack vector: flood the reviewer with low-risk requests until rubber-stamping is the established habit, then place the action you actually want inside the stream. It carries a number in both of their agentic lists: **T10** in the threat taxonomy, and **ASI09, Human-Agent Trust Exploitation**, in [the Top 10 the threat-model chapter uses as a coverage check](/book/security/threat-model). Which is worth knowing when someone asks whether an approval queue is a security control or a UX detail.
 
 That reframes everything in this chapter. An approval request is not free and not neutral. It is a **withdrawal from a finite account that an adversary can also draw against.** Asking for approval too often does not merely annoy people; it disables the control.
 </Aside>
@@ -25,7 +25,7 @@ The tiers exist to ration that. They are a budget allocation, not a taxonomy.
 
 ## Two axes, because one is not enough
 
-[Part VIII classified tools by reversibility](/docs/tools/read-and-write-tools): pure read, observed read, reversible write, irreversible write, external write. That classification is correct and insufficient here, because it is a property of the **tool** and risk is a property of the **call**.
+[Part VIII classified tools by reversibility](/book/tools/read-and-write-tools): pure read, observed read, reversible write, irreversible write, external write. That classification is correct and insufficient here, because it is a property of the **tool** and risk is a property of the **call**.
 
 `issue_credit` is one tool. Refunding $5 and refunding $500,000 are not one risk.
 
@@ -64,7 +64,7 @@ The other half of the mistake is treating approval as a boolean. There are four 
 
 Most systems only implement the first and third, which forces every judgement into "trust it completely" or "stop and wait." **Asynchronous notification is the pressure valve.** It gives a human the ability to notice and intervene without making the agent wait, and it is where a large share of moderate-risk actions belong.
 
-The fourth is [dual control](/docs/patterns/security/dual-control), and it exists for the same reason it exists in banking: some actions should not be within one person's power, including the power of one person who has been socially engineered.
+The fourth is [dual control](/book/patterns/security/dual-control), and it exists for the same reason it exists in banking: some actions should not be within one person's power, including the power of one person who has been socially engineered.
 
 ## The policy writes itself
 
@@ -120,7 +120,7 @@ def posture_for(tool: ToolSpec, args: dict) -> str:
 
 Two properties of that code matter more than its brevity.
 
-**It is not a prompt.** The model does not decide whether something needs approval, and cannot be persuaded that this particular refund is fine. This is [the invariant/request distinction](/docs/first-agent/the-problem) at the policy layer.
+**It is not a prompt.** The model does not decide whether something needs approval, and cannot be persuaded that this particular refund is fine. This is [the invariant/request distinction](/book/first-agent/the-problem) at the policy layer.
 
 **`blastRadius` lives next to the tool, and takes the arguments.** For `issue_credit` it is a function of the amount. For `send_reply` it is a function of the recipient count. For `query_warehouse` it is always zero. Making it a method rather than a constant is what lets one tool span three tiers.
 
@@ -138,7 +138,7 @@ That is a startling constraint the first time you compute it, and it is the corr
 
 Run the arithmetic before you pick the dollar figure. If the number that feels safe generates three hundred approvals a day, either the threshold moves or you are hiring.
 
-At Meridian's own volume the same computation comes out loose. [Nine hundred tickets a week](/docs/first-agent/the-problem) is about a hundred and eighty a day, so forty considered approvals would stretch to gating more than a fifth of them. The $1,000 threshold sits far inside that ceiling and produces [twenty-odd decisions a week](/docs/human-in-the-loop/approval-gates), which means it was chosen by what the business treats as consequential, not by what the reviewers can absorb. Scale decides which of the two binds first, and the capacity ceiling is the one nobody writes down.
+At Meridian's own volume the same computation comes out loose. [Nine hundred tickets a week](/book/first-agent/the-problem) is about a hundred and eighty a day, so forty considered approvals would stretch to gating more than a fifth of them. The $1,000 threshold sits far inside that ceiling and produces [twenty-odd decisions a week](/book/human-in-the-loop/approval-gates), which means it was chosen by what the business treats as consequential, not by what the reviewers can absorb. Scale decides which of the two binds first, and the capacity ceiling is the one nobody writes down.
 
 ## Three ways to get it wrong
 
@@ -165,7 +165,7 @@ The mitigations follow from the framing: batch similar low-risk actions into one
 
 The last column is a share of tool calls, not a count. Postures are set from the share; whether a posture is *affordable* is set by volume, and the two do not answer each other, which is what makes the sixth row the interesting one.
 
-`send_reply` fires about once per ticket resolved. Atlas covers [the first two of Meridian's three categories](/docs/first-agent/the-problem), most of a hundred-and-eighty-ticket day, so approving every outgoing message is **well over a hundred approvals a day against the forty a reviewer can actually consider**, several times the budget computed two sections ago. That is the answer to *why not simply gate replies*: not that it makes Atlas useless as an autonomous support agent, though it does, but that the arithmetic was never available in the first place.
+`send_reply` fires about once per ticket resolved. Atlas covers [the first two of Meridian's three categories](/book/first-agent/the-problem), most of a hundred-and-eighty-ticket day, so approving every outgoing message is **well over a hundred approvals a day against the forty a reviewer can actually consider**, several times the budget computed two sections ago. That is the answer to *why not simply gate replies*: not that it makes Atlas useless as an autonomous support agent, though it does, but that the arithmetic was never available in the first place.
 
 The resolution is not to lower the tier. It is to **change the action's reversibility**: replies assembled from approved templates with no model-authored free text are *reversible in effect*. A wrong template send is embarrassing, a wrong free-text send is unbounded. Templated replies drop to `notify`; free-text replies stay at `approve`.
 
@@ -177,7 +177,7 @@ That is the move worth taking from this chapter. When an action lands in a tier 
 
 ---
 
-Next: [Approval Gates](/docs/human-in-the-loop/approval-gates), blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
+Next: [Approval Gates](/book/human-in-the-loop/approval-gates), blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
 
 ## Takeaways
 

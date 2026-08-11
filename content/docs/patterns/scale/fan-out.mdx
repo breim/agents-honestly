@@ -7,7 +7,7 @@ description: "One child workflow per item, with controlled parallelism."
 
 A quarterly review needs every ticket from the last three months classified, summarized, and checked against the current policy. Four thousand items, each needing a model call, each independent of the others.
 
-The sequential version takes forty minutes and [loses everything to a redeploy](/docs/patterns/durability/resumable-activity). The naive parallel version, starting four thousand concurrent calls, hits the provider's rate limit in the first second, produces a wall of `429`s, triggers [retry amplification](/docs/reliability/timeouts-and-retries), and takes down the interactive agent that shares the quota.
+The sequential version takes forty minutes and [loses everything to a redeploy](/book/patterns/durability/resumable-activity). The naive parallel version, starting four thousand concurrent calls, hits the provider's rate limit in the first second, produces a wall of `429`s, triggers [retry amplification](/book/reliability/timeouts-and-retries), and takes down the interactive agent that shares the quota.
 
 Between those is a large, unglamorous middle: run many at once, but not all at once, with failures isolated per item and progress that survives a worker dying.
 
@@ -17,7 +17,7 @@ Between those is a large, unglamorous middle: run many at once, but not all at o
 - **Parallelism is the whole point**: latency drops from sum to max.
 - **Provider quota is finite and shared** with traffic that has users waiting.
 - **One poisoned item must not fail the batch.** Item 3,112 having malformed data is not a reason to lose 3,999 results.
-- **The parent has limits too**: a workflow tracking four thousand children accumulates [history](/docs/patterns/durability/continue-as-new-memory).
+- **The parent has limits too**: a workflow tracking four thousand children accumulates [history](/book/patterns/durability/continue-as-new-memory).
 - **Results have to be collected**, and four thousand payloads through the parent is its own problem.
 
 ## Solution
@@ -50,13 +50,13 @@ Between those is a large, unglamorous middle: run many at once, but not all at o
 
 Four rules:
 
-**Bound concurrency from the token budget, not from a thread count.** The binding constraint is [input tokens per minute](/docs/reliability/backpressure), not CPU. Compute the window as available TPM divided by tokens per item per minute, and expect a number in the tens rather than the thousands.
+**Bound concurrency from the token budget, not from a thread count.** The binding constraint is [input tokens per minute](/book/reliability/backpressure), not CPU. Compute the window as available TPM divided by tokens per item per minute, and expect a number in the tens rather than the thousands.
 
-**Isolate failures per item.** A child that fails records its failure and the batch continues. Fail the *batch* only on a systemic signal: a [breaker opening](/docs/reliability/fallbacks-and-breakers), an auth error, a failure rate above a threshold, because those mean the next 3,000 items will fail too.
+**Isolate failures per item.** A child that fails records its failure and the batch continues. Fail the *batch* only on a systemic signal: a [breaker opening](/book/reliability/fallbacks-and-breakers), an auth error, a failure rate above a threshold, because those mean the next 3,000 items will fail too.
 
-**Return references, not payloads.** Each child writes its result to object storage and returns a key. Four thousand result objects through the parent's history is how a fan-out hits the [50 MB history limit](/docs/patterns/durability/continue-as-new-memory) on a job that would otherwise have been fine.
+**Return references, not payloads.** Each child writes its result to object storage and returns a key. Four thousand result objects through the parent's history is how a fan-out hits the [50 MB history limit](/book/patterns/durability/continue-as-new-memory) on a job that would otherwise have been fine.
 
-**Give the batch its own quota class.** This is bulk work with no user waiting, so it belongs on the [batch endpoint](/docs/patterns/cost/batch-api-offload) at half price and in a [priority class](/docs/patterns/scale/priority-queues) that cannot starve interactive traffic. The 2am incident where an eval job took the interactive quota is this rule not being applied.
+**Give the batch its own quota class.** This is bulk work with no user waiting, so it belongs on the [batch endpoint](/book/patterns/cost/batch-api-offload) at half price and in a [priority class](/book/patterns/scale/priority-queues) that cannot starve interactive traffic. The 2am incident where an eval job took the interactive quota is this rule not being applied.
 
 ## Code
 
@@ -164,26 +164,26 @@ The failure-rate break is the difference between a batch that isolates failures 
 
 ## When not to use it
 
-**When items are not independent.** If item 12 needs item 11's result, this is a [pipeline or a batch iterator](/docs/patterns/scale/batch-iterator), not a fan-out. Forcing parallelism onto sequential work produces subtly wrong results rather than an error.
+**When items are not independent.** If item 12 needs item 11's result, this is a [pipeline or a batch iterator](/book/patterns/scale/batch-iterator), not a fan-out. Forcing parallelism onto sequential work produces subtly wrong results rather than an error.
 
 **When the set is small.** Under a few dozen items, a loop inside one activity is simpler and the parallelism buys little.
 
-**When the set is enormous.** Beyond a few thousand children, one parent becomes the bottleneck: its history grows and its scheduling saturates. [Fan out to intermediate parents](/docs/patterns/scale/mapreduce-tree) instead.
+**When the set is enormous.** Beyond a few thousand children, one parent becomes the bottleneck: its history grows and its scheduling saturates. [Fan out to intermediate parents](/book/patterns/scale/mapreduce-tree) instead.
 
-**When work arrives continuously.** Fan-out processes a known set in waves. A steady stream wants [a sliding window](/docs/patterns/scale/sliding-window), which keeps N in flight permanently rather than draining and refilling.
+**When work arrives continuously.** Fan-out processes a known set in waves. A steady stream wants [a sliding window](/book/patterns/scale/sliding-window), which keeps N in flight permanently rather than draining and refilling.
 
 <Aside type="note" title="This is the multi-agent shape that actually works">
-[Part XIX is skeptical of multi-agent systems](/docs/multi-agent/when-not-to) and endorses exactly this. Worth being precise about why the two positions are consistent.
+[Part XIX is skeptical of multi-agent systems](/book/multi-agent/when-not-to) and endorses exactly this. Worth being precise about why the two positions are consistent.
 
 The failure modes in the empirical taxonomy: inter-agent misalignment, missing termination, ambiguous ownership. All of them require agents that *communicate*. In a fan-out the children never learn the others exist, the parent owns termination by construction, and the reduce step is code.
 
-So the coordination tax here is almost entirely the token multiplier, with the [cache](/docs/patterns/context/stable-prefix) and [batch](/docs/patterns/cost/batch-api-offload) discounts already available against it. That is a very different bill from a team of agents negotiating, and it is why *fan out over disjoint inputs* and *build a multi-agent system* should not be described with the same words.
+So the coordination tax here is almost entirely the token multiplier, with the [cache](/book/patterns/context/stable-prefix) and [batch](/book/patterns/cost/batch-api-offload) discounts already available against it. That is a very different bill from a team of agents negotiating, and it is why *fan out over disjoint inputs* and *build a multi-agent system* should not be described with the same words.
 </Aside>
 
 ## Related
 
-- [MapReduce Tree](/docs/patterns/scale/mapreduce-tree): when one parent cannot hold the fan-out
-- [Sliding Window](/docs/patterns/scale/sliding-window): continuous arrival instead of a known set
-- [Batch Iterator](/docs/patterns/scale/batch-iterator): when the items must be walked in order
-- [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure): where the window size comes from
-- [Sub-Agent Context Isolation](/docs/patterns/context/subagent-isolation): the per-item isolation, viewed from the context side
+- [MapReduce Tree](/book/patterns/scale/mapreduce-tree): when one parent cannot hold the fan-out
+- [Sliding Window](/book/patterns/scale/sliding-window): continuous arrival instead of a known set
+- [Batch Iterator](/book/patterns/scale/batch-iterator): when the items must be walked in order
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): where the window size comes from
+- [Sub-Agent Context Isolation](/book/patterns/context/subagent-isolation): the per-item isolation, viewed from the context side

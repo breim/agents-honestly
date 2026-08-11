@@ -69,7 +69,7 @@ There are two mechanisms that supply the missing hop, and they are competing imp
 
 </Figure>
 
-The agent loop you built in [Part II](/docs/first-agent/the-loop-by-hand) already does multi-hop retrieval. That's what the Acme trace was: `get_account`, then `get_open_tickets` and `get_order_volume` chosen *because* of what the first call returned. Hops made of tool calls instead of edges.
+The agent loop you built in [Part II](/book/first-agent/the-loop-by-hand) already does multi-hop retrieval. That's what the Acme trace was: `get_account`, then `get_open_tickets` and `get_order_volume` chosen *because* of what the first call returned. Hops made of tool calls instead of edges.
 
 So the honest question is: **when is a precomputed graph better than an agent doing several retrievals?**
 
@@ -79,7 +79,7 @@ So the honest question is: **when is a precomputed graph better than an agent do
 | Maintenance | None | Continuous; the graph goes stale like any index |
 | Adapts to unforeseen questions | Yes | Only within the modelled relationships |
 | Latency | N sequential model calls | One query |
-| Determinism | [Varies per run](/docs/foundations/nondeterminism) | Exact |
+| Determinism | [Varies per run](/book/foundations/nondeterminism) | Exact |
 | Whole-neighbourhood questions | Poorly; sees one hop at a time | Naturally |
 | Structural aggregates ("how many paths") | No | Yes |
 
@@ -97,9 +97,9 @@ Read the last two rows carefully, because that is where graphs genuinely win rat
 
 ## Three things that look like graph problems and aren't
 
-This is where the money gets wasted, and the book's position from the [preface](/docs/preface) is that most teams reaching for a graph are here.
+This is where the money gets wasted, and the book's position from the [preface](/book/preface) is that most teams reaching for a graph are here.
 
-**"The answer spans two chunks."** That is a [chunking](/docs/retrieval/chunking) problem. Parent/child retrieval fixes it for a fraction of the cost, and a graph will not help because the relationship you need is *contiguity in a document*, which chunking already models.
+**"The answer spans two chunks."** That is a [chunking](/book/retrieval/chunking) problem. Parent/child retrieval fixes it for a fraction of the cost, and a graph will not help because the relationship you need is *contiguity in a document*, which chunking already models.
 
 **"It needs facts from two systems."** That's two tool calls. The agent fetches the order and the account and reasons over both. You do not need an edge between them to read them both. You need the model to know both tools exist.
 
@@ -110,7 +110,7 @@ Teams budget for a graph database. The database is the cheap part.
 
 The expensive part is deciding that "Acme Industrial," "ACME Industrial Ltd," `acct_4471`, and the "Acme" in a ticket body are the same entity, reliably, at scale, as new data arrives with new spellings. Get that wrong and your graph confidently reports that two accounts are unrelated when they're the same customer, or merges two customers who aren't.
 
-[Entity resolution](/docs/graphs/entity-resolution) is the unglamorous work that decides whether the graph is usable, and it is most of the project. Budget accordingly, and be suspicious of any plan where it isn't the largest line item.
+[Entity resolution](/book/graphs/entity-resolution) is the unglamorous work that decides whether the graph is usable, and it is most of the project. Budget accordingly, and be suspicious of any plan where it isn't the largest line item.
 </Aside>
 
 ## What the evidence actually says
@@ -129,13 +129,13 @@ Given all of that, the recommendation is a sequence rather than a verdict:
 
 **1 · Start with agentic iteration.** You already have it. Give the agent well-described tools for the entities and let it walk. Nothing to build.
 
-**2 · Log the shape of what it does.** From [tracing](/docs/observability/what-a-trace-must-answer): how many hops per ticket, which sequences repeat, how often does a multi-hop investigation time out or halt. This is the measurement the decision needs.
+**2 · Log the shape of what it does.** From [tracing](/book/observability/what-a-trace-must-answer): how many hops per ticket, which sequences repeat, how often does a multi-hop investigation time out or halt. This is the measurement the decision needs.
 
 **3 · Decide from the data.** If a measurable fraction of traffic is doing four-hop walks over the same relationships, precompute those edges, because you have found a cached computation. If it's a handful of tickets a week, you have found a reason not to build anything.
 
 **4 · If you build, build narrow.** Model the entities and relationships that the traffic actually traverses, not the enterprise ontology someone drew on a whiteboard. A three-entity graph that answers the real question beats a forty-entity model that nobody can maintain.
 
-This is the same discipline as [not building an agent](/docs/foundations/when-not-to-build-an-agent), applied one layer down: take the cheapest mechanism that answers the question, and escalate only when a measurement, not an intuition, says it can't.
+This is the same discipline as [not building an agent](/book/foundations/when-not-to-build-an-agent), applied one layer down: take the cheapest mechanism that answers the question, and escalate only when a measurement, not an intuition, says it can't.
 
 ## Atlas, concretely
 
@@ -147,7 +147,7 @@ Part V is what to do when you get there: how to model the entities, how to resol
 
 ---
 
-Next: [Entities, Relations, and Ontology](/docs/graphs/modeling-entities), on deciding what a Customer is once, so five systems stop each having their own answer.
+Next: [Entities, Relations, and Ontology](/book/graphs/modeling-entities), on deciding what a Customer is once, so five systems stop each having their own answer.
 
 ## Takeaways
 

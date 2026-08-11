@@ -7,9 +7,9 @@ description: "Stop calling a dependency that is clearly down."
 
 The carrier API goes down at 14:00. Every `get_delivery_status` call now takes thirty seconds to time out.
 
-Each run makes the call, waits thirty seconds, [retries with backoff](/docs/patterns/failure/fast-slow-retries), waits again, fails, and the agent, reading a tool error in its transcript, decides to try once more. A run that would normally take twelve seconds now takes four minutes and produces nothing.
+Each run makes the call, waits thirty seconds, [retries with backoff](/book/patterns/failure/fast-slow-retries), waits again, fails, and the agent, reading a tool error in its transcript, decides to try once more. A run that would normally take twelve seconds now takes four minutes and produces nothing.
 
-Meanwhile every one of those attempts is load on a service that is trying to recover, and every one holds a worker slot and a chunk of the run's [deadline budget](/docs/patterns/control/bounded-autonomy) waiting for a timeout that is guaranteed to fire.
+Meanwhile every one of those attempts is load on a service that is trying to recover, and every one holds a worker slot and a chunk of the run's [deadline budget](/book/patterns/control/bounded-autonomy) waiting for a timeout that is guaranteed to fire.
 
 A per-call retry policy cannot fix this, because it only ever sees one call. The information that would help, *this dependency has failed the last forty times*, exists only in aggregate, and nothing is looking at it.
 
@@ -59,7 +59,7 @@ Four rules:
 
 **Probe with synthetic calls.** Half-open sends traffic into a dependency you believe is broken. When a run costs money and carries a customer's ticket, that traffic must be a throwaway health check, not the next real request.
 
-**An open breaker is a *result*, not an exception.** The agent needs to know the tool is unavailable so it can [take a fallback or escalate with what it has](/docs/patterns/control/escalation-ladder). Returning a stack trace produces a confused agent; returning *"delivery tracking is temporarily unavailable; proceed without it or escalate"* produces a useful one.
+**An open breaker is a *result*, not an exception.** The agent needs to know the tool is unavailable so it can [take a fallback or escalate with what it has](/book/patterns/control/escalation-ladder). Returning a stack trace produces a confused agent; returning *"delivery tracking is temporarily unavailable; proceed without it or escalate"* produces a useful one.
 
 ## Code
 
@@ -182,7 +182,7 @@ async def call_tool(tool, args, ctx):
 </Tab>
 </Tabs>
 
-Returning `error_for_model` rather than raising is the agent-specific part. An ordinary service breaker throws and the caller handles it; here the caller is a model, and telling it *proceed without this or escalate* is [an instruction it can act on](/docs/tools/errors-as-instructions), which frequently turns a failed run into a partial answer plus a good escalation.
+Returning `error_for_model` rather than raising is the agent-specific part. An ordinary service breaker throws and the caller handles it; here the caller is a model, and telling it *proceed without this or escalate* is [an instruction it can act on](/book/tools/errors-as-instructions), which frequently turns a failed run into a partial answer plus a good escalation.
 
 ## Trade-offs
 
@@ -198,24 +198,24 @@ Returning `error_for_model` rather than raising is the agent-specific part. An o
 
 **For a dependency with no fallback and no partial answer.** If the run simply cannot proceed without the tool, the breaker converts a slow failure into a fast one, genuinely worth something, and much less than when there is an alternative path.
 
-**When the dependency is elastic and yours.** A service that scales under load does not need you deciding it is down. Give it [backpressure](/docs/reliability/backpressure) instead.
+**When the dependency is elastic and yours.** A service that scales under load does not need you deciding it is down. Give it [backpressure](/book/reliability/backpressure) instead.
 
-**When call volume is too low to measure.** Three calls an hour cannot produce a meaningful failure rate. Use timeouts and [bounded retries](/docs/patterns/failure/fast-slow-retries) alone.
+**When call volume is too low to measure.** Three calls an hour cannot produce a meaningful failure rate. Use timeouts and [bounded retries](/book/patterns/failure/fast-slow-retries) alone.
 
-**As a substitute for a rate limiter.** A breaker reacts to failure; [a limiter prevents it](/docs/patterns/scale/downstream-rate-limiting). If you are tripping breakers on `429`s, the fix is upstream.
+**As a substitute for a rate limiter.** A breaker reacts to failure; [a limiter prevents it](/book/patterns/scale/downstream-rate-limiting). If you are tripping breakers on `429`s, the fix is upstream.
 
 <Aside type="note" title="The breaker is the only component that can see an outage">
-[The retry chapter](/docs/reliability/timeouts-and-retries) makes the arithmetic case: nested retries multiply, and ninety seconds of degradation becomes forty minutes of self-inflicted load. Jitter spreads that load; it does not reduce it. Retry budgets bound it per client. Neither one *stops* it.
+[The retry chapter](/book/reliability/timeouts-and-retries) makes the arithmetic case: nested retries multiply, and ninety seconds of degradation becomes forty minutes of self-inflicted load. Jitter spreads that load; it does not reduce it. Retry budgets bound it per client. Neither one *stops* it.
 
 The breaker is the only component with the information to decide that a dependency is not coming back, because it is the only one watching outcomes across every call and every run rather than within one. And once it opens, the load genuinely drops to zero rather than being rescheduled.
 
-Which is why [retry, jitter, and breaker](/docs/patterns/failure/fast-slow-retries) are one design rather than three patterns. Retries without a breaker amplify outages by construction. A breaker without retries makes every blip user-visible. Most systems ship the retries and discover the other half during an incident.
+Which is why [retry, jitter, and breaker](/book/patterns/failure/fast-slow-retries) are one design rather than three patterns. Retries without a breaker amplify outages by construction. A breaker without retries makes every blip user-visible. Most systems ship the retries and discover the other half during an incident.
 </Aside>
 
 ## Related
 
-- [Fast and Slow Retries](/docs/patterns/failure/fast-slow-retries): the per-call policy this bounds in aggregate
-- [Delayed Retry with Jitter](/docs/patterns/failure/delayed-retry-jitter): spreading the load the breaker eventually stops
-- [Fallback Model Ladder](/docs/patterns/failure/fallback-model-ladder): the per-rung breaker, and what an open one routes to
-- [Downstream Rate Limiting](/docs/patterns/scale/downstream-rate-limiting): preventing the failure rather than reacting to it
-- [Partial Result Return](/docs/patterns/failure/partial-result-return): what the agent does with a tool it can no longer call
+- [Fast and Slow Retries](/book/patterns/failure/fast-slow-retries): the per-call policy this bounds in aggregate
+- [Delayed Retry with Jitter](/book/patterns/failure/delayed-retry-jitter): spreading the load the breaker eventually stops
+- [Fallback Model Ladder](/book/patterns/failure/fallback-model-ladder): the per-rung breaker, and what an open one routes to
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): preventing the failure rather than reacting to it
+- [Partial Result Return](/book/patterns/failure/partial-result-return): what the agent does with a tool it can no longer call

@@ -82,7 +82,7 @@ warehouse_worker = Worker(
 </Tabs>
 
 <Aside type="note" title="This is what moves schedule-to-start latency">
-[The previous part](/docs/durable-execution/determinism-and-retries) said to monitor schedule-to-start latency as a scaling signal rather than setting a timeout on it. This chapter is the reason it moves.
+[The previous part](/book/durable-execution/determinism-and-retries) said to monitor schedule-to-start latency as a scaling signal rather than setting a timeout on it. This chapter is the reason it moves.
 
 A rate-limited queue makes tasks wait. That is its job. Schedule-to-start latency rising is the system working correctly under a quota, not a fault. Which is exactly why a schedule-to-start *timeout* on those activities would be self-defeating: it would fail the work for having been throttled.
 
@@ -116,7 +116,7 @@ Start all of them. They queue. The rate limit dispatches at the pace the provide
 
 That is simpler than a hand-rolled semaphore, and it is more correct. A semaphore in the parent only bounds *that parent's* fan-out, while the queue bounds everything.
 
-The one thing to keep is a bound on the parent's own history. Ten thousand children is ten thousand events, and [the ceiling](/docs/durability/long-lived-agents) applies to parents too. Batch the fan-out into child workflows that each start a slice, or continue-as-new between slices.
+The one thing to keep is a bound on the parent's own history. Ten thousand children is ten thousand events, and [the ceiling](/book/durability/long-lived-agents) applies to parents too. Batch the fan-out into child workflows that each start a slice, or continue-as-new between slices.
 
 ## Priority: not all work is equal
 
@@ -182,9 +182,9 @@ Without this, one customer bulk-importing five thousand tickets delays every oth
 
 ## The production cluster, briefly
 
-[Setup](/docs/setup) pointed here with a warning worth repeating: `temporal server start-dev` is one process over SQLite. A production deployment is a cluster: frontend, history, matching, and worker services, over a real database. Each has its own scaling characteristics and its own failure modes.
+[Setup](/book/setup) pointed here with a warning worth repeating: `temporal server start-dev` is one process over SQLite. A production deployment is a cluster: frontend, history, matching, and worker services, over a real database. Each has its own scaling characteristics and its own failure modes.
 
-Two consequences that matter at this altitude. **Matching service throughput is what task queue partitioning actually buys**, which is another reason to split queues by dependency rather than by team. And **history service load scales with event volume**, so the chatty workflows from [the previous chapter](/docs/durability/long-lived-agents) cost the cluster as well as their own ceiling.
+Two consequences that matter at this altitude. **Matching service throughput is what task queue partitioning actually buys**, which is another reason to split queues by dependency rather than by team. And **history service load scales with event volume**, so the chatty workflows from [the previous chapter](/book/durability/long-lived-agents) cost the cluster as well as their own ceiling.
 
 Running that cluster yourself is a real operational commitment, and the managed option exists precisely because most teams should not.
 
@@ -192,7 +192,7 @@ Running that cluster yourself is a real operational commitment, and the managed 
 
 The thing the queue metaphor hides: a fair share of tokens is a fair share of **money.** Fairness keys distribute throughput, and throughput is spend.
 
-Which makes per-tenant token budgets the natural companion to fairness keys. A tenant that has exhausted its monthly allocation should drop in priority or stop rather than continue consuming a fair share of a quota someone else is paying for. That is [cost accounting](/docs/observability/cost-accounting) as an admission-control input rather than as a monthly report, and it is the version of this that finance notices.
+Which makes per-tenant token budgets the natural companion to fairness keys. A tenant that has exhausted its monthly allocation should drop in priority or stop rather than continue consuming a fair share of a quota someone else is paying for. That is [cost accounting](/book/observability/cost-accounting) as an admission-control input rather than as a monthly report, and it is the version of this that finance notices.
 
 ## Atlas, concretely
 
@@ -212,7 +212,7 @@ One line in that table is the whole chapter: **fan-out is unthrottled.** Everyth
 
 ---
 
-Next: [Paying for Durability in Milliseconds](/docs/durability/latency). Local activities, early return, eager start: where durability costs latency and where it does not.
+Next: [Paying for Durability in Milliseconds](/book/durability/latency). Local activities, early return, eager start: where durability costs latency and where it does not.
 
 ## Takeaways
 

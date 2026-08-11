@@ -52,9 +52,9 @@ Reflect **against an external signal**, not against the model's own judgment, an
 
 Four rules:
 
-**The critique must have an input the draft did not.** A validator's errors, a failing test, a [grounding check's list of unsupported claims](/docs/patterns/retrieval/grounded-citations), a re-read of the record. Without that, the review is the same model, on the same information, producing a different sample.
+**The critique must have an input the draft did not.** A validator's errors, a failing test, a [grounding check's list of unsupported claims](/book/patterns/retrieval/grounded-citations), a re-read of the record. Without that, the review is the same model, on the same information, producing a different sample.
 
-**Prefer a deterministic signal where one exists.** Schema validation, a linter, a compile step, a citation-resolution check. These are free, total, and cannot hallucinate a problem, and if the only feedback you can produce is a model's opinion, that is [a critic](/docs/patterns/control/critic-reviser), with its own caveats.
+**Prefer a deterministic signal where one exists.** Schema validation, a linter, a compile step, a citation-resolution check. These are free, total, and cannot hallucinate a problem, and if the only feedback you can produce is a model's opinion, that is [a critic](/book/patterns/control/critic-reviser), with its own caveats.
 
 **Bound the loop hard, and default to one pass.** Revision is not monotonic. Cap at two, track whether each pass actually cleared findings, and stop when it does not, a pass that changes text without clearing anything is drift.
 
@@ -158,7 +158,7 @@ async def critique(text: str, ctx) -> list[Finding]:
 </Tab>
 </Tabs>
 
-`critique` returning deterministic findings is what separates this from a prompt trick. Every check in it reads state the generator could not influence: the retrieved IDs recorded by the retriever, the [scratchpad values written only by tools](/docs/patterns/context/structured-scratchpad). Those are assertions, not opinions.
+`critique` returning deterministic findings is what separates this from a prompt trick. Every check in it reads state the generator could not influence: the retrieved IDs recorded by the retriever, the [scratchpad values written only by tools](/book/patterns/context/structured-scratchpad). Those are assertions, not opinions.
 
 ## Trade-offs
 
@@ -168,7 +168,7 @@ async def critique(text: str, ctx) -> list[Finding]:
 
 **Findings are only as good as the checks.** Reflection with a weak critique is theatre with a bill attached. If you cannot produce a signal the generator did not already have, the honest answer is not to run the pass.
 
-**It does not catch what the checks do not cover.** A fluent, well-cited, correctly-grounded paragraph that misreads the customer's actual question passes everything here. That is [the semantic class](/docs/reliability/error-taxonomy), and it needs [evals](/docs/evals/eval-discipline), not a reflection step.
+**It does not catch what the checks do not cover.** A fluent, well-cited, correctly-grounded paragraph that misreads the customer's actual question passes everything here. That is [the semantic class](/book/reliability/error-taxonomy), and it needs [evals](/book/evals/eval-discipline), not a reflection step.
 
 ## When not to use it
 
@@ -190,11 +190,11 @@ The same work is clear about the other half: **when valid external feedback is a
 
 ## Related
 
-- [Critic and Reviser](/docs/patterns/control/critic-reviser): a separate model as the external signal, and why independence matters
-- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): the best deterministic critique available to a retrieval agent
-- [Output Guardrail](/docs/patterns/security/output-guardrail): the same checks, positioned as a gate rather than a revision loop
-- [Evaluator-Optimizer](/docs/workflows/evaluator-optimizer): the chapter, including bounded iteration
-- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): why the pass count is a hard cap
+- [Critic and Reviser](/book/patterns/control/critic-reviser): a separate model as the external signal, and why independence matters
+- [Grounded Citations](/book/patterns/retrieval/grounded-citations): the best deterministic critique available to a retrieval agent
+- [Output Guardrail](/book/patterns/security/output-guardrail): the same checks, positioned as a gate rather than a revision loop
+- [Evaluator-Optimizer](/book/workflows/evaluator-optimizer): the chapter, including bounded iteration
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): why the pass count is a hard cap
 
 ## References
 

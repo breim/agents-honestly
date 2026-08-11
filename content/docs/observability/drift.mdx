@@ -5,7 +5,7 @@ description: "The model changed, the data changed, or the users changed. Noticin
 
 Atlas's resolution rate has been 71% for four months. Over three weeks it slides to 64%.
 
-Nothing was deployed. The prompt is unchanged, the graph is unchanged, the model string in the config is the same one that has been there since March. Every dashboard in [the operating manual](/docs/production/operating-manual) is green: latency normal, error rate normal, cost per run slightly up, which nobody flags.
+Nothing was deployed. The prompt is unchanged, the graph is unchanged, the model string in the config is the same one that has been there since March. Every dashboard in [the operating manual](/book/production/operating-manual) is green: latency normal, error rate normal, cost per run slightly up, which nobody flags.
 
 Someone eventually asks the right question, and it is not *what broke*. It is:
 
@@ -22,7 +22,7 @@ Because the answer determines whether this is a rollback, a re-index, a product 
 | **The users** | New segment, new phrasing, seasonality, a marketing campaign | Input distribution shifts; the questions are different |
 | **You** | A deploy nobody connected to this | The git log, if anyone looks |
 
-The fourth row is on the list because it is the most common answer and the last one people check. A feature flag flipped, a tool description was tightened, a retrieval `k` was lowered to save money. Check the deploy log first, always. This is the argument for [versioning prompts, models, and graphs as artifacts](/docs/production/versioning), because "what was running on the 14th" should be a query rather than an archaeology project.
+The fourth row is on the list because it is the most common answer and the last one people check. A feature flag flipped, a tool description was tightened, a retrieval `k` was lowered to save money. Check the deploy log first, always. This is the argument for [versioning prompts, models, and graphs as artifacts](/book/production/versioning), because "what was running on the 14th" should be a query rather than an archaeology project.
 
 The other three need instruments.
 
@@ -56,7 +56,7 @@ The instrument is a **frozen canary**: a fixed set of inputs, a pinned configura
 
 The canary holds the inputs and the configuration constant, so **the only thing left that can move it is the provider.** That is the whole diagnostic value, and it is why the canary set must be genuinely frozen. A "canary" whose fixtures get updated when they start failing is a canary that cannot tell you anything.
 
-Run it on a schedule, not on deploys. [CI evals](/docs/evals/ci-for-agents) answer *did my change break it*; the canary answers *did something break without my change*, and those need different triggers. Hourly is common and cheap on a small fixture set. Put it on the [batch endpoint](/docs/patterns/cost/batch-api-offload) if the volume makes it worth it.
+Run it on a schedule, not on deploys. [CI evals](/book/evals/ci-for-agents) answer *did my change break it*; the canary answers *did something break without my change*, and those need different triggers. Hourly is common and cheap on a small fixture set. Put it on the [batch endpoint](/book/patterns/cost/batch-api-offload) if the volume makes it worth it.
 
 <Aside type="caution" title="Pinned is not frozen">
 The most common wrong assumption in this chapter: naming a specific model version in your config does not guarantee its behavior is fixed. Providers do adjust deployed models, and there are documented cases of behavior on a pinned version changing enough to collapse an evaluator's expected output, with no release note and no version string change.
@@ -77,7 +77,7 @@ Half of drift is upstream, and you will not see it in output metrics until it ha
 | Tenant mix | One customer's volume swamping the average |
 | Retrieval hit rate and cited-chunk distribution | The corpus moved under you |
 
-The last row is the agent-specific one and it is often the real culprit. A re-index, a chunking-parameter change, or a batch of newly ingested documents can displace the chunks that used to answer your most common question. Nothing about the model or the users moved, and quality fell. Because you are already [recording chunk IDs per run](/docs/observability/replay-debugging) for replay and incident scoping, this metric is free: watch the distribution of which chunks get cited, and alert when the top-N set turns over.
+The last row is the agent-specific one and it is often the real culprit. A re-index, a chunking-parameter change, or a batch of newly ingested documents can displace the chunks that used to answer your most common question. Nothing about the model or the users moved, and quality fell. Because you are already [recording chunk IDs per run](/book/observability/replay-debugging) for replay and incident scoping, this metric is free: watch the distribution of which chunks get cited, and alert when the top-N set turns over.
 
 On the output side, watch behavior rather than quality scores, because behavior moves first and is cheap to compute:
 
@@ -166,7 +166,7 @@ The trailing baseline matters. Comparing against launch day means every gradual,
 
 Three sources that are neither the provider nor your users, and that the standard ML-monitoring framing misses entirely because they only exist in agents.
 
-**Memory drift.** A [fact store](/docs/context/memory) accumulates. Some of what accumulates is wrong. As [poisoning](/docs/context/context-poisoning) established, a wrong fact that survives long enough gets cited by later facts. This is quality degradation with no external cause: the system drifted because it wrote to itself. It shows up as slowly rising confident-but-wrong answers, and the only detection is auditing the store rather than the outputs.
+**Memory drift.** A [fact store](/book/context/memory) accumulates. Some of what accumulates is wrong. As [poisoning](/book/context/context-poisoning) established, a wrong fact that survives long enough gets cited by later facts. This is quality degradation with no external cause: the system drifted because it wrote to itself. It shows up as slowly rising confident-but-wrong answers, and the only detection is auditing the store rather than the outputs.
 
 **Procedural drift.** An agent whose successful-looking runs reinforce a workflow settles into a habit that is locally consistent and globally suboptimal. Watch the tool-call sequence distribution: a topology that narrows over time is a system converging, and convergence is not always improvement.
 
@@ -177,7 +177,7 @@ Three sources that are neither the provider nor your users, and that the standar
 | Diagnosis | First move |
 | --- | --- |
 | Deploy log shows a change | Roll back, confirm, then decide deliberately |
-| Canary dropped, inputs stable | Pin harder if possible; run the [fallback rung](/docs/reliability/fallbacks-and-breakers) canary; open a vendor ticket with the fixture |
+| Canary dropped, inputs stable | Pin harder if possible; run the [fallback rung](/book/reliability/fallbacks-and-breakers) canary; open a vendor ticket with the fixture |
 | Input centroid moved, canary stable | Product question. Sample the new traffic and read it |
 | Retrieval hit rate dropped | Check the last ingestion diff and re-index history |
 | Format compliance dropped, canary stable | Your prompt assembly changed something. Check tool catalogue and context assembly |
@@ -192,7 +192,7 @@ The second row's last clause is worth doing: a reproducible fixture is what turn
 | Canary set | 120 frozen fixtures, pinned model and prompt, hourly, batch endpoint |
 | Canary alert | Score drop > 5 points, or format compliance below 98% |
 | Input drift | Embedding centroid over a 24h window vs. trailing 14 days |
-| Joint alert | Centroid shift > 0.15 **and** [online eval](/docs/evals/online-evals) score down > 3 points |
+| Joint alert | Centroid shift > 0.15 **and** [online eval](/book/evals/online-evals) score down > 3 points |
 | Retrieval drift | Top-50 cited-chunk turnover per week; alert above 20% |
 | Behavior | Daily: format compliance, tool-call mix, turn count, escalation rate |
 | Memory | Monthly audit sample of written facts against source records |
@@ -205,13 +205,13 @@ The three-week slide from 71% to 64% turns out to be the retrieval row: a batch 
 
 Five chapters on being able to see what happened.
 
-[Eight questions](/docs/observability/what-a-trace-must-answer) a single run must answer before anyone can debug it. [Semantic conventions](/docs/observability/otel-genai) so four layers of instrumentation agree about the same run. [Replay](/docs/observability/replay-debugging) that turns a production failure into a deterministic test and, eventually, into a regression corpus. [Cost accounting](/docs/observability/cost-accounting) built at call time because the invoice has no dimensions. And drift detection, which exists because the most dangerous change to an agentic system is the one nobody made.
+[Eight questions](/book/observability/what-a-trace-must-answer) a single run must answer before anyone can debug it. [Semantic conventions](/book/observability/otel-genai) so four layers of instrumentation agree about the same run. [Replay](/book/observability/replay-debugging) that turns a production failure into a deterministic test and, eventually, into a regression corpus. [Cost accounting](/book/observability/cost-accounting) built at call time because the invoice has no dimensions. And drift detection, which exists because the most dangerous change to an agentic system is the one nobody made.
 
 The through-line is that **an agent's failures do not announce themselves**, so observability is not a supporting function here. It is the mechanism by which you find out anything at all. Everything Part XVI is about to do depends on it: you cannot classify errors you did not record, tune retries you cannot count, or trust a fallback whose output you never compared.
 
 ---
 
-Next: [An Error Taxonomy for Agents](/docs/reliability/error-taxonomy). Transient, permanent, policy, budget, semantic. Different failures, different responses.
+Next: [An Error Taxonomy for Agents](/book/reliability/error-taxonomy). Transient, permanent, policy, budget, semantic. Different failures, different responses.
 
 ## Takeaways
 

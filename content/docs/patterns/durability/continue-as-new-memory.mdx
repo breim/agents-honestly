@@ -5,7 +5,7 @@ description: "Reset a growing event history without losing the agent conversatio
 
 ## Problem
 
-A ticket workflow has been open for six weeks. The customer has replied eleven times, the agent has taken about ninety turns, and every model call and tool call is [an activity whose arguments and results are written to the event history](/docs/patterns/durability/tool-as-activity).
+A ticket workflow has been open for six weeks. The customer has replied eleven times, the agent has taken about ninety turns, and every model call and tool call is [an activity whose arguments and results are written to the event history](/book/patterns/durability/tool-as-activity).
 
 The history is now 14 MB and 26,000 events. Temporal has been logging a warning since 10 MB, the hard limit is **50 MB or 51,200 events**, and a workflow that reaches either is terminated with `Workflow history size / count exceeds limit`, not paused, not degraded. Terminated.
 
@@ -45,13 +45,13 @@ Long before that, replay gets slow: a worker that loses its cache has to read an
 
 Four rules:
 
-**Carry a snapshot, not a transcript.** What crosses is the [typed scratchpad](/docs/patterns/context/structured-scratchpad), a [rolling summary](/docs/patterns/context/rolling-summary), and the counters. If you carry the full message list you have deferred the problem by one turn, and only while the transcript stays under 2 MB, because what crosses is a payload and payloads are capped like any other. Past that the continue-as-new is rejected, and the mechanism that was about to save the workflow is what fails it.
+**Carry a snapshot, not a transcript.** What crosses is the [typed scratchpad](/book/patterns/context/structured-scratchpad), a [rolling summary](/book/patterns/context/rolling-summary), and the counters. If you carry the full message list you have deferred the problem by one turn, and only while the transcript stays under 2 MB, because what crosses is a payload and payloads are capped like any other. Past that the continue-as-new is rejected, and the mechanism that was about to save the workflow is what fails it.
 
 **Trigger on measurement, not on a turn count.** Check `historySize` and `historyLength` from the workflow info and continue when either crosses a fraction of the limit. A turn-count heuristic is wrong the first time someone pastes a large document.
 
 **Drain before you continue.** Continue-as-new at a moment when a signal is in flight loses it. Check for buffered signals and pending activity results first, handle them, then continue. This is the single most common bug in implementations of this pattern.
 
-**Convert relative time to absolute.** A timer for *"four more days"* is meaningless in a run that just started. The [SLA deadline](/docs/patterns/durability/sla-timer) crosses as an absolute timestamp and the new run re-derives the remaining duration.
+**Convert relative time to absolute.** A timer for *"four more days"* is meaningless in a run that just started. The [SLA deadline](/book/patterns/durability/sla-timer) crosses as an absolute timestamp and the new run re-derives the remaining duration.
 
 ## Code
 
@@ -140,17 +140,17 @@ class TicketAgent:
 </Tab>
 </Tabs>
 
-The `taint` field crossing is not a detail. A [taint flag lost at continue-as-new](/docs/security/prompt-injection) is a security control that silently stopped applying mid-run, the same failure as [losing it at compaction](/docs/patterns/context/context-compaction), and it belongs in a [failure-injection test](/docs/reliability/failure-injection) for exactly that reason.
+The `taint` field crossing is not a detail. A [taint flag lost at continue-as-new](/book/security/prompt-injection) is a security control that silently stopped applying mid-run, the same failure as [losing it at compaction](/book/patterns/context/context-compaction), and it belongs in a [failure-injection test](/book/reliability/failure-injection) for exactly that reason.
 
 ## Trade-offs
 
-**Run IDs change; the workflow ID does not.** Anything addressing the workflow by ID keeps working, which is why [signal-with-start](/docs/patterns/durability/signal-with-start) and approvals are unaffected. Anything that stored a *run* ID now points at a completed execution, so store workflow IDs, never run IDs.
+**Run IDs change; the workflow ID does not.** Anything addressing the workflow by ID keeps working, which is why [signal-with-start](/book/patterns/durability/signal-with-start) and approvals are unaffected. Anything that stored a *run* ID now points at a completed execution, so store workflow IDs, never run IDs.
 
-**Closing takes your children with it.** Continuing-as-new *is* closing, and [by default the service terminates every child workflow when its parent closes](/docs/durable-execution/signals-and-children). This is easy to miss precisely because the pattern works: the first recycle may be weeks in, so a delegated child that ran fine for a month vanishes the moment the parent crosses its threshold. Set a parent-close policy of `ABANDON` on any child meant to outlive the current run. The other direction is safe and worth knowing, because it is what makes the parent-plus-recycling-child composition work at all: when a *child* continues-as-new, the parent treats the whole chain as one execution, and the handle it holds keeps pointing at it.
+**Closing takes your children with it.** Continuing-as-new *is* closing, and [by default the service terminates every child workflow when its parent closes](/book/durable-execution/signals-and-children). This is easy to miss precisely because the pattern works: the first recycle may be weeks in, so a delegated child that ran fine for a month vanishes the moment the parent crosses its threshold. Set a parent-close policy of `ABANDON` on any child meant to outlive the current run. The other direction is safe and worth knowing, because it is what makes the parent-plus-recycling-child composition work at all: when a *child* continues-as-new, the parent treats the whole chain as one execution, and the handle it holds keeps pointing at it.
 
-**Debugging spans runs.** The history you need may be two runs back. Tooling can follow the chain, and your [trace](/docs/observability/what-a-trace-must-answer) should carry a stable identifier across continuations so an investigation does not stop at a boundary.
+**Debugging spans runs.** The history you need may be two runs back. Tooling can follow the chain, and your [trace](/book/observability/what-a-trace-must-answer) should carry a stable identifier across continuations so an investigation does not stop at a boundary.
 
-**The compaction is lossy, and now it is also permanent.** Whatever does not cross is gone from the running execution. It remains in the archived history and the trace, which is exactly why [the scratchpad rather than the transcript](/docs/patterns/context/structured-scratchpad) is the thing that crosses, and why compaction rebuilds *from* it.
+**The compaction is lossy, and now it is also permanent.** Whatever does not cross is gone from the running execution. It remains in the archived history and the trace, which is exactly why [the scratchpad rather than the transcript](/book/patterns/context/structured-scratchpad) is the thing that crosses, and why compaction rebuilds *from* it.
 
 **A continue-as-new loop is a real failure mode.** If the carried state is itself over the threshold, the new run continues immediately, forever. Assert that the snapshot is materially smaller than the trigger, and alert if a run continues more than a few times in an hour.
 
@@ -160,22 +160,22 @@ The `taint` field crossing is not a detail. A [taint flag lost at continue-as-ne
 
 **When the entity should end instead.** A ticket open for six months is possibly a process problem rather than a history problem. Continue-as-new keeps a workflow alive indefinitely, which is occasionally the wrong thing to make easy.
 
-**As a fix for oversized payloads.** If one activity writes 1.5 MB to the history on every turn, continuing more often treats the symptom, and the day that payload reaches 2 MB it stops being a history problem at all and becomes a rejected write. Pass references instead. That is [the tool-as-activity rule](/docs/patterns/durability/tool-as-activity), and it is the actual fix.
+**As a fix for oversized payloads.** If one activity writes 1.5 MB to the history on every turn, continuing more often treats the symptom, and the day that payload reaches 2 MB it stops being a history problem at all and becomes a rejected write. Pass references instead. That is [the tool-as-activity rule](/book/patterns/durability/tool-as-activity), and it is the actual fix.
 
-**When you need the full history in-execution.** Some audit patterns want every event queryable on the live workflow. Continue-as-new moves old events to archival, so build the [audit record deliberately](/docs/human-in-the-loop/escalation-and-audit) rather than relying on the running history to hold it.
+**When you need the full history in-execution.** Some audit patterns want every event queryable on the live workflow. Continue-as-new moves old events to archival, so build the [audit record deliberately](/book/human-in-the-loop/escalation-and-audit) rather than relying on the running history to hold it.
 
 <Aside type="note" title="The same problem, twice, at two altitudes">
 An agent has two histories that grow without bound and two mechanisms for the same shape of fix.
 
-**The context window** fills with turns, and [compaction](/docs/patterns/context/context-compaction) rebuilds it from typed state at a boundary. **The event history** fills with events, and continue-as-new rebuilds the execution from a snapshot at a threshold.
+**The context window** fills with turns, and [compaction](/book/patterns/context/context-compaction) rebuilds it from typed state at a boundary. **The event history** fills with events, and continue-as-new rebuilds the execution from a snapshot at a threshold.
 
-Both discard a transcript, both carry forward the verified state, and both fail the same way when the thing they carry is a summary of a summary rather than a record. That symmetry is why the [structured scratchpad](/docs/patterns/context/structured-scratchpad) shows up in both answers: it is the only representation designed to survive being carried across a boundary.
+Both discard a transcript, both carry forward the verified state, and both fail the same way when the thing they carry is a summary of a summary rather than a record. That symmetry is why the [structured scratchpad](/book/patterns/context/structured-scratchpad) shows up in both answers: it is the only representation designed to survive being carried across a boundary.
 </Aside>
 
 ## Related
 
-- [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow): the long-lived workflow this keeps alive
-- [Tool as Activity](/docs/patterns/durability/tool-as-activity): pass references, or you hit the size limit first
-- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): what crosses the boundary
-- [Context Compaction](/docs/patterns/context/context-compaction): the same shape one altitude up
-- [Signal With Start](/docs/patterns/durability/signal-with-start): why addressing by workflow ID keeps working
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the long-lived workflow this keeps alive
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): pass references, or you hit the size limit first
+- [Structured Scratchpad](/book/patterns/context/structured-scratchpad): what crosses the boundary
+- [Context Compaction](/book/patterns/context/context-compaction): the same shape one altitude up
+- [Signal With Start](/book/patterns/durability/signal-with-start): why addressing by workflow ID keeps working

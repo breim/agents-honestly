@@ -52,7 +52,7 @@ Four rules:
 
 **Cap in aggregate as well as per call.** Twenty credits of nine hundred dollars each are all under Atlas's thousand-dollar per-call cap. The run-level counter is what stops the patient version of the attack.
 
-**Deny by escalating, never by erroring.** A refusal carrying *"account 9917 is not in scope for this run"* is a well-formed [approval request](/docs/human-in-the-loop/approval-gates). A stack trace is a control someone turns off during an incident.
+**Deny by escalating, never by erroring.** A refusal carrying *"account 9917 is not in scope for this run"* is a well-formed [approval request](/book/human-in-the-loop/approval-gates). A stack trace is a control someone turns off during an incident.
 
 ## Code
 
@@ -155,30 +155,30 @@ The `send_reply` comment names the strongest form of this pattern, and it is the
 
 **More credentials to provision, rotate, and audit.** Nine scoped roles instead of one broad one is real operational work, and it is the reason this gets skipped. Do the class ④–⑤ tools first; the reads can share a read-only role for a long time.
 
-**Argument bounds produce false denials.** A legitimate $1,200 refund on a $1,000 cap routes a customer to a queue. Size the caps from data: [query which amounts were historically approved unchanged](/docs/capstone/operating-it) rather than from a guess, and expect to move them.
+**Argument bounds produce false denials.** A legitimate $1,200 refund on a $1,000 cap routes a customer to a queue. Size the caps from data: [query which amounts were historically approved unchanged](/book/capstone/operating-it) rather than from a guess, and expect to move them.
 
 **The scope has to be derived, and deriving it is domain work.** Which accounts a ticket legitimately concerns is a question about your business, not a library call. It is also where the pattern gets its value, so it is not skippable.
 
-**A dynamic catalogue invalidates the audit.** If [MCP servers or runtime tool loading](/docs/security/least-privilege) can add tools, "we reviewed the permissions" is a claim about a moment. Pin the servers, hash the definitions, and let the dispatcher's allowlist be authoritative over whatever the catalogue advertises.
+**A dynamic catalogue invalidates the audit.** If [MCP servers or runtime tool loading](/book/security/least-privilege) can add tools, "we reviewed the permissions" is a claim about a moment. Pin the servers, hash the definitions, and let the dispatcher's allowlist be authoritative over whatever the catalogue advertises.
 
 ## When not to use it
 
-**When every tool is a pure read over the same data.** A read-only assistant against one corpus does not need nine credentials. It still needs [identity propagation](/docs/patterns/security/identity-propagation), which is the control that actually matters there.
+**When every tool is a pure read over the same data.** A read-only assistant against one corpus does not need nine credentials. It still needs [identity propagation](/book/patterns/security/identity-propagation), which is the control that actually matters there.
 
 **When the backend already enforces it.** If row-level security and a delegated token make the over-broad call return nothing, the dispatcher check is defence in depth rather than the boundary. Keep it, since it produces a better message, but do not treat the backend's enforcement as redundant.
 
-**Before you know the real usage.** Mining the minimum from ninety days of traces beats guessing, and enforcing a guessed policy breaks the rare legitimate path at the worst moment. Run it in [shadow mode](/docs/evals/online-evals) first: log what *would* have been denied for a week.
+**Before you know the real usage.** Mining the minimum from ninety days of traces beats guessing, and enforcing a guessed policy breaks the rare legitimate path at the worst moment. Run it in [shadow mode](/book/evals/online-evals) first: log what *would* have been denied for a week.
 
 <Aside type="note" title="This is where the security part converges">
-Almost every control in [Part XVII](/docs/security/threat-model) lands on the same function. [Taint](/docs/security/prompt-injection) sets the ceiling, [delegation](/docs/patterns/security/identity-propagation) says as whom, argument scoping says on what and how much, [risk tiers](/docs/human-in-the-loop/risk-tiers) say whether a person signs, and [idempotency](/docs/tools/idempotency) says whether repeating is safe.
+Almost every control in [Part XVII](/book/security/threat-model) lands on the same function. [Taint](/book/security/prompt-injection) sets the ceiling, [delegation](/book/patterns/security/identity-propagation) says as whom, argument scoping says on what and how much, [risk tiers](/book/human-in-the-loop/risk-tiers) say whether a person signs, and [idempotency](/book/tools/idempotency) says whether repeating is safe.
 
-That convergence is the argument for [one dispatcher](/docs/production/reference-architecture), and it is the cheapest structural decision in this book. Four dispatch sites means implementing five controls four times, and you will implement them in three, which is how a system ends up with a security model that is correct in the paths people remembered.
+That convergence is the argument for [one dispatcher](/book/production/reference-architecture), and it is the cheapest structural decision in this book. Four dispatch sites means implementing five controls four times, and you will implement them in three, which is how a system ends up with a security model that is correct in the paths people remembered.
 </Aside>
 
 ## Related
 
-- [Excessive Agency and Least Privilege](/docs/security/least-privilege): the chapter, with the six scoping axes and trace-based permission mining
-- [Identity Propagation](/docs/patterns/security/identity-propagation): the credential says *as whom*; this says *to do what*
-- [Dual Control](/docs/patterns/security/dual-control): what happens above the cap this pattern enforces
-- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): computing blast radius from the arguments, at call time
-- [Sandboxing](/docs/security/sandboxing): the broker, which routes generated code through this same check
+- [Excessive Agency and Least Privilege](/book/security/least-privilege): the chapter, with the six scoping axes and trace-based permission mining
+- [Identity Propagation](/book/patterns/security/identity-propagation): the credential says *as whom*; this says *to do what*
+- [Dual Control](/book/patterns/security/dual-control): what happens above the cap this pattern enforces
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): computing blast radius from the arguments, at call time
+- [Sandboxing](/book/security/sandboxing): the broker, which routes generated code through this same check

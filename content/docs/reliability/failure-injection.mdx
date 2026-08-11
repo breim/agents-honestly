@@ -19,21 +19,21 @@ Chaos engineering for ordinary services has a standard menu: latency, errors, no
 
 | Layer | Fault | What it should prove |
 | --- | --- | --- |
-| **Provider** | 429 with `Retry-After` | The header is honored; [admission](/docs/reliability/backpressure) reacts |
-| | 5xx / overloaded burst | [The breaker opens](/docs/reliability/fallbacks-and-breakers) before retries amplify |
-| | Timeout with no response | Not retried blindly; the [paired read](/docs/reliability/idempotency-in-practice) resolves it |
+| **Provider** | 429 with `Retry-After` | The header is honored; [admission](/book/reliability/backpressure) reacts |
+| | 5xx / overloaded burst | [The breaker opens](/book/reliability/fallbacks-and-breakers) before retries amplify |
+| | Timeout with no response | Not retried blindly; the [paired read](/book/reliability/idempotency-in-practice) resolves it |
 | | **Stream stalls mid-response** | The inactivity timeout fires, not the total timeout |
 | | Slow token delivery | Deadline propagation works; the run degrades rather than truncates |
-| **Tool** | Error result | Returned to the model [as an instruction](/docs/tools/errors-as-instructions), not retried |
+| **Tool** | Error result | Returned to the model [as an instruction](/book/tools/errors-as-instructions), not retried |
 | | Timeout on a write | Unknown-outcome handling; no duplicate effect |
 | | **A plausible wrong result** | See below: the one that matters most |
 | **Infrastructure** | Kill the worker mid-run | Resumes from checkpoint at the right step |
 | | **Kill between the effect and the record** | Idempotency survives; no double effect on resume |
 | | Checkpoint store unavailable | Fails closed rather than proceeding stateless |
 | **Human** | Approval never arrives | Timeout policy fires; the run does not hang forever |
-| | Approval arrives after the [dedup window](/docs/reliability/idempotency-in-practice) | **The Friday-to-Monday bug** |
-| **Adversarial** | A ticket containing an [injection payload](/docs/security/prompt-injection) | Taint holds; the capability ceiling denies |
-| | A [poisoned retrieved document](/docs/security/untrusted-retrieval) | Trust routing holds; high-authority path unaffected |
+| | Approval arrives after the [dedup window](/book/reliability/idempotency-in-practice) | **The Friday-to-Monday bug** |
+| **Adversarial** | A ticket containing an [injection payload](/book/security/prompt-injection) | Taint holds; the capability ceiling denies |
+| | A [poisoned retrieved document](/book/security/untrusted-retrieval) | Trust routing holds; high-authority path unaffected |
 
 Four rows are bolded because they are the ones almost nobody injects, and each corresponds to a bug this book has argued exists.
 
@@ -41,7 +41,7 @@ Four rows are bolded because they are the ones almost nobody injects, and each c
 
 **Killing between the effect and the record** is the entire reason the dedup table exists. If your idempotency implementation puts the marker in a different store than the write, this injection finds it in one run.
 
-**The approval that arrives after the dedup window** is the Friday-to-Monday double credit. Injecting it means fast-forwarding a clock rather than waiting three days, which is one of the few genuine superpowers of building on [durable execution](/docs/durable-execution/temporal-in-forty-minutes). A test can skip a workflow's timers.
+**The approval that arrives after the dedup window** is the Friday-to-Monday double credit. Injecting it means fast-forwarding a clock rather than waiting three days, which is one of the few genuine superpowers of building on [durable execution](/book/durable-execution/temporal-in-forty-minutes). A test can skip a workflow's timers.
 
 **A tool returning a plausible wrong result** is the most valuable injection on the list and the least performed, so it gets its own section.
 
@@ -51,14 +51,14 @@ Every fault above except one produces an *error*. Your code sees a signal and ta
 
 Now inject `get_order` returning a valid, well-formed order, but for the wrong order. Or a total that is off by a factor of ten. Or a policy document stating a rule that expired last March.
 
-Nothing raises. The agent does not retry, does not escalate, does not log anything unusual. It proceeds, reasons correctly from a false premise, and produces a confident, well-formed, wrong outcome. That is [the semantic class](/docs/reliability/error-taxonomy), the one with no exception type, and the majority of what actually goes wrong.
+Nothing raises. The agent does not retry, does not escalate, does not log anything unusual. It proceeds, reasons correctly from a false premise, and produces a confident, well-formed, wrong outcome. That is [the semantic class](/book/reliability/error-taxonomy), the one with no exception type, and the majority of what actually goes wrong.
 
 This injection is the only way to test the defenses built for it:
 
-- Does the [re-read-before-acting](/docs/context/context-poisoning) discipline catch the stale value?
-- Does the tool that [re-derives the amount from `order_id`](/docs/tools/idempotency) reject the mismatch?
+- Does the [re-read-before-acting](/book/context/context-poisoning) discipline catch the stale value?
+- Does the tool that [re-derives the amount from `order_id`](/book/tools/idempotency) reject the mismatch?
 - Does the grounding check notice the reply cites a number no tool returned?
-- Does the [risk tier](/docs/human-in-the-loop/risk-tiers) computed from a corrupted amount still route correctly?
+- Does the [risk tier](/book/human-in-the-loop/risk-tiers) computed from a corrupted amount still route correctly?
 
 Those four controls appear in four different parts of this book, and an error injection exercises none of them. A wrong-result injection exercises all of them at once.
 
@@ -90,11 +90,11 @@ The assertion `no exception was thrown` is nearly useless here, because half the
 
 </Figure>
 
-Invariant 3 is the one that catches the compounding described in [the error taxonomy](/docs/reliability/error-taxonomy): a fault that is handled correctly but expensively, retried, fallen back, re-planned. Such a fault passes the "did it work" test while quadrupling the run's cost. And invariant 6 exists because degradation is exactly when boundaries get skipped: a fallback path that forgets to propagate the tenant is a cross-tenant bug that only appears during an incident.
+Invariant 3 is the one that catches the compounding described in [the error taxonomy](/book/reliability/error-taxonomy): a fault that is handled correctly but expensively, retried, fallen back, re-planned. Such a fault passes the "did it work" test while quadrupling the run's cost. And invariant 6 exists because degradation is exactly when boundaries get skipped: a fallback path that forgets to propagate the tenant is a cross-tenant bug that only appears during an incident.
 
 ## Where to run it, in three tiers
 
-**In CI, deterministically.** A seeded fault schedule, *fail the third tool call; stall the stream on turn seven*, over your test workflows, asserting the six invariants. This is cheap, it runs on every commit, and it is where the fallback path stops being untested code. Pair it with recorded model responses ([replay](/docs/observability/replay-debugging)) so the run is reproducible and a failure is debuggable rather than a coin flip.
+**In CI, deterministically.** A seeded fault schedule, *fail the third tool call; stall the stream on turn seven*, over your test workflows, asserting the six invariants. This is cheap, it runs on every commit, and it is where the fallback path stops being untested code. Pair it with recorded model responses ([replay](/book/observability/replay-debugging)) so the run is reproducible and a failure is debuggable rather than a coin flip.
 
 **In staging, continuously and randomly.** Low-probability injection on every run: a small percentage of tool calls fail, occasionally a worker dies. This finds the interactions a fixed schedule misses, and it keeps the recovery paths warm.
 
@@ -103,14 +103,14 @@ Invariant 3 is the one that catches the compounding described in [the error taxo
 <Aside type="caution" title="Agents have side effects, so injection needs a boundary of its own">
 Ordinary chaos engineering injects into services that mostly move bytes. An agent that is injected into may issue a credit or send an email as part of its *correct* response to the fault.
 
-Two guards. Run production exercises against a **test tenant** with real infrastructure and non-real customers. And gate the injector on the [dispatcher's](/docs/production/reference-architecture) class ④–⑤ tools so that external writes are stubbed, counted, and asserted rather than performed. That is also how invariant 2 gets measured, since counting effects is more reliable than reading them back.
+Two guards. Run production exercises against a **test tenant** with real infrastructure and non-real customers. And gate the injector on the [dispatcher's](/book/production/reference-architecture) class ④–⑤ tools so that external writes are stubbed, counted, and asserted rather than performed. That is also how invariant 2 gets measured, since counting effects is more reliable than reading them back.
 
 The injector living in the dispatcher is not incidental. The dispatcher is already the choke point everything else in this book put its checks in.
 </Aside>
 
 ## Wiring it in
 
-The injector belongs where the calls are made, in the [model gateway](/docs/production/reference-architecture) and the tool dispatcher. It should be a normal part of those code paths, disabled by configuration rather than compiled out.
+The injector belongs where the calls are made, in the [model gateway](/book/production/reference-architecture) and the tool dispatcher. It should be a normal part of those code paths, disabled by configuration rather than compiled out.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -197,7 +197,7 @@ Two rows are the ones that repay the whole exercise. The **approval fast-forward
 
 Six chapters of classical distributed-systems discipline applied to a component that is expensive, slow, and occasionally wrong.
 
-A [taxonomy](/docs/reliability/error-taxonomy) that says what to do next, and admits a fifth class that never raises. [Retries](/docs/reliability/timeouts-and-retries) at one layer, budgeted, from a checkpoint rather than from the start. [Idempotency](/docs/reliability/idempotency-in-practice) with a window sized to the human pause rather than the retry policy. [Breakers and a fallback ladder](/docs/reliability/fallbacks-and-breakers) where the fallback is understood to be a different system. [Admission control](/docs/reliability/backpressure) that decides who gets the quota before the shortage. And now the practice that turns all of it from design intent into observed behavior.
+A [taxonomy](/book/reliability/error-taxonomy) that says what to do next, and admits a fifth class that never raises. [Retries](/book/reliability/timeouts-and-retries) at one layer, budgeted, from a checkpoint rather than from the start. [Idempotency](/book/reliability/idempotency-in-practice) with a window sized to the human pause rather than the retry policy. [Breakers and a fallback ladder](/book/reliability/fallbacks-and-breakers) where the fallback is understood to be a different system. [Admission control](/book/reliability/backpressure) that decides who gets the quota before the shortage. And now the practice that turns all of it from design intent into observed behavior.
 
 The recurring theme: **most of this part is about making failures loud, early, and cheap**, because the alternative for an agentic system is not a crash. It is a confident, well-formed, expensive wrong answer that nobody notices for six days.
 
@@ -205,7 +205,7 @@ Part XVII takes the same posture toward an adversary who is trying to produce ex
 
 ---
 
-Next: [The Threat Model](/docs/security/threat-model), what an attacker actually wants from your agent, and which of your components they will use to get it.
+Next: [The Threat Model](/book/security/threat-model), what an attacker actually wants from your agent, and which of your components they will use to get it.
 
 ## Takeaways
 

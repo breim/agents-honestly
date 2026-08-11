@@ -4,7 +4,7 @@ description: "How caching actually works, why one changed byte at the front cost
 ---
 
 
-The [previous chapter](/docs/foundations/context-window) ended with four levers for context, and a note that caching sits beside them rather than among them. Send less, compress, externalize, isolate. Those change *how many* tokens you send. Caching changes what those tokens **cost**, by roughly an order of magnitude, and changes nothing else.
+The [previous chapter](/book/foundations/context-window) ended with four levers for context, and a note that caching sits beside them rather than among them. Send less, compress, externalize, isolate. Those change *how many* tokens you send. Caching changes what those tokens **cost**, by roughly an order of magnitude, and changes nothing else.
 
 That makes it the cheapest win in the book and the one most often left on the floor, because it has a single hard constraint that dictates the order of your prompt. Get the ordering right and caching mostly works by itself. Get it wrong and no amount of configuration will save it, and worse, nothing will tell you.
 
@@ -52,7 +52,7 @@ Which gives you a break-even you can compute:
 
 Two consequences. **Caching a prompt that is only used once is strictly worse than not caching it.** You pay the write premium and never read. And the longer TTL is not simply better: it survives gaps in bursty traffic, but the doubled write means it needs more reads to pay for itself. Continuous traffic should use the short one, because each request re-warms the entry for the next.
 
-For an agent this compounds the same way [everything else does](/docs/foundations/tokens): the loop resends its whole history on every iteration, so the cached prefix is read once per model call, not once per user turn. A four-call turn reads the cache four times. The break-even arrives inside a single turn.
+For an agent this compounds the same way [everything else does](/book/foundations/tokens): the loop resends its whole history on every iteration, so the cached prefix is read once per model call, not once per user turn. A four-call turn reads the cache four times. The break-even arrives inside a single turn.
 
 ## Placing the breakpoint
 
@@ -135,7 +135,7 @@ Every one of these is a real pattern from real code, and every one lives in the 
 
 The fix is always the same shape: **make it deterministic, move it after the breakpoint, or delete it.** A timestamp the agent genuinely needs belongs in the latest user turn, where it invalidates nothing before it. A per-user fact belongs in the conversation, not the system prompt.
 
-Notice what the last two rows imply. If your system supports "modes" by swapping the tool list, or routes to a cheaper model for sub-tasks, you have built a system that cannot cache. The escape hatches exist, but you have to design for them: dynamic [tool discovery](/docs/tools/tool-discovery) that *appends* schemas rather than replacing them; a mid-conversation system message that sits after the cached history rather than editing the prompt in front of it; giving a sub-task to a [separate sub-agent](/docs/patterns/context/subagent-isolation) instead of switching the main loop's model.
+Notice what the last two rows imply. If your system supports "modes" by swapping the tool list, or routes to a cheaper model for sub-tasks, you have built a system that cannot cache. The escape hatches exist, but you have to design for them: dynamic [tool discovery](/book/tools/tool-discovery) that *appends* schemas rather than replacing them; a mid-conversation system message that sits after the cached history rather than editing the prompt in front of it; giving a sub-task to a [separate sub-agent](/book/patterns/context/subagent-isolation) instead of switching the main loop's model.
 
 ## Verify, or you don't know
 
@@ -185,7 +185,7 @@ Do that and the discipline pays for itself twice: once in money, and once becaus
 
 ---
 
-Next: [Structured Output](/docs/foundations/structured-output), getting data out of the model without a regex and a prayer.
+Next: [Structured Output](/book/foundations/structured-output), getting data out of the model without a regex and a prayer.
 
 ## Takeaways
 

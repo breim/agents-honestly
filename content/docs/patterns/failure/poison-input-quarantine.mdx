@@ -11,7 +11,7 @@ Worker A picks it up, builds a prompt, and is killed by the OOM reaper. The work
 
 Nothing else gets processed. The fleet is at 100% CPU doing one item, forever, and the dashboard shows workers restarting rather than a bad input.
 
-The same shape appears without a crash. An item that reliably hits the [turn cap](/docs/patterns/control/bounded-autonomy) and burns its full budget before failing is a poison item that costs money instead of workers, and it will do so on every retry.
+The same shape appears without a crash. An item that reliably hits the [turn cap](/book/patterns/control/bounded-autonomy) and burns its full budget before failing is a poison item that costs money instead of workers, and it will do so on every retry.
 
 ## Forces
 
@@ -55,11 +55,11 @@ Four rules:
 
 **Increment before you process, and persist it with the item.** The counter must survive the worker dying, which means it is written to the queue or a store *before* the work starts. A counter incremented on failure never runs when the failure is a `SIGKILL`.
 
-**Quarantine preserves, never drops.** The item goes to a durable store with its attempt history and whatever diagnostics survived, and the customer's request is [escalated to a human](/docs/patterns/control/escalation-ladder). Dropping it silently is a lost request that nobody will connect to anything.
+**Quarantine preserves, never drops.** The item goes to a durable store with its attempt history and whatever diagnostics survived, and the customer's request is [escalated to a human](/book/patterns/control/escalation-ladder). Dropping it silently is a lost request that nobody will connect to anything.
 
 **Alert on the item, not the symptom.** The observable is workers restarting; the cause is one input. The alert should name the item ID and its attempt count, because an on-call looking at a restart graph will investigate memory limits for an hour.
 
-**Reject at admission where you can.** A size cap, an encoding check, and a [token estimate](/docs/patterns/context/tool-result-truncation) at the door catch most poison items before any worker touches one. A pre-flight rejection is cheaper than three crashes and a quarantine.
+**Reject at admission where you can.** A size cap, an encoding check, and a [token estimate](/book/patterns/context/tool-result-truncation) at the door catch most poison items before any worker touches one. A pre-flight rejection is cheaper than three crashes and a quarantine.
 
 ## Code
 
@@ -163,26 +163,26 @@ async def quarantine(item, reason: str, ctx) -> None:
 
 ## When not to use it
 
-**When work runs in a durable workflow with per-item isolation.** [A fan-out where each item is its own child](/docs/patterns/scale/fan-out) already contains the failure: one child fails, the batch continues, and the retry policy bounds it. The cycling-fleet problem is specific to shared queues with redelivery.
+**When work runs in a durable workflow with per-item isolation.** [A fan-out where each item is its own child](/book/patterns/scale/fan-out) already contains the failure: one child fails, the batch continues, and the retry policy bounds it. The cycling-fleet problem is specific to shared queues with redelivery.
 
-**When the failure is genuinely transient.** Quarantining on a provider blip removes work that would have succeeded. The counter must be attempts against *this item*, and a [breaker](/docs/patterns/failure/tool-circuit-breaker) should be handling the dependency-down case separately.
+**When the failure is genuinely transient.** Quarantining on a provider blip removes work that would have succeeded. The counter must be attempts against *this item*, and a [breaker](/book/patterns/failure/tool-circuit-breaker) should be handling the dependency-down case separately.
 
 **When items are cheap and idempotent to drop.** A telemetry event that fails three times can be discarded. A customer's support ticket cannot, and conflating the two is how requests disappear.
 
-**When admission control already rejects the shape.** If [the tool result cap and input limits](/docs/patterns/context/tool-result-truncation) make the poison case impossible to construct, you do not also need the quarantine.
+**When admission control already rejects the shape.** If [the tool result cap and input limits](/book/patterns/context/tool-result-truncation) make the poison case impossible to construct, you do not also need the quarantine.
 
 <Aside type="caution" title="The metric that fires is not the metric that explains">
 This failure presents as **worker instability**: restart rate up, memory alarms, pods cycling. Every instinct points at the fleet: raise the memory limit, add replicas, check for a leak, and every one of those investigations takes an hour and finds nothing.
 
 The cause is one row in a queue.
 
-So the operational requirement is a metric keyed by *item*: attempts per item, and an alert when any single item crosses two. That is a cheap counter and it is the difference between a five-minute diagnosis and an afternoon. It is also the same lesson as [tenant-level queue age](/docs/patterns/scale/tenant-fairness) and [per-tenant retrieval recall](/docs/patterns/retrieval/filtered-retrieval): **aggregate metrics cannot see a problem that lives in one member of the aggregate**, and those are exactly the problems that consume a fleet.
+So the operational requirement is a metric keyed by *item*: attempts per item, and an alert when any single item crosses two. That is a cheap counter and it is the difference between a five-minute diagnosis and an afternoon. It is also the same lesson as [tenant-level queue age](/book/patterns/scale/tenant-fairness) and [per-tenant retrieval recall](/book/patterns/retrieval/filtered-retrieval): **aggregate metrics cannot see a problem that lives in one member of the aggregate**, and those are exactly the problems that consume a fleet.
 </Aside>
 
 ## Related
 
-- [Tool Circuit Breaker](/docs/patterns/failure/tool-circuit-breaker): the dependency-down case, which quarantine must not be used for
-- [Tool Result Truncation](/docs/patterns/context/tool-result-truncation): capping input size before it reaches the assembler
-- [Fan-Out Over Items](/docs/patterns/scale/fan-out): per-item isolation that avoids the shared-queue failure entirely
-- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the budget version of a poison item, which costs money rather than workers
-- [Escalation Ladder](/docs/patterns/control/escalation-ladder): where the quarantined customer request goes
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): the dependency-down case, which quarantine must not be used for
+- [Tool Result Truncation](/book/patterns/context/tool-result-truncation): capping input size before it reaches the assembler
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): per-item isolation that avoids the shared-queue failure entirely
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the budget version of a poison item, which costs money rather than workers
+- [Escalation Ladder](/book/patterns/control/escalation-ladder): where the quarantined customer request goes

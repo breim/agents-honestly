@@ -5,13 +5,13 @@ description: "Tool choice, argument correctness, step efficiency, and recovery b
 
 Atlas resolves ticket #8823 correctly. It also queried the warehouse to look up a single order, took seven steps where three would do, and silently ignored a tool error on the way. An answer-only score records: pass.
 
-That is not a scoring bug. It is the limit of scoring answers: **it cannot distinguish a system that works from one that got lucky**, and a lucky path is one input away from an unlucky one. [Sixty percent of production failures are not the model](/docs/evals/eval-discipline). They are retrieval, context, and tool behaviour, which is to say they live in the path.
+That is not a scoring bug. It is the limit of scoring answers: **it cannot distinguish a system that works from one that got lucky**, and a lucky path is one input away from an unlucky one. [Sixty percent of production failures are not the model](/book/evals/eval-discipline). They are retrieval, context, and tool behaviour, which is to say they live in the path.
 
 ## The trap on the other side
 
 State the counterweight immediately, because trajectory evals fail in a specific and self-inflicted way.
 
-The entire reason to build an agent is that [it chooses the sequence after seeing each result](/docs/first-agent/the-loop-by-hand). A trajectory eval that demands one exact sequence has re-specified a fixed workflow and is now failing the agent for doing the thing you built it to do. And if the sequence really is fixed, [Part VI already told you it should be a workflow](/docs/workflows/the-determinism-test) rather than an agent.
+The entire reason to build an agent is that [it chooses the sequence after seeing each result](/book/first-agent/the-loop-by-hand). A trajectory eval that demands one exact sequence has re-specified a fixed workflow and is now failing the agent for doing the thing you built it to do. And if the sequence really is fixed, [Part VI already told you it should be a workflow](/book/workflows/the-determinism-test) rather than an agent.
 
 So the design problem is precise:
 
@@ -30,13 +30,13 @@ Exact match returns 1 or 0 on an identical sequence, and the discipline for usin
 
 > **Exact match belongs where order is a policy, never where order is an artifact.**
 
-`verify_identity` before `issue_credit` is policy in any system carrying both. Reversing it is a compliance failure regardless of outcome. Atlas's own version is [the approval gate](/docs/patterns/durability/approval-gate): the effect may not precede the decision, and a run that inverts them is wrong even when the amount is right. `get_order` before `crm_account_risk_profile` is an artifact of how this particular run happened to proceed, and demanding it penalises a model that found a better route.
+`verify_identity` before `issue_credit` is policy in any system carrying both. Reversing it is a compliance failure regardless of outcome. Atlas's own version is [the approval gate](/book/patterns/durability/approval-gate): the effect may not precede the decision, and a run that inverts them is wrong even when the amount is right. `get_order` before `crm_account_risk_profile` is an artifact of how this particular run happened to proceed, and demanding it penalises a model that found a better route.
 
-Precision and recall carry the rest, and they measure **different failures with different costs**, the same asymmetry [retrieval had](/docs/context/dynamic-selection):
+Precision and recall carry the rest, and they measure **different failures with different costs**, the same asymmetry [retrieval had](/book/context/dynamic-selection):
 
 **Low recall** means a required lookup never happened, so the answer was composed from incomplete data. It is the dangerous one, because it produces a fluent, confident, wrong reply.
 
-**Low precision** means calls that were not needed. It costs money, latency, and [context that is rented for the rest of the run](/docs/tools/result-design). Expensive, and visible.
+**Low precision** means calls that were not needed. It costs money, latency, and [context that is rented for the rest of the run](/book/tools/result-design). Expensive, and visible.
 
 Optimise recall first. Precision failures show up on a cost dashboard; recall failures show up in a customer complaint.
 
@@ -46,11 +46,11 @@ The ratio of minimum viable steps to steps actually taken, normalised per task c
 
 Two cautions make it usable rather than misleading.
 
-**The minimum is a judgement, not a fact.** Someone has to decide that this ticket needs three calls, and that decision belongs in the golden set alongside the expected answer, which means it gets the same [annotator-agreement discipline](/docs/evals/datasets) as everything else.
+**The minimum is a judgement, not a fact.** Someone has to decide that this ticket needs three calls, and that decision belongs in the golden set alongside the expected answer, which means it gets the same [annotator-agreement discipline](/book/evals/datasets) as everything else.
 
-**Normalise per task class, or the number is meaningless.** A two-step order lookup and a nine-step account investigation averaged together produce a figure that describes neither. This is [the per-route rule](/docs/evals/datasets) again, arriving in a metric.
+**Normalise per task class, or the number is meaningless.** A two-step order lookup and a nine-step account investigation averaged together produce a figure that describes neither. This is [the per-route rule](/book/evals/datasets) again, arriving in a metric.
 
-Alongside it, the simpler and more actionable measure: the **redundant call rate**, the share of tool calls that contributed nothing to the outcome. Duplicated lookups, calls whose results were never referenced, a second query for something already in context. That number tends to be embarrassing the first time you compute it, and [tool consolidation](/docs/tools/tools-are-apis-for-models) attacks it directly.
+Alongside it, the simpler and more actionable measure: the **redundant call rate**, the share of tool calls that contributed nothing to the outcome. Duplicated lookups, calls whose results were never referenced, a second query for something already in context. That number tends to be embarrassing the first time you compute it, and [tool consolidation](/book/tools/tools-are-apis-for-models) attacks it directly.
 
 ## Recovery is the part nobody scores
 
@@ -65,13 +65,13 @@ Four measurable behaviours:
 | **Switching** | Did it try a different tool when the first was genuinely unavailable? |
 | **Loop escape** | One minus the rate of identical repetition |
 
-**Loop escape** is [the branch-selection argument from Part VIII](/docs/tools/errors-as-instructions) arriving as a number. That chapter said a repeated identical `(tool, arguments, error)` triple is a control-flow signal rather than a message problem; here it is a score, and a low one points at error text that selects no branch.
+**Loop escape** is [the branch-selection argument from Part VIII](/book/tools/errors-as-instructions) arriving as a number. That chapter said a repeated identical `(tool, arguments, error)` triple is a control-flow signal rather than a message problem; here it is a score, and a low one points at error text that selects no branch.
 
 The construction requirement follows, and it is a recipe rather than a principle:
 
 > **Inject failures deliberately for every tool in the schema: timeouts, 4xx, 5xx, and malformed payloads.**
 
-You cannot evaluate recovery on traffic that did not fail. This is also the one place where [synthesis is unambiguously the right source](/docs/evals/datasets): a fault-injection matrix is coverage of a space, not fidelity to a distribution, and no amount of production sampling will give you a malformed payload from every tool.
+You cannot evaluate recovery on traffic that did not fail. This is also the one place where [synthesis is unambiguously the right source](/book/evals/datasets): a fault-injection matrix is coverage of a space, not fidelity to a distribution, and no amount of production sampling will give you a malformed payload from every tool.
 
 ## What the path catches that the answer does not
 
@@ -100,7 +100,7 @@ Every one of those is a system that will fail on the next input, reported today 
 | Tool selection | Recall first, then precision, per route |
 | `verify → credit` ordering | **Exact match**. It is policy |
 | Everything else about order | Not scored. The model chooses |
-| Arguments | [Assertions](/docs/evals/scoring): right account, right period, right version |
+| Arguments | [Assertions](/book/evals/scoring): right account, right period, right version |
 | Step efficiency | Per route, against a minimum recorded in the golden set |
 | Redundant calls | Rate, tracked over time |
 | Recovery | Fault-injection suite: timeout, 4xx, 5xx, and malformed payload per tool |
@@ -109,7 +109,7 @@ The third row is the one that took discipline to leave empty. Atlas's expected t
 
 ---
 
-Next: [Cost and Latency as Scores](/docs/evals/cost-and-latency-evals), a correct answer that takes ninety seconds and costs a dollar is a failing result.
+Next: [Cost and Latency as Scores](/book/evals/cost-and-latency-evals), a correct answer that takes ninety seconds and costs a dollar is a failing result.
 
 ## Takeaways
 

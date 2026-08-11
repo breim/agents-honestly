@@ -57,7 +57,7 @@ The failure that gives this chapter its subtitle: running a LangGraph checkpoint
 
 Now there are two records of position that can disagree: after a crash, after a redeploy, after a resume that one of them saw and the other did not. Worse is resuming through LangGraph's own client while Temporal holds the execution: the graph advances, the workflow does not, and the next signal arrives at a workflow whose idea of the current node is stale.
 
-[As the plugin chapter said](/docs/durability/langgraph-on-temporal), Temporal's history **replaces** the checkpointer rather than complementing it. Pick one owner of position and delete the other.
+[As the plugin chapter said](/book/durability/langgraph-on-temporal), Temporal's history **replaces** the checkpointer rather than complementing it. Pick one owner of position and delete the other.
 </Aside>
 
 ## The rule that survives either mechanism
@@ -81,7 +81,7 @@ def pay(state):
     return {"credit_id": issue_credit(state["order_id"])}
 ```
 
-That is [the one-effect-per-node rule](/docs/langgraph/persistence) arriving from a third direction. Part VII derived it from checkpoint replay, [Part XI derived it from compensation ordering](/docs/durability/compensation), and here it falls out of interrupt semantics. Three independent arguments for the same constraint is usually a sign the constraint is real.
+That is [the one-effect-per-node rule](/book/langgraph/persistence) arriving from a third direction. Part VII derived it from checkpoint replay, [Part XI derived it from compensation ordering](/book/durability/compensation), and here it falls out of interrupt semantics. Three independent arguments for the same constraint is usually a sign the constraint is real.
 
 ## One interrupt per node, and this one is not style
 
@@ -97,7 +97,7 @@ So the practical rule is not an aesthetic preference:
 
 > **One interrupt per node.** If a step needs two human decisions, it is two nodes.
 
-And one more thing about the blast radius, because "the node re-runs" understates it. When the `interrupt()` sits inside [a subgraph](/docs/langgraph/routing-and-subgraphs), resuming re-executes **both** the subgraph node that raised it *and* the parent node that invoked the subgraph, each from its own first line. So the rule *put side effects after the interrupt* is not sufficient at one level up: work the parent did before calling the subgraph runs again too, with no `interrupt()` anywhere near it to warn you. Atlas's agent loop is a subgraph, which puts this squarely on the path this book recommends.
+And one more thing about the blast radius, because "the node re-runs" understates it. When the `interrupt()` sits inside [a subgraph](/book/langgraph/routing-and-subgraphs), resuming re-executes **both** the subgraph node that raised it *and* the parent node that invoked the subgraph, each from its own first line. So the rule *put side effects after the interrupt* is not sufficient at one level up: work the parent did before calling the subgraph runs again too, with no `interrupt()` anywhere near it to warn you. Atlas's agent loop is a subgraph, which puts this squarely on the path this book recommends.
 
 Check the current state of those issues before designing around them. This is a moving target, and the shape of the constraint is more durable than its details.
 
@@ -110,15 +110,15 @@ Check the current state of those issues before designing around them. This is a 
 | Both, via the plugin | `interrupt()` for the place; Temporal owns the wait |
 | Reviewer must learn whether their decision was accepted | An **update**, wrapped around whatever the graph needs |
 
-That last row is the one to be deliberate about. The documented plugin path delivers the human's answer as a **signal**, and [a signal is acknowledged before the workflow processes it](/docs/durable-execution/signals-and-children). So the approval UI learns that the message was accepted, not that the decision was valid. If your gate has an expiry or a validator, as [the previous chapter argued it should](/docs/human-in-the-loop/approval-gates), the acceptance check belongs in an update in front of it.
+That last row is the one to be deliberate about. The documented plugin path delivers the human's answer as a **signal**, and [a signal is acknowledged before the workflow processes it](/book/durable-execution/signals-and-children). So the approval UI learns that the message was accepted, not that the decision was valid. If your gate has an expiry or a validator, as [the previous chapter argued it should](/book/human-in-the-loop/approval-gates), the acceptance check belongs in an update in front of it.
 
 ## Atlas, concretely
 
-Atlas runs the workflow directly rather than through the plugin. [The port was forty lines](/docs/durability/agent-as-workflow) and the topology is one loop with two exits, so the graph was never carrying its weight.
+Atlas runs the workflow directly rather than through the plugin. [The port was forty lines](/book/durability/agent-as-workflow) and the topology is one loop with two exits, so the graph was never carrying its weight.
 
 That makes the choice easy and worth stating as the general recommendation it is: **when you own the code, prefer the mechanism that does not re-execute.** Temporal's update-plus-condition has no double-execution problem to design around, no ordering dependency between multiple pauses, and no second persistence layer to keep consistent with the first.
 
-`interrupt()` earns its place when the graph already exists and represents real work, the same condition [that justifies the plugin at all](/docs/durability/langgraph-on-temporal). Then the rules above are not workarounds; they are the operating manual.
+`interrupt()` earns its place when the graph already exists and represents real work, the same condition [that justifies the plugin at all](/book/durability/langgraph-on-temporal). Then the rules above are not workarounds; they are the operating manual.
 
 ## References
 
@@ -127,7 +127,7 @@ That makes the choice easy and worth stating as the general recommendation it is
 
 ---
 
-Next: [Escalation, Timeouts, and Audit Trails](/docs/human-in-the-loop/escalation-and-audit), what happens when nobody approves, and how to prove afterwards what the agent did and why.
+Next: [Escalation, Timeouts, and Audit Trails](/book/human-in-the-loop/escalation-and-audit), what happens when nobody approves, and how to prove afterwards what the agent did and why.
 
 ## Takeaways
 

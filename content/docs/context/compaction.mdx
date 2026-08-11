@@ -4,7 +4,7 @@ description: "Rewriting history so the agent can keep going, without losing the 
 ---
 
 
-History is the claimant that always wins. Every other row in the [budget](/docs/context/context-as-budget) is bounded by something: a constant, a `k`, a truncation at the tool boundary. History just grows, and on a long enough run it consumes the window regardless of how disciplined everything else is.
+History is the claimant that always wins. Every other row in the [budget](/book/context/context-as-budget) is bounded by something: a constant, a `k`, a truncation at the tool boundary. History just grows, and on a long enough run it consumes the window regardless of how disciplined everything else is.
 
 So at some point you rewrite it. That operation is **lossy compression of your own program's state**, performed by a probabilistic component, on data you will need later. Every compaction is a bet about what won't be needed again, and losing the bet is, as usual in this book, silent.
 
@@ -18,7 +18,7 @@ Compaction failures have a recognizable shape, and once you know it you'll spot 
 - It re-runs work it already did, sometimes in a loop.
 - It declares the task complete when it isn't.
 
-That third one is the most damaging and the least obvious, because it doesn't look like a failure. The agent lost track of the *goal*, retained enough to sound coherent, and wrapped up. In a support queue that is a ticket marked resolved that wasn't, precisely the outcome the [acceptance spec](/docs/first-agent/the-problem) forbade.
+That third one is the most damaging and the least obvious, because it doesn't look like a failure. The agent lost track of the *goal*, retained enough to sound coherent, and wrapped up. In a support queue that is a ticket marked resolved that wasn't, precisely the outcome the [acceptance spec](/book/first-agent/the-problem) forbade.
 
 ## Four operations, cheapest first
 
@@ -80,7 +80,7 @@ Two of those deserve emphasis because they are the ones summarizers reliably dro
 
 ## Write before you compact
 
-Which brings us to the mechanism that makes the rest of this manageable, and it is the payoff of the [last chapter](/docs/context/memory).
+Which brings us to the mechanism that makes the rest of this manageable, and it is the payoff of the [last chapter](/book/context/memory).
 
 The typed scratchpad is not in the transcript. Compaction rewrites the transcript. Therefore **compaction cannot take what's in the scratchpad**, and the discipline follows directly:
 
@@ -95,7 +95,7 @@ The typed scratchpad is not in the transcript. Compaction rewrites the transcrip
      ④ re-inject the scratchpad after the summary
 ```
 
-**Notice what is not on that list.** The credit Atlas computed does not get flushed, and the omission is the whole discipline. *Verified* means a tool produced it: the flush moves `get_order`'s total and `search_policies`' version, both of which are exactly what they were when the tool returned them. A computed amount is a model-derived value, and [step four of the poisoning chapter](/docs/context/context-poisoning) is the case that matters: flush it and you have promoted a wrong number out of the transcript, where a later check could still overturn it, into the lossless store, where nothing will. Compaction is the recovery from a poisoned run only while it draws from what the model did not write.
+**Notice what is not on that list.** The credit Atlas computed does not get flushed, and the omission is the whole discipline. *Verified* means a tool produced it: the flush moves `get_order`'s total and `search_policies`' version, both of which are exactly what they were when the tool returned them. A computed amount is a model-derived value, and [step four of the poisoning chapter](/book/context/context-poisoning) is the case that matters: flush it and you have promoted a wrong number out of the transcript, where a later check could still overturn it, into the lossless store, where nothing will. Compaction is the recovery from a poisoned run only while it draws from what the model did not write.
 
 Write-before-compaction turns a lossy operation into a mostly-safe one, because the things that hurt to lose were moved somewhere lossless first. It also makes compaction *testable*: the scratchpad is a typed object you can assert on, whereas "did the summary keep the important bits" is a judgment call.
 
@@ -117,7 +117,7 @@ Compacting mid-investigation is how the agent loses the thread. Compacting after
 
 **Compacting the system prompt's job.** Summaries that include "the assistant should cite policies" are re-stating the system prompt into history, where it now costs tokens twice and can drift from the actual prompt.
 
-**Losing tenancy.** If your compaction is a model call, it sees the whole conversation. Make sure the summarizer is subject to the same [authorization](/docs/security/tenant-isolation) as everything else, and that the summary can't carry another customer's data forward.
+**Losing tenancy.** If your compaction is a model call, it sees the whole conversation. Make sure the summarizer is subject to the same [authorization](/book/security/tenant-isolation) as everything else, and that the summary can't carry another customer's data forward.
 
 ## Server-side and clearing
 
@@ -139,7 +139,7 @@ Both belong in the eval suite. A compaction policy that has never been tested is
 
 ---
 
-Next: [Context Poisoning](/docs/context/context-poisoning), where the agent wrote something false into its own history and now every turn reasons from it.
+Next: [Context Poisoning](/book/context/context-poisoning), where the agent wrote something false into its own history and now every turn reasons from it.
 
 ## Takeaways
 

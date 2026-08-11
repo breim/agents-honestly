@@ -15,14 +15,14 @@ Chunked at 400 tokens, those land as three separate chunks. A query about opened
 
 The model receives 7.3.2 alone: *"Sub-clause 7.3.1 does not apply to product families RB and RC…"* It does not know what 7.3.1 said, what 7.3 established, or that a 30-day window exists at all. The retrieval was correct. The answer will be wrong.
 
-This is the [chunking tension](/docs/retrieval/chunking) in its sharpest form. **Small chunks match better; large chunks answer better**, and one chunk size cannot do both.
+This is the [chunking tension](/book/retrieval/chunking) in its sharpest form. **Small chunks match better; large chunks answer better**, and one chunk size cannot do both.
 
 ## Forces
 
 - **Retrieval precision improves as chunks get smaller**: less unrelated text diluting the embedding.
 - **Answer quality improves as chunks get larger**: definitions, qualifiers, and exceptions live in the surrounding text.
 - **The relationship is structural**, not statistical: a sub-clause is meaningless without its parent, and the document says so.
-- **Returning the whole document wastes the window** and re-introduces the [near-miss problem](/docs/context/context-as-budget).
+- **Returning the whole document wastes the window** and re-introduces the [near-miss problem](/book/context/context-as-budget).
 - **Adjacent children of the same parent are often both retrieved**, so naive expansion duplicates text.
 
 ## Solution
@@ -50,13 +50,13 @@ Index the **small** chunk; return the **large** one.
 
 Four rules:
 
-**Let the document define the parent.** A section, a clause with its sub-clauses, a table with its header, a function with its docstring. A parent that is "the 1,200 tokens around the match" is an arbitrary window and will cut through a boundary somewhere; a parent that is *the section* is a real unit of meaning. This is the same argument as [what must never be split](/docs/retrieval/chunking), applied one level up.
+**Let the document define the parent.** A section, a clause with its sub-clauses, a table with its header, a function with its docstring. A parent that is "the 1,200 tokens around the match" is an arbitrary window and will cut through a boundary somewhere; a parent that is *the section* is a real unit of meaning. This is the same argument as [what must never be split](/book/retrieval/chunking), applied one level up.
 
-**Deduplicate parents after retrieval.** Three children of §7.3 matching produces one parent, not three copies. Do this *after* [reranking](/docs/patterns/retrieval/two-stage-rerank), so the reranker still scores the precise children: the child is what the query actually matched, and scoring the parent throws that precision away.
+**Deduplicate parents after retrieval.** Three children of §7.3 matching produces one parent, not three copies. Do this *after* [reranking](/book/patterns/retrieval/two-stage-rerank), so the reranker still scores the precise children: the child is what the query actually matched, and scoring the parent throws that precision away.
 
-**Cap the parent.** A section that is 9,000 tokens is not a parent, it is a document. Fall back to the child plus its immediate neighbours when the parent exceeds a ceiling, and log it: a corpus with many oversized parents has a [chunking](/docs/retrieval/chunking) problem this pattern is masking.
+**Cap the parent.** A section that is 9,000 tokens is not a parent, it is a document. Fall back to the child plus its immediate neighbours when the parent exceeds a ceiling, and log it: a corpus with many oversized parents has a [chunking](/book/retrieval/chunking) problem this pattern is masking.
 
-**Carry both IDs.** The child ID is what matched and the parent ID is what was sent. [Citations](/docs/patterns/retrieval/grounded-citations) should point at the child, because that is the span that actually supports the claim, while the prompt receives the parent.
+**Carry both IDs.** The child ID is what matched and the parent ID is what was sent. [Citations](/book/patterns/retrieval/grounded-citations) should point at the child, because that is the span that actually supports the claim, while the prompt receives the parent.
 
 ## Code
 
@@ -144,17 +144,17 @@ async def expand_to_parents(ranked: list[Child], keep: int, ctx) -> list[Passage
 </Tab>
 </Tabs>
 
-`parent_oversize` is a metric worth watching. It rises when documents change shape, a new template with fewer headings, a supplier's PDF that parses into one giant section, and it is an early signal of a [corpus regression](/docs/observability/drift) that will surface later as worse answers.
+`parent_oversize` is a metric worth watching. It rises when documents change shape, a new template with fewer headings, a supplier's PDF that parses into one giant section, and it is an early signal of a [corpus regression](/book/observability/drift) that will surface later as worse answers.
 
 ## Trade-offs
 
-**Two stores, or one store with two granularities.** Children are indexed and embedded; parents are stored and fetched by ID. Parents do not need embedding, which keeps the extra cost modest, but the [ingestion pipeline](/docs/retrieval/ingestion-pipeline) now has to keep both consistent, and a re-index that rebuilds children without rebuilding parents produces dangling IDs.
+**Two stores, or one store with two granularities.** Children are indexed and embedded; parents are stored and fetched by ID. Parents do not need embedding, which keeps the extra cost modest, but the [ingestion pipeline](/book/retrieval/ingestion-pipeline) now has to keep both consistent, and a re-index that rebuilds children without rebuilding parents produces dangling IDs.
 
 **More tokens per result.** A 1,200-token parent instead of a 200-token child means fewer results fit. Usually a good trade: five complete sections beat twenty fragments. Sometimes not, and the corrective is `keep`, not the parent size.
 
 **Deduplication changes the effective `k`.** Ten ranked children may collapse to four parents. Either over-fetch to compensate or accept that `keep` counts parents, and be explicit about which: silently returning four passages when the pipeline promised five is the kind of thing that shows up as an unexplained recall drop.
 
-**Filters must apply at both levels.** If a child is authorized and its parent contains restricted material, expansion has [leaked](/docs/retrieval/metadata-and-authorization). In practice this means permissions live on the parent and children inherit them, which is a constraint on how you model the corpus.
+**Filters must apply at both levels.** If a child is authorized and its parent contains restricted material, expansion has [leaked](/book/retrieval/metadata-and-authorization). In practice this means permissions live on the parent and children inherit them, which is a constraint on how you model the corpus.
 
 ## When not to use it
 
@@ -164,18 +164,18 @@ async def expand_to_parents(ranked: list[Child], keep: int, ctx) -> list[Passage
 
 **When the whole document fits.** If sections are short and documents are a few thousand tokens, retrieve the document. Two granularities for a corpus that fits in one is complexity for its own sake.
 
-**When context can be attached at ingestion instead.** Prepending the section heading and a one-line ancestor summary to every child, [chunks carrying their context](/docs/retrieval/chunking), solves a large share of these cases for far less machinery. Try that first; reach for parent–child when the *exception itself* lives in a sibling chunk, which is the case the opening example shows and the one contextual prefixes cannot fix.
+**When context can be attached at ingestion instead.** Prepending the section heading and a one-line ancestor summary to every child, [chunks carrying their context](/book/retrieval/chunking), solves a large share of these cases for far less machinery. Try that first; reach for parent–child when the *exception itself* lives in a sibling chunk, which is the case the opening example shows and the one contextual prefixes cannot fix.
 
 <Aside type="caution" title="It cannot fix a chunk that splits a single fact">
 Parent–child recovers context that lives *around* the match. It does nothing for a fact split *through the middle*: a table whose header is in one chunk and whose rows are in the next, or a sentence severed mid-clause.
 
-Those need the fix one stage earlier: chunk on structural boundaries, never on a fixed token count alone, and [never split a table from its header](/docs/retrieval/chunking). If you find yourself reaching for larger and larger parents to compensate, the chunker is the thing to change.
+Those need the fix one stage earlier: chunk on structural boundaries, never on a fixed token count alone, and [never split a table from its header](/book/retrieval/chunking). If you find yourself reaching for larger and larger parents to compensate, the chunker is the thing to change.
 </Aside>
 
 ## Related
 
-- [Chunking](/docs/retrieval/chunking): the strategies ladder, and what must never be split
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): rerank children, then expand; order matters
-- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): cite the child, send the parent
-- [Tool Result Truncation](/docs/patterns/context/tool-result-truncation): capping what expansion produces
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): why permissions belong on the parent
+- [Chunking](/book/retrieval/chunking): the strategies ladder, and what must never be split
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): rerank children, then expand; order matters
+- [Grounded Citations](/book/patterns/retrieval/grounded-citations): cite the child, send the parent
+- [Tool Result Truncation](/book/patterns/context/tool-result-truncation): capping what expansion produces
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): why permissions belong on the parent

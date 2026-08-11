@@ -9,7 +9,7 @@ That is a different program, and three things change.
 
 ## One workflow, for the life of the case
 
-[The previous chapters](/docs/durability/not-a-background-job) established the shape: the workflow ID is the business entity. Extended to a long case, that becomes the **entity workflow**, a single execution that persists for the entity's entire lifetime and handles every state transition through signals and updates.
+[The previous chapters](/book/durability/not-a-background-job) established the shape: the workflow ID is the business entity. Extended to a long case, that becomes the **entity workflow**, a single execution that persists for the entity's entire lifetime and handles every state transition through signals and updates.
 
 <Figure caption="One execution, many events, weeks of wall clock. Nothing is running between them." frame={false}>
 
@@ -29,7 +29,7 @@ That is a different program, and three things change.
 
 </Figure>
 
-Between those lines nothing is executing. There is no process, no thread, no row being polled, just a durable execution with a timer against it. That is the property that makes a three-week agent affordable, and it is the same one that made [a three-day approval affordable](/docs/durable-execution/signals-and-children).
+Between those lines nothing is executing. There is no process, no thread, no row being polled, just a durable execution with a timer against it. That is the property that makes a three-week agent affordable, and it is the same one that made [a three-day approval affordable](/book/durable-execution/signals-and-children).
 
 ## Inbound events arrive in bursts, and naive handling answers three times
 
@@ -105,7 +105,7 @@ Four seconds of latency, one coherent reply instead of three contradictory ones.
 
 ## History grows until it doesn't
 
-A three-week thread with tool calls and model responses runs into the ceiling [Part X named](/docs/durable-execution/signals-and-children): **51,200 events or 50 MB per execution.** Both are reachable, and the payload figures make it concrete. Ten substantial conversational turns approach 40 KB of raw content before Temporal's own per-event metadata.
+A three-week thread with tool calls and model responses runs into the ceiling [Part X named](/book/durable-execution/signals-and-children): **51,200 events or 50 MB per execution.** Both are reachable, and the payload figures make it concrete. Ten substantial conversational turns approach 40 KB of raw content before Temporal's own per-event metadata.
 
 Continue-as-new is the answer: end this execution, immediately start a fresh one with the same workflow ID, passing forward a summary as input. History resets to empty and the case continues under the same address.
 
@@ -123,21 +123,21 @@ It is also the operation with the most sharp edges in this book, and all of them
 **Signals can outpace draining.** If events arrive faster than the workflow can process them and reach continue-as-new, the execution can hit the signal limit, at which point new signals are rejected until it does. Which means your system needs periodic quiet moments, and if the traffic pattern does not produce them naturally, you have to create them.
 </Aside>
 
-That last one deserves emphasis because it is a design constraint rather than an API detail: **an entity workflow under continuous load cannot recycle its history.** The accumulator above helps by batching bursts into single runs, which is fewer events. But a genuinely relentless stream needs the work partitioned across [child workflows](/docs/durable-execution/signals-and-children) instead.
+That last one deserves emphasis because it is a design constraint rather than an API detail: **an entity workflow under continuous load cannot recycle its history.** The accumulator above helps by batching bursts into single runs, which is fewer events. But a genuinely relentless stream needs the work partitioned across [child workflows](/book/durable-execution/signals-and-children) instead.
 
 ## What crosses the boundary
 
-Continue-as-new hands the new execution one thing: its input. So the design question is what state deserves to survive, and this is where [the transcript problem](/docs/durability/agent-as-workflow) deferred from two chapters ago comes due.
+Continue-as-new hands the new execution one thing: its input. So the design question is what state deserves to survive, and this is where [the transcript problem](/book/durability/agent-as-workflow) deferred from two chapters ago comes due.
 
 Three things can cross, in ascending order of preference:
 
 **The raw transcript.** Simple, and it defeats the purpose. You reset history and immediately fill it with what you were trying to shed.
 
-**A summary.** Compact, lossy, and it forces you to decide what mattered. This is exactly [the compaction decision from Part III](/docs/context/compaction), arriving with a deadline attached. The wall makes you choose, where before you could postpone.
+**A summary.** Compact, lossy, and it forces you to decide what mattered. This is exactly [the compaction decision from Part III](/book/context/compaction), arriving with a deadline attached. The wall makes you choose, where before you could postpone.
 
 **A reference and a cursor.** The messages live in an external store; the workflow carries an ID and a position. This is the recommended shape for conversational agents, and it decouples history growth from conversation length entirely.
 
-Atlas carries the third, plus a rolling summary for the model's context, because the store answers *"what was said"* and the summary answers *"what matters,"* and those are [different questions](/docs/context/memory).
+Atlas carries the third, plus a rolling summary for the model's context, because the store answers *"what was said"* and the summary answers *"what matters,"* and those are [different questions](/book/context/memory).
 
 <Aside type="note" title="What doesn't cross is still auditable">
 State you choose not to carry forward is gone from the new execution's perspective. But the *old* execution's history still exists, with its retention policy, containing everything.
@@ -161,7 +161,7 @@ await sleep(state.slaDeadline.getTime() - Date.now());
 
 Derive the sleep at arming time, from *now*, not from `workflowInfo().startTime`, which is the start of the whole execution **chain** and does not reset on continue-as-new. Subtracting it would hand every new run the full original window, which is the bug above wearing a fix.
 
-Anything measured against the case rather than against the current execution must be an absolute timestamp carried forward. That covers SLA clocks, retention windows, and escalation ladders. And [the SLA timer pattern](/docs/patterns/durability/sla-timer) is this rule with the cancel-and-re-arm machinery attached.
+Anything measured against the case rather than against the current execution must be an absolute timestamp carried forward. That covers SLA clocks, retention windows, and escalation ladders. And [the SLA timer pattern](/book/patterns/durability/sla-timer) is this rule with the cancel-and-re-arm machinery attached.
 
 ## Atlas, concretely
 
@@ -172,7 +172,7 @@ Anything measured against the case rather than against the current execution mus
 | Burst handling | Four-second quiet window, one run per batch |
 | Continue-as-new at | ~10,000 events, headroom against 51,200, not a race to it |
 | Carried forward | Ticket metadata, absolute SLA deadline, rolling summary, message-store cursor |
-| Children | None, so the [parent-close policy trap](/docs/durable-execution/signals-and-children) does not apply, which is worth confirming rather than assuming |
+| Children | None, so the [parent-close policy trap](/book/durable-execution/signals-and-children) does not apply, which is worth confirming rather than assuming |
 | Ends | When the ticket closes, or after 90 days of silence |
 
 That last row matters more than it looks. **An entity workflow needs a defined end**, or you have created an execution that runs until someone notices it in a list six months later. "Closed, or ninety days quiet" is a policy decision that belongs in the design rather than in a cleanup script.
@@ -189,7 +189,7 @@ Being honest about the cost, because entity workflows are attractive and slightl
 
 ---
 
-Next: [When Tools Have Side Effects](/docs/durability/compensation), the saga pattern for refunds, emails, and inventory, plus the "we already sent it" problem.
+Next: [When Tools Have Side Effects](/book/durability/compensation), the saga pattern for refunds, emails, and inventory, plus the "we already sent it" problem.
 
 ## Takeaways
 

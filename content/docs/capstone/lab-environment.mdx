@@ -78,7 +78,7 @@ model behavior test     "does it try the attack?"
 system invariant        "can the attempt reach the effect?"
 ```
 
-The first belongs in [Adversarial Evals](/docs/security/adversarial-evals). The second should pass on every commit with no network access.
+The first belongs in [Adversarial Evals](/book/security/adversarial-evals). The second should pass on every commit with no network access.
 
 ## The kernel boundary
 
@@ -161,13 +161,13 @@ The fastest tests in an agentic system should run when the model provider is dow
 
 ## What this lab does not claim
 
-The deterministic kernel does not validate model quality, provider compatibility, Postgres behavior, Temporal replay, UI streaming, or production capacity. Each requires its own layer from [The Testing Pyramid](/docs/evals/testing-pyramid).
+The deterministic kernel does not validate model quality, provider compatibility, Postgres behavior, Temporal replay, UI streaming, or production capacity. Each requires its own layer from [The Testing Pyramid](/book/evals/testing-pyramid).
 
 The kernel proves narrower and more important properties: a model cannot widen scope, untrusted evidence cannot reach a write path, a duplicate trigger does not duplicate work, approval is checked at effect time, and the system terminates even when the model would not.
 
 ---
 
-Next: [Building It](/docs/capstone/building-it), replacing each laboratory boundary with the production architecture while keeping its contracts.
+Next: [Building It](/book/capstone/building-it), replacing each laboratory boundary with the production architecture while keeping its contracts.
 
 ## Takeaways
 

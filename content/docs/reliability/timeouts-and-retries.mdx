@@ -46,21 +46,21 @@ Pick the layer that owns the recovery. Transport hiccups belong to the SDK, so l
 
 ## Not everything should be retried
 
-Retrying a permanent failure is pure cost, and half of a well-behaved policy is knowing what to abandon immediately. The [error taxonomy](/docs/reliability/error-taxonomy) draws the full map; the operational summary is this:
+Retrying a permanent failure is pure cost, and half of a well-behaved policy is knowing what to abandon immediately. The [error taxonomy](/book/reliability/error-taxonomy) draws the full map; the operational summary is this:
 
 | Failure | Retry? | Where |
 | --- | --- | --- |
 | Connection reset, socket timeout | Yes, immediately with backoff | SDK |
 | 429 rate limited | Yes, but obey `Retry-After`, do not guess | SDK, with a queue behind it |
 | 5xx / overloaded | Yes, with backoff and jitter | SDK |
-| Context length exceeded | **No.** Retrying sends the same oversized prompt | Fix or fail: [compact](/docs/context/compaction) and re-enter |
+| Context length exceeded | **No.** Retrying sends the same oversized prompt | Fix or fail: [compact](/book/context/compaction) and re-enter |
 | Malformed tool arguments | **Not as a transport retry** | Return the error to the model. That *is* the recovery |
 | Content filter / policy refusal | **No** | Route to a human |
-| Authorization denied | **No** | [Escalate](/docs/human-in-the-loop/approval-gates) |
-| Write tool, unknown outcome | **Only if [idempotent](/docs/tools/idempotency)** | Next chapter |
+| Authorization denied | **No** | [Escalate](/book/human-in-the-loop/approval-gates) |
+| Write tool, unknown outcome | **Only if [idempotent](/book/tools/idempotency)** | Next chapter |
 | Semantic: it answered, wrongly | Not a retry at all | Evals, not reliability |
 
-The two "no" rows people get wrong are the third and the fifth. A context-length error is *deterministic*: the same request will fail identically three more times, and each attempt bills you for a prompt the provider rejected. And a malformed-arguments error should not be retried by your code at all. [Returning it to the model as an instruction](/docs/tools/errors-as-instructions) is the recovery path, and wrapping a transport retry around it produces three identical failures before the model ever gets to see one.
+The two "no" rows people get wrong are the third and the fifth. A context-length error is *deterministic*: the same request will fail identically three more times, and each attempt bills you for a prompt the provider rejected. And a malformed-arguments error should not be retried by your code at all. [Returning it to the model as an instruction](/book/tools/errors-as-instructions) is the recovery path, and wrapping a transport retry around it produces three identical failures before the model ever gets to see one.
 
 ## Timeouts, plural
 
@@ -74,7 +74,7 @@ A single timeout on a streaming, variable-length call is the wrong instrument. T
 
 Time-to-first-token is the one usually missing and the one that matters most. It separates *the provider is struggling* from *this is a long answer*, and a single overall timeout conflates them. Set it long enough for a legitimate long generation and you wait a minute to discover a dead endpoint; set it short and you kill valid work.
 
-For streaming, the useful bound is **inactivity** rather than total duration. If no token has arrived in fifteen seconds, the stream is dead regardless of how long it has been running. A total cap still belongs there as a backstop, because [an agent that loops](/docs/langgraph/graph-topologies) will happily consume any budget you leave open.
+For streaming, the useful bound is **inactivity** rather than total duration. If no token has arrived in fifteen seconds, the stream is dead regardless of how long it has been running. A total cap still belongs there as a backstop, because [an agent that loops](/book/langgraph/graph-topologies) will happily consume any budget you leave open.
 
 ## The deadline is the run's, not the call's
 
@@ -146,7 +146,7 @@ def backoff_s(attempt: int, base_s: float = 0.5, cap_s: float = 30.0) -> float:
 Two details carry the design. **`maxAttempts` is per run, not per call.** Otherwise a twenty-step run with three retries each has sixty attempts of headroom and no ceiling anyone reasoned about. And the backoff is **full jitter**: sampling uniformly from `[0, ceiling]` rather than adding a small wobble to a fixed delay. Deterministic backoff re-synchronizes every client that failed in the same second into a sharper spike one delay later, which is how a brief degradation becomes a sustained one.
 
 <Aside type="note" title="Honor the header before your formula">
-When a provider returns `Retry-After`, it is telling you when it will be ready. Your exponential curve is a guess made without that information. Take the header when present, fall back to the formula when not, and treat a large `Retry-After` as [backpressure](/docs/reliability/backpressure): a signal to stop admitting new work rather than to keep the current work waiting politely.
+When a provider returns `Retry-After`, it is telling you when it will be ready. Your exponential curve is a guess made without that information. Take the header when present, fall back to the formula when not, and treat a large `Retry-After` as [backpressure](/book/reliability/backpressure): a signal to stop admitting new work rather than to keep the current work waiting politely.
 </Aside>
 
 ## Retry budgets, because per-call caps do not bound the system
@@ -155,9 +155,9 @@ Capping attempts per call bounds nothing globally. With everything failing, ever
 
 The control that actually bounds it is a **retry budget**, a ceiling on retries as a fraction of overall traffic, measured over a rolling window. Google's SRE practice pairs a per-request cap of three attempts with a per-client budget of **10%**: the cap alone lets load grow to just under 3×, and the budget brings that back to roughly 1.1×. When the budget is exhausted, retries are refused and failures pass through.
 
-That last clause is the part that feels wrong and is the point. During a widespread outage, retries are not helping. Everything is failing, so retrying mostly converts one failure into three. Passing the failure through immediately is both cheaper and faster to recover from, and it hands the decision to the layer that can actually do something useful: [a fallback or a circuit breaker](/docs/reliability/fallbacks-and-breakers).
+That last clause is the part that feels wrong and is the point. During a widespread outage, retries are not helping. Everything is failing, so retrying mostly converts one failure into three. Passing the failure through immediately is both cheaper and faster to recover from, and it hands the decision to the layer that can actually do something useful: [a fallback or a circuit breaker](/book/reliability/fallbacks-and-breakers).
 
-For agents, budget the money as well as the count. Retries consume the same [token budget](/docs/patterns/cost/token-budget-enforcement) as productive work, and a run that has spent 80% of its allowance on retried attempts should stop rather than finish poorly at full price.
+For agents, budget the money as well as the count. Retries consume the same [token budget](/book/patterns/cost/token-budget-enforcement) as productive work, and a run that has spent 80% of its allowance on retried attempts should stop rather than finish poorly at full price.
 
 ## Retry the step, not the run
 
@@ -165,7 +165,7 @@ The agent-specific question, and the one with the largest practical payoff.
 
 A run is not a request. When step fourteen fails, the thirteen completed steps are *still valid*: their tool results are known, their tokens are spent, and their conclusions are in the transcript. Retrying the run discards all of it and pays again.
 
-This is what [checkpointing](/docs/langgraph/persistence) and [durable execution](/docs/durable-execution/why-durable-execution) were for, arriving here as a cost argument rather than a correctness one:
+This is what [checkpointing](/book/langgraph/persistence) and [durable execution](/book/durable-execution/why-durable-execution) were for, arriving here as a cost argument rather than a correctness one:
 
 | Retry scope | Cost of a failure at step 14 | When it's right |
 | --- | --- | --- |
@@ -174,7 +174,7 @@ This is what [checkpointing](/docs/langgraph/persistence) and [durable execution
 | From the checkpoint | Nothing before step 14 | The default for long runs |
 | The whole run | Thirteen steps of tokens and time | Almost never |
 
-The precondition for the third row is that steps be individually replayable, which means [reads are safe to repeat and writes are idempotent](/docs/tools/read-and-write-tools), the property the next chapter is entirely about.
+The precondition for the third row is that steps be individually replayable, which means [reads are safe to repeat and writes are idempotent](/book/tools/read-and-write-tools), the property the next chapter is entirely about.
 
 ## Atlas, concretely
 
@@ -201,7 +201,7 @@ The provider recovers at second ninety-one. With these settings, so do you.
 
 ---
 
-Next: [Idempotency in Practice](/docs/reliability/idempotency-in-practice). Keys, dedup windows, and the exactly-once illusion you are actually building.
+Next: [Idempotency in Practice](/book/reliability/idempotency-in-practice). Keys, dedup windows, and the exactly-once illusion you are actually building.
 
 ## Takeaways
 

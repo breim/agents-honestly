@@ -7,7 +7,7 @@ description: "Let the agent pull context through a tool instead of pre-loading i
 
 The pipeline retrieves eight chunks for every ticket before the model sees anything, and stuffs them into the prompt.
 
-For ticket #8817, *"total tonnage shipped to Iberia in Q2,"* none of the eight are relevant, because [the answer is a SQL query](/docs/retrieval/where-does-the-answer-live) and no document contains it. Six thousand tokens of policy text are now in the context, competing for attention with the question and [sitting exactly where attention is weakest](/docs/foundations/context-window).
+For ticket #8817, *"total tonnage shipped to Iberia in Q2,"* none of the eight are relevant, because [the answer is a SQL query](/book/retrieval/where-does-the-answer-live) and no document contains it. Six thousand tokens of policy text are now in the context, competing for attention with the question and [sitting exactly where attention is weakest](/book/foundations/context-window).
 
 For ticket #8812, a returns question, the eight chunks are relevant and *insufficient*: the answer needs the returns policy and the product-family exception, and the second one ranked eleventh.
 
@@ -54,13 +54,13 @@ Expose retrieval as a **tool the agent calls**, rather than a stage that runs be
 
 Four rules:
 
-**The tool takes a query, not a topic.** `search_policies(query, k?)`: the agent writes the query, which is what makes refinement possible. Pair it with [query rewriting](/docs/patterns/retrieval/query-rewriting) inside the tool so a conversational phrasing still retrieves well.
+**The tool takes a query, not a topic.** `search_policies(query, k?)`: the agent writes the query, which is what makes refinement possible. Pair it with [query rewriting](/book/patterns/retrieval/query-rewriting) inside the tool so a conversational phrasing still retrieves well.
 
-**Return provenance, always.** Chunk IDs and versions come back with the text. That is what makes [citation checkable](/docs/patterns/retrieval/grounded-citations), and it is the field [replay and incident scoping](/docs/observability/replay-debugging) both need.
+**Return provenance, always.** Chunk IDs and versions come back with the text. That is what makes [citation checkable](/book/patterns/retrieval/grounded-citations), and it is the field [replay and incident scoping](/book/observability/replay-debugging) both need.
 
-**Cap the searches per run.** Three or four. An agent that has searched four times and not found it should [escalate](/docs/human-in-the-loop/escalation-and-audit), not search a fifth time. The fifth search is almost never the one that works, and unbounded refinement is how a cheap run becomes an expensive one.
+**Cap the searches per run.** Three or four. An agent that has searched four times and not found it should [escalate](/book/human-in-the-loop/escalation-and-audit), not search a fifth time. The fifth search is almost never the one that works, and unbounded refinement is how a cheap run becomes an expensive one.
 
-**Enforce the filter inside the tool.** Tenant, trust class, and version predicates are [authorization](/docs/retrieval/metadata-and-authorization), so the model supplies the query and never the filter.
+**Enforce the filter inside the tool.** Tenant, trust class, and version predicates are [authorization](/book/retrieval/metadata-and-authorization), so the model supplies the query and never the filter.
 
 ## Code
 
@@ -152,7 +152,7 @@ async def execute(args: SearchPolicy, ctx) -> list[dict] | dict:
 </Tab>
 </Tabs>
 
-The `Do NOT use for…` clause is doing more work than it looks. An agent with a search tool and a SQL tool will reach for search on a quantity question unless told plainly not to, and [routing before retrieving](/docs/retrieval/where-does-the-answer-live) is the decision that matters most. The tool description is where that routing rule is actually enforced at runtime.
+The `Do NOT use for…` clause is doing more work than it looks. An agent with a search tool and a SQL tool will reach for search on a quantity question unless told plainly not to, and [routing before retrieving](/book/retrieval/where-does-the-answer-live) is the decision that matters most. The tool description is where that routing rule is actually enforced at runtime.
 
 ## Trade-offs
 
@@ -160,30 +160,30 @@ The `Do NOT use for…` clause is doing more work than it looks. An agent with a
 
 **The agent may not search when it should.** The characteristic failure. A model that believes it knows the return policy will answer from parametric knowledge, confidently and wrongly. Two defenses: a system prompt that makes citation mandatory for policy claims, and an eval case that fails a run whose answer cites nothing.
 
-**Cost is variable rather than fixed.** Usually cheaper on average and occasionally much more expensive, which makes the [p99 run cost](/docs/observability/cost-accounting) the number to watch rather than the mean.
+**Cost is variable rather than fixed.** Usually cheaper on average and occasionally much more expensive, which makes the [p99 run cost](/book/observability/cost-accounting) the number to watch rather than the mean.
 
-**Cache behaves better, not worse.** Pre-loaded chunks sit near the front of the prompt, where they [invalidate everything after them](/docs/patterns/context/stable-prefix). Retrieved results arrive as appended tool messages, below the breakpoint. This is one of the few places where the more flexible design is also the more cache-friendly one.
+**Cache behaves better, not worse.** Pre-loaded chunks sit near the front of the prompt, where they [invalidate everything after them](/book/patterns/context/stable-prefix). Retrieved results arrive as appended tool messages, below the breakpoint. This is one of the few places where the more flexible design is also the more cache-friendly one.
 
 ## When not to use it
 
 **Single-turn, latency-critical paths.** A search box, an autocomplete, a "summarize this page" button. One retrieval, one generation, done.
 
-**When you always need the same context.** If every run reads the same policy summary, put it in the [stable prefix](/docs/patterns/context/stable-prefix) and cache it. Retrieving invariant material on demand pays a turn for nothing.
+**When you always need the same context.** If every run reads the same policy summary, put it in the [stable prefix](/book/patterns/context/stable-prefix) and cache it. Retrieving invariant material on demand pays a turn for nothing.
 
-**When the corpus is small enough to include entirely.** A few thousand tokens of documentation belongs in the prompt. Retrieval infrastructure for material that fits is [the most over-provisioned box on the diagram](/docs/production/reference-architecture).
+**When the corpus is small enough to include entirely.** A few thousand tokens of documentation belongs in the prompt. Retrieval infrastructure for material that fits is [the most over-provisioned box on the diagram](/book/production/reference-architecture).
 
 **When the agent cannot be trusted to search.** If evals show it answering policy questions without citing, fix that first, with a mandatory-citation gate or a forced first retrieval, because on-demand retrieval that the agent skips is worse than pre-loading.
 
 <Aside type="note" title="Where agentic RAG and RAG actually differ">
 The distinction is usually described as an architecture and is really a single decision: **who chooses what to retrieve, and when.** A pipeline chooses before the question is understood, with a fixed `k`. An agent chooses after reading it, and can choose again.
 
-That is genuinely better on precision and genuinely worse on latency and predictability, which is the whole trade. It is not a new component: the index, the embeddings, the filters, and the [evals](/docs/retrieval/retrieval-evals) are identical. Only the caller moved.
+That is genuinely better on precision and genuinely worse on latency and predictability, which is the whole trade. It is not a new component: the index, the embeddings, the filters, and the [evals](/book/retrieval/retrieval-evals) are identical. Only the caller moved.
 </Aside>
 
 ## Related
 
-- [Query Rewriting](/docs/patterns/retrieval/query-rewriting): what the tool should do to the agent's query before searching
-- [Tool Result Truncation](/docs/patterns/context/tool-result-truncation): capping what comes back, so on-demand does not become unbounded
-- [Stable Prefix](/docs/patterns/context/stable-prefix): why appended results cache better than pre-loaded ones
-- [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool): the same pattern, catalogued from the retrieval side
-- [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live): the routing decision the tool description encodes
+- [Query Rewriting](/book/patterns/retrieval/query-rewriting): what the tool should do to the agent's query before searching
+- [Tool Result Truncation](/book/patterns/context/tool-result-truncation): capping what comes back, so on-demand does not become unbounded
+- [Stable Prefix](/book/patterns/context/stable-prefix): why appended results cache better than pre-loaded ones
+- [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool): the same pattern, catalogued from the retrieval side
+- [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live): the routing decision the tool description encodes

@@ -9,7 +9,7 @@ Meridian serves eleven customer accounts from one deployment. On a Tuesday morni
 
 Every other customer's tickets are now behind those nine hundred in the queue. Their agents are not slow: they have not started. A customer whose normal volume is four tickets an hour is waiting forty minutes for the first one, because a first-in-first-out queue is a fairness policy, and it is the wrong one.
 
-[Priority classes](/docs/patterns/scale/priority-queues) do not help: all nine hundred are interactive. The contention is *within* a class, between peers, and no amount of separating urgent from batch addresses it.
+[Priority classes](/book/patterns/scale/priority-queues) do not help: all nine hundred are interactive. The contention is *within* a class, between peers, and no amount of separating urgent from batch addresses it.
 
 The version that is worse and quieter: the noisy tenant is not bursting, they are simply large. They generate 60% of volume every day, so they consistently get 60% of capacity, which may be exactly right, or may mean ten customers are permanently degraded so one can be served.
 
@@ -176,11 +176,11 @@ Deficit round robin comes from packet scheduling, Shreedhar and Varghese, 1995, 
 
 **Fairness is not free.** A cycle over eleven tenants is cheap; a cycle over ten thousand needs an active-tenant index rather than a full sweep. Deficit round robin is O(1) per dispatch when implemented with an active list, and that is why it is the right algorithm at scale.
 
-**A fair system can still be an overloaded one.** Fairness distributes shortage; it does not remove it. If every tenant is degraded equally, the answer is capacity or [admission control](/docs/reliability/backpressure), not a better scheduler.
+**A fair system can still be an overloaded one.** Fairness distributes shortage; it does not remove it. If every tenant is degraded equally, the answer is capacity or [admission control](/book/reliability/backpressure), not a better scheduler.
 
 ## When not to use it
 
-**Single-tenant systems.** No peers, no contention. [Priority classes](/docs/patterns/scale/priority-queues) are the relevant control.
+**Single-tenant systems.** No peers, no contention. [Priority classes](/book/patterns/scale/priority-queues) are the relevant control.
 
 **When tenants have dedicated capacity.** If each customer has their own quota and workers, isolation is physical and fairness is not a scheduling problem.
 
@@ -193,13 +193,13 @@ The aggregate p95 queue age can look healthy through this entire failure. Nine h
 
 Every metric that matters here is **per tenant**: queue age p95, admission rejection rate, tokens consumed against share. And the alert is on the *skew*, the ratio between the worst-served and median tenant, rather than on any absolute number.
 
-This is the same shape as [measuring retrieval recall per tenant rather than globally](/docs/patterns/retrieval/filtered-retrieval), and the same shape as [the cost dashboard needing a tenant dimension](/docs/observability/cost-accounting). A multi-tenant system whose metrics are all aggregates is a system that cannot see its own worst customer experience, which is usually the one about to churn.
+This is the same shape as [measuring retrieval recall per tenant rather than globally](/book/patterns/retrieval/filtered-retrieval), and the same shape as [the cost dashboard needing a tenant dimension](/book/observability/cost-accounting). A multi-tenant system whose metrics are all aggregates is a system that cannot see its own worst customer experience, which is usually the one about to churn.
 </Aside>
 
 ## Related
 
-- [Priority Task Queues](/docs/patterns/scale/priority-queues): fairness between urgency classes; this is fairness within one
-- [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure): per-tenant caps, and admission before starting a run
-- [Multi-Tenant Isolation](/docs/security/tenant-isolation): the correctness boundary this shares a dimension with
-- [Token and Cost Accounting](/docs/observability/cost-accounting): the per-tenant spend this schedules against
-- [Sliding Window](/docs/patterns/scale/sliding-window): the in-flight bound the scheduler feeds
+- [Priority Task Queues](/book/patterns/scale/priority-queues): fairness between urgency classes; this is fairness within one
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): per-tenant caps, and admission before starting a run
+- [Multi-Tenant Isolation](/book/security/tenant-isolation): the correctness boundary this shares a dimension with
+- [Token and Cost Accounting](/book/observability/cost-accounting): the per-tenant spend this schedules against
+- [Sliding Window](/book/patterns/scale/sliding-window): the in-flight bound the scheduler feeds

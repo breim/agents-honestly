@@ -4,7 +4,7 @@ description: "\"How much did we sell in Spain in Q2\" is not a retrieval problem
 ---
 
 
-[Part IV opened](/docs/retrieval/where-does-the-answer-live) with the observation that an aggregate is a computation rather than a document, and that top-*k* over rows is structurally incomplete for a question that needs all of them. That argument is short and most people accept it immediately.
+[Part IV opened](/book/retrieval/where-does-the-answer-live) with the observation that an aggregate is a computation rather than a document, and that top-*k* over rows is structurally incomplete for a question that needs all of them. That argument is short and most people accept it immediately.
 
 The interesting question is the one after it: **what shape of database access do you actually give an agent?** Because "give it SQL" spans everything from a fixed query with two parameters to an open connection and a schema dump, and the distance between those is where this chapter lives.
 
@@ -18,7 +18,7 @@ Text-to-SQL, where the model writes the query, is where everyone starts, and the
 | Enterprise-workflow benchmark: large schemas, multiple dialects | **~21%** |
 | Reported industry evaluations on real enterprise schemas | **~40%** |
 
-That is not a small gap. It is the difference between a demo and a system, and it repeats a pattern this book has hit twice already: with [tool-count benchmarks](/docs/first-agent/first-tools) averaging three candidate tools, and with [recall benchmarks](/docs/retrieval/ann-indexes) measured without filters. **The published number is measured in a regime you will never deploy in.**
+That is not a small gap. It is the difference between a demo and a system, and it repeats a pattern this book has hit twice already: with [tool-count benchmarks](/book/first-agent/first-tools) averaging three candidate tools, and with [recall benchmarks](/book/retrieval/ann-indexes) measured without filters. **The published number is measured in a regime you will never deploy in.**
 
 Meridian's warehouse has forty million rows, columns named in 2014, three tables that all look like they might hold order totals, and a rule that "revenue" excludes cancelled orders but includes partially-returned ones at the retained amount. None of that is in the schema.
 
@@ -115,7 +115,7 @@ Whatever you chose above, these are not optional.
 | **Statement timeout** | A generated query can be accidentally quadratic. Kill it at a few seconds. |
 | **Row limit, always** | Enforced server-side, not requested politely in the query. |
 | **Separate connection pool** | Analytical queries must not starve the pool serving your application. |
-| **Tenancy injected by your code** | The `WHERE tenant_id = ?` is appended by the compiler, never written by the model: [the same rule](/docs/retrieval/metadata-and-authorization) as retrieval, and for the same reason. |
+| **Tenancy injected by your code** | The `WHERE tenant_id = ?` is appended by the compiler, never written by the model: [the same rule](/book/retrieval/metadata-and-authorization) as retrieval, and for the same reason. |
 | **Cost/scan ceiling** | On a warehouse that bills per byte scanned, an unbounded query is an unbounded invoice. |
 
 The tenancy row is the one that gets skipped, because with text-to-SQL it feels natural to let the model write the filter it was told to write. Don't. A filter the model writes is a filter the model can be talked out of.
@@ -124,7 +124,7 @@ The tenancy row is the one that gets skipped, because with text-to-SQL it feels 
 
 Two rules, both learned expensively.
 
-**Aggregate in SQL, return small.** Never hand 40,000 rows to the model. You are paying [attention](/docs/context/context-as-budget) for data the database could have reduced to one number. If a result exceeds a few dozen rows, that is a signal the query was underspecified, and returning "12,412 rows matched; add a grouping or narrow the range" is more useful than truncating.
+**Aggregate in SQL, return small.** Never hand 40,000 rows to the model. You are paying [attention](/book/context/context-as-budget) for data the database could have reduced to one number. If a result exceeds a few dozen rows, that is a signal the query was underspecified, and returning "12,412 rows matched; add a grouping or narrow the range" is more useful than truncating.
 
 **Return the query with the result.** This is SQL's version of a citation, and it is what makes the answer auditable:
 
@@ -134,7 +134,7 @@ Two rules, both learned expensively.
   "sql": "SELECT sum(net_weight_kg) FROM shipments WHERE ..." }
 ```
 
-Now the trace shows what was actually asked, the model can state its assumptions in the reply, and a human who doubts the number has something to check. Given [the acceptance spec's](/docs/first-agent/the-problem) citation requirement, an unsourced number should be treated exactly like an unsourced policy claim.
+Now the trace shows what was actually asked, the model can state its assumptions in the reply, and a human who doubts the number has something to check. Given [the acceptance spec's](/book/first-agent/the-problem) citation requirement, an unsourced number should be treated exactly like an unsourced policy claim.
 
 ## Test it with numbers
 
@@ -158,7 +158,7 @@ And when a question arrives that the layer can't express, Atlas says so and esca
 
 ---
 
-Next: [Building the Ingestion Pipeline](/docs/retrieval/ingestion-pipeline), covering parse, clean, normalize, enrich, embed, index, and keeping it reproducible when the source changes.
+Next: [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline), covering parse, clean, normalize, enrich, embed, index, and keeping it reproducible when the source changes.
 
 ## Takeaways
 

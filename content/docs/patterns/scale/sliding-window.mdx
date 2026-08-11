@@ -52,9 +52,9 @@ Four rules:
 
 **Admit on completion, not on a barrier.** Race the in-flight set, handle whichever finishes, admit one more. The slow item holds one slot for ninety seconds instead of stalling nineteen others.
 
-**Size the window from the [token budget](/docs/reliability/backpressure), not from a thread count.** The binding constraint is input tokens per minute, and the arithmetic yields tens rather than thousands. A window sized by CPU is a window sized by the wrong resource.
+**Size the window from the [token budget](/book/reliability/backpressure), not from a thread count.** The binding constraint is input tokens per minute, and the arithmetic yields tens rather than thousands. A window sized by CPU is a window sized by the wrong resource.
 
-**Propagate backpressure at the door.** When the window is full and the source is a stream, stop pulling, do not buffer internally. An unbounded internal queue converts a capacity problem into a memory problem plus [a fleet of runs you cannot finish](/docs/reliability/backpressure).
+**Propagate backpressure at the door.** When the window is full and the source is a stream, stop pulling, do not buffer internally. An unbounded internal queue converts a capacity problem into a memory problem plus [a fleet of runs you cannot finish](/book/reliability/backpressure).
 
 **Accept out-of-order completion, or do not use this.** Results arrive in whatever order they finish. If downstream needs ordering, the window must write to a store that reorders, and that is a real cost worth naming before adopting the pattern.
 
@@ -132,7 +132,7 @@ def _settle(task):
 </Tab>
 </Tabs>
 
-`Promise.race` / `FIRST_COMPLETED` is the entire difference from a [fan-out with a barrier](/docs/patterns/scale/fan-out). One line, and it changes utilization from sawtooth to flat.
+`Promise.race` / `FIRST_COMPLETED` is the entire difference from a [fan-out with a barrier](/book/patterns/scale/fan-out). One line, and it changes utilization from sawtooth to flat.
 
 ## Trade-offs
 
@@ -140,7 +140,7 @@ def _settle(task):
 
 **Harder to reason about progress.** A wave has a clean "batch 12 of 40." A sliding window has a continuously changing set, so progress means counters: admitted, completed, failed, in flight, emitted as it goes.
 
-**A stuck item silently reduces capacity.** An item that hangs forever occupies its slot permanently, and a few of those shrink an effective window of 20 to 14 with no error anywhere. Every handler needs a [timeout](/docs/reliability/timeouts-and-retries), and in-flight age is worth a metric: this is the failure that shows up as "throughput degraded and nothing is broken."
+**A stuck item silently reduces capacity.** An item that hangs forever occupies its slot permanently, and a few of those shrink an effective window of 20 to 14 with no error anywhere. Every handler needs a [timeout](/book/reliability/timeouts-and-retries), and in-flight age is worth a metric: this is the failure that shows up as "throughput degraded and nothing is broken."
 
 **Errors need a policy at admission time.** With no barrier there is no natural place to check the failure rate. Track it in a rolling window and stop admitting when it crosses a threshold, or a systemic failure processes the entire stream into errors at full speed.
 
@@ -148,7 +148,7 @@ def _settle(task):
 
 **When the set is small.** A dozen items with similar durations gain nothing measurable.
 
-**When ordering is required.** Any sequential dependency between items rules this out. Use [a batch iterator](/docs/patterns/scale/batch-iterator).
+**When ordering is required.** Any sequential dependency between items rules this out. Use [a batch iterator](/book/patterns/scale/batch-iterator).
 
 **When durations are uniform.** The pattern's value is proportional to the variance in item duration. If everything takes four seconds, waves are simpler and just as fast.
 
@@ -157,15 +157,15 @@ def _settle(task):
 <Aside type="note" title="The same fix, at three altitudes">
 This is one idea appearing three times in this book, and noticing that makes each easier to apply.
 
-In [retrieval](/docs/patterns/retrieval/two-stage-rerank): do not wait for the slow exact scorer over everything, score cheaply and wide, then expensively and narrow. In [the workflow layer](/docs/patterns/scale/fan-out): do not synchronize on a barrier when the items are independent. Here: do not let the slowest item in a group gate the rest.
+In [retrieval](/book/patterns/retrieval/two-stage-rerank): do not wait for the slow exact scorer over everything, score cheaply and wide, then expensively and narrow. In [the workflow layer](/book/patterns/scale/fan-out): do not synchronize on a barrier when the items are independent. Here: do not let the slowest item in a group gate the rest.
 
 The general form is that **a barrier is a coordination cost you pay whether or not the coordination buys anything.** It buys something exactly when a later stage needs all the results together: a dedup, a global ranking, an early exit on zero findings. Everywhere else it is idle capacity with a clean-looking control flow, and the fix is to stop waiting for the group.
 </Aside>
 
 ## Related
 
-- [Fan-Out Over Items](/docs/patterns/scale/fan-out): the same bounded parallelism with a barrier at the end
-- [Batch Iterator](/docs/patterns/scale/batch-iterator): when order matters and the set is walked
-- [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure): where the window size comes from, and why admission beats queueing
-- [Downstream Rate Limiting](/docs/patterns/scale/downstream-rate-limiting): bounding the window by a quota you do not control
-- [Priority Task Queues](/docs/patterns/scale/priority-queues): separate windows per class, so bulk cannot fill the interactive one
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): the same bounded parallelism with a barrier at the end
+- [Batch Iterator](/book/patterns/scale/batch-iterator): when order matters and the set is walked
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): where the window size comes from, and why admission beats queueing
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): bounding the window by a quota you do not control
+- [Priority Task Queues](/book/patterns/scale/priority-queues): separate windows per class, so bulk cannot fill the interactive one

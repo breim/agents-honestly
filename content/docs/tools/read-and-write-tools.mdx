@@ -13,14 +13,14 @@ That sentence is easy to nod at and expensive to actually design around, because
 
 | | Read | Write |
 | --- | --- | --- |
-| Retry on failure | Freely | Only if [idempotent](/docs/tools/idempotency) |
+| Retry on failure | Freely | Only if [idempotent](/book/tools/idempotency) |
 | Run several at once | Yes, and you should | **No** |
 | Cache the result | Yes | Meaningless |
 | Re-execute on graph replay | Harmless | Repeats the effect |
-| Undo | Nothing to undo | Needs a [compensation](/docs/durability/compensation) you wrote |
+| Undo | Nothing to undo | Needs a [compensation](/book/durability/compensation) you wrote |
 | Wrong argument | A wasted turn and some tokens | Money moved, mail sent |
 
-Read the middle rows carefully, because they are load-bearing for everything built so far. [Node retry policies](/docs/langgraph/node-or-function), [replay from a checkpoint](/docs/langgraph/persistence), [parallel tool calls in one turn](/docs/first-agent/first-tools), and, in Part X, durable execution's habit of re-running an activity after a crash. **Every one of those mechanisms assumes safe repetition.** They are correct for reads by default and correct for writes only when you have done additional work.
+Read the middle rows carefully, because they are load-bearing for everything built so far. [Node retry policies](/book/langgraph/node-or-function), [replay from a checkpoint](/book/langgraph/persistence), [parallel tool calls in one turn](/book/first-agent/first-tools), and, in Part X, durable execution's habit of re-running an activity after a crash. **Every one of those mechanisms assumes safe repetition.** They are correct for reads by default and correct for writes only when you have done additional work.
 
 The rule that follows is the one this chapter exists for: *the safe-repetition machinery you adopted in Part VII was purchased on the assumption that most of your tools are reads.* That assumption is usually true. It is never automatically true.
 
@@ -64,7 +64,7 @@ resolve_ticket_status(ticket_id)   ← "resolve" reads like a lookup; it starts 
 refresh_account_cache(account_id)  ← "refresh" — writes to shared state
 ```
 
-Every one of those is a real shape, and the last two arrive most often by [wrapping an existing endpoint 1:1](/docs/tools/tools-are-apis-for-models), because HTTP `GET` handlers with side effects are common and nobody minded until the caller became a model with a retry policy.
+Every one of those is a real shape, and the last two arrive most often by [wrapping an existing endpoint 1:1](/book/tools/tools-are-apis-for-models), because HTTP `GET` handlers with side effects are common and nobody minded until the caller became a model with a retry policy.
 
 **The class is a property of the handler, not of the name.** Which means the audit is: read the handlers, not the schemas. Anything that touches a database, a queue, a counter, or a third party is at least class ②, whatever it is called. Then rename it so the catalogue tells the truth.
 
@@ -77,9 +77,9 @@ cancel_order(order_id: string)              ✓
 cancel_orders(filter: {status, before})     ✗
 ```
 
-A filter is a program, [rung ① from the previous chapter](/docs/tools/schema-and-granularity) wearing an object literal instead of a SQL string. And a filter that matches more rows than the author pictured is, essentially, the entire incident category. If a bulk operation is genuinely required, the tool returns the matching IDs and a second call acts on an explicit list, which puts the count in front of a human before it is a fact.
+A filter is a program, [rung ① from the previous chapter](/book/tools/schema-and-granularity) wearing an object literal instead of a SQL string. And a filter that matches more rows than the author pictured is, essentially, the entire incident category. If a bulk operation is genuinely required, the tool returns the matching IDs and a second call acts on an explicit list, which puts the count in front of a human before it is a fact.
 
-**2 · Bound the magnitude in the handler.** The previous chapter established that `maximum` is not enforced in a strict schema. It becomes prose the model reads. So the ceiling on `amount_cents` lives in code, next to the entitlement check, and a request above it is [an error message written for the model](/docs/tools/errors-as-instructions) rather than an exception.
+**2 · Bound the magnitude in the handler.** The previous chapter established that `maximum` is not enforced in a strict schema. It becomes prose the model reads. So the ceiling on `amount_cents` lives in code, next to the entitlement check, and a request above it is [an error message written for the model](/book/tools/errors-as-instructions) rather than an exception.
 
 **3 · Never run write tools in parallel.** Part II established that one assistant turn can carry several `tool_use` blocks, that you run them concurrently, and that returning results one at a time quietly trains the model out of parallel calls. All of that is advice about reads. For writes, dispatch serially and stop at the first failure, because three parallel writes where the second fails leaves a state that no `tool_result` describes and no retry can safely resolve.
 
@@ -125,7 +125,7 @@ for call in (c for c in calls if class_of(c.name) > 2):
 
 Note that `classOf` is a lookup against your own catalogue, not a guess from the name. That only works if you followed rule zero, above.
 
-**4 · Preview before execute, from class ③ up.** A dry-run that returns what *would* happen, rendered for a human. This is what makes an approval gate mean anything: approving `issue_credit` is approving a tool name, while approving *"credit $4,200.00 to Acme Industrial against invoice 88213, leaving $1,180.00 outstanding"* is approving an action. [Part XII](/docs/human-in-the-loop/approval-gates) builds the gate; the preview is what you must have built here for the gate to be more than a speed bump.
+**4 · Preview before execute, from class ③ up.** A dry-run that returns what *would* happen, rendered for a human. This is what makes an approval gate mean anything: approving `issue_credit` is approving a tool name, while approving *"credit $4,200.00 to Acme Industrial against invoice 88213, leaving $1,180.00 outstanding"* is approving an action. [Part XII](/book/human-in-the-loop/approval-gates) builds the gate; the preview is what you must have built here for the gate to be more than a speed bump.
 
 ## Reads are only safe in isolation
 
@@ -142,10 +142,10 @@ Atlas has all three, and it acquired them for good reasons:
 | Leg | Where Atlas got it |
 | --- | --- |
 | Private data | The CRM, the warehouse, the invoice ledger |
-| Untrusted content | Ticket bodies, since anyone can email support, and the [policy corpus](/docs/security/untrusted-retrieval) |
+| Untrusted content | Ticket bodies, since anyone can email support, and the [policy corpus](/book/security/untrusted-retrieval) |
 | External communication | `send_reply`, a class ⑤ tool |
 
-The mitigation is architectural, because prompt instructions cannot fix it: **break one leg for the paths where all three meet.** For Atlas that is the reply path, and the options are the ordinary ones: the outbound message goes through a human gate, or it is assembled from templates with no model-authored free text, or the untrusted document never shares a context window with the private data. [Prompt Injection](/docs/security/prompt-injection) dissects the attack and [Threat Model](/docs/security/threat-model) is where you make the choice properly; the part that belongs *here* is that it is a **tool-catalogue property**. You can read your own catalogue today and see whether you have all three.
+The mitigation is architectural, because prompt instructions cannot fix it: **break one leg for the paths where all three meet.** For Atlas that is the reply path, and the options are the ordinary ones: the outbound message goes through a human gate, or it is assembled from templates with no model-authored free text, or the untrusted document never shares a context window with the private data. [Prompt Injection](/book/security/prompt-injection) dissects the attack and [Threat Model](/book/security/threat-model) is where you make the choice properly; the part that belongs *here* is that it is a **tool-catalogue property**. You can read your own catalogue today and see whether you have all three.
 
 ## What the incidents keep proving
 
@@ -153,7 +153,7 @@ There is a genre of postmortem now, and they rhyme. A coding agent working in a 
 
 The interesting part is not the deletion. It is the last sentence: the agent could enumerate the rules, because **the rules were in its system prompt.** A system prompt is advisory. It is a sign on the server-room door, and the model is free to reason its way past it when the goal seems to require that.
 
-This book has a name for that already: [invariants versus requests](/docs/first-agent/the-problem). Every incident in this genre is that distinction, restated as a bill. The specific corollaries worth carrying:
+This book has a name for that already: [invariants versus requests](/book/first-agent/the-problem). Every incident in this genre is that distinction, restated as a bill. The specific corollaries worth carrying:
 
 - **A capability the agent inherits is a capability the agent has.** Several of these incidents involve an agent running with a human operator's elevated permissions, which is how one of them passed a two-person approval gate: it was not bypassed, it was *satisfied*, by a principal that should never have held both roles.
 - **A restriction that lives in the prompt is documentation.** The same restriction in the credential is an invariant, because it is enforced somewhere the model cannot reach. If the read tools and the write tools share one database role, the only thing separating them is prose.
@@ -177,7 +177,7 @@ Three credentials, not one. The distinction that matters is not that `get_order`
 
 ---
 
-Next: [Idempotency](/docs/tools/idempotency), the refund call timed out. Did it happen? Design so the answer never matters.
+Next: [Idempotency](/book/tools/idempotency), the refund call timed out. Did it happen? Design so the answer never matters.
 
 ## Takeaways
 

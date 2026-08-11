@@ -61,15 +61,15 @@ Before naming products, separate the question people reliably conflate: *who sup
 
 ## The three in this book, by problem
 
-[The map](/docs/the-map) places these by layer. Here is the same thing as a decision:
+[The map](/book/the-map) places these by layer. Here is the same thing as a decision:
 
-**Do you need branching, loops, subgraphs, and resumable state that you can inspect?** → [LangGraph](/docs/langgraph/state-nodes-edges). It models how intelligence flows. Once your agent has more than one shape of run, say a triage path, an investigation path, and a compose-and-approve path, expressing that as an explicit graph beats expressing it as conditionals in a `while` body.
+**Do you need branching, loops, subgraphs, and resumable state that you can inspect?** → [LangGraph](/book/langgraph/state-nodes-edges). It models how intelligence flows. Once your agent has more than one shape of run, say a triage path, an investigation path, and a compose-and-approve path, expressing that as an explicit graph beats expressing it as conditionals in a `while` body.
 
-**Does the work need to survive crashes, deploys, and multi-day waits?** → [Temporal](/docs/durable-execution/why-durable-execution). It models how durable work flows. This is the answer to half our punch list on its own, and it is the one people reach for last because "it's not an AI tool," which is exactly why it works.
+**Does the work need to survive crashes, deploys, and multi-day waits?** → [Temporal](/book/durable-execution/why-durable-execution). It models how durable work flows. This is the answer to half our punch list on its own, and it is the one people reach for last because "it's not an AI tool," which is exactly why it works.
 
-**Does a human watch it happen?** → [The AI SDK](/docs/interface/ai-sdk). Streaming, tool calls rendered as interface, approvals where the user actually is.
+**Does a human watch it happen?** → [The AI SDK](/book/interface/ai-sdk). Streaming, tool calls rendered as interface, approvals where the user actually is.
 
-They compose. The Temporal plugin for LangGraph, currently in public preview, lets each graph node declare whether it runs as a durable activity or inline, which is [a chapter of its own](/docs/durability/langgraph-on-temporal) because the determinism rules are the entire game. And there is one place where two of them genuinely conflict rather than compose, which [also gets a chapter](/docs/interface/two-durable-runtimes).
+They compose. The Temporal plugin for LangGraph, currently in public preview, lets each graph node declare whether it runs as a durable activity or inline, which is [a chapter of its own](/book/durability/langgraph-on-temporal) because the determinism rules are the entire game. And there is one place where two of them genuinely conflict rather than compose, which [also gets a chapter](/book/interface/two-durable-runtimes).
 
 <FrameworkCheck decision="Keep Atlas on the hand-written loop for now. Add a runtime only when a measured failure names the layer it must own.">
 <FrameworkOption name="plain">
@@ -147,11 +147,11 @@ That is not a counsel of minimalism. Atlas will end this book running on durable
 
 You now have a working agent, a measured baseline, and a list of six things that will break it. Part III attacks the one that is already limiting you today: not durability, not tooling, but what the model is allowed to see.
 
-Two catalog entries are worth reading now rather than later, because they harden what you just built without adding a dependency: [ReAct Loop](/docs/patterns/control/react-loop), which is the loop from the last chapter with the five bounds that make it survivable, and [Escalation Ladder](/docs/patterns/control/escalation-ladder), which turns [the escalation contract](/docs/first-agent/the-problem) into named rungs the rest of the book keeps referring back to.
+Two catalog entries are worth reading now rather than later, because they harden what you just built without adding a dependency: [ReAct Loop](/book/patterns/control/react-loop), which is the loop from the last chapter with the five bounds that make it survivable, and [Escalation Ladder](/book/patterns/control/escalation-ladder), which turns [the escalation contract](/book/first-agent/the-problem) into named rungs the rest of the book keeps referring back to.
 
 ---
 
-Next: [Context as an Allocation Problem](/docs/context/context-as-budget). Every claimant competes for the same space, and deciding who gets it is an engineering decision rather than a default.
+Next: [Context as an Allocation Problem](/book/context/context-as-budget). Every claimant competes for the same space, and deciding who gets it is an engineering decision rather than a default.
 
 ## Takeaways
 

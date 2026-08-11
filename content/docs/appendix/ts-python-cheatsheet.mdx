@@ -5,7 +5,7 @@ description: "The same concept in both tracks, side by side."
 
 Nearly every code sample in this book appears in both languages. This page is the translation table between them: not a language tutorial, but the specific places where the *same design* looks different enough to trip you up when reading the other track.
 
-The exceptions are worth naming, because they are exactly where you will need this page. About a dozen short illustrations run in one track only, where the point is a mechanism rather than an idiom, most of them Python, in [Part VII](/docs/langgraph/state-nodes-edges), where the graph API is itself the subject. And [the Temporal LangGraph plugin](/docs/durability/langgraph-on-temporal) is Python-only in the product, not merely in the book.
+The exceptions are worth naming, because they are exactly where you will need this page. About a dozen short illustrations run in one track only, where the point is a mechanism rather than an idiom, most of them Python, in [Part VII](/book/langgraph/state-nodes-edges), where the graph API is itself the subject. And [the Temporal LangGraph plugin](/book/durability/langgraph-on-temporal) is Python-only in the product, not merely in the book.
 
 Ordered by how often it matters.
 
@@ -40,7 +40,7 @@ Both tracks use "a plain data record you do not mutate," which shows up in almos
 
 ## Async, and the differences that bite
 
-Concurrency looks similar and differs in ways that matter for [fan-out](/docs/patterns/scale/fan-out) and [sliding windows](/docs/patterns/scale/sliding-window).
+Concurrency looks similar and differs in ways that matter for [fan-out](/book/patterns/scale/fan-out) and [sliding windows](/book/patterns/scale/sliding-window).
 
 | | TypeScript | Python |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ The trap is the other direction. `[asyncio.create_task(f(i)) for i in items]` sc
 
 **`or` is not `??`, and Python has no `??`.** This is the single most transferable bug between the two tracks, because `or` in Python behaves like `||` in TypeScript: it replaces `0`, `""`, `[]`, and `False`, not just the absent case.
 
-It bites hardest on exactly the values this book cares about. A `Retry-After` of zero means *retry now*; `retry_after_ms(err) or fallback` silently discards it and sleeps. A [token budget](/docs/patterns/cost/token-budget-enforcement) of `0` means *exhausted*; `budget or default` hands back the default. A retrieved `k` of `0` means *retrieve nothing*.
+It bites hardest on exactly the values this book cares about. A `Retry-After` of zero means *retry now*; `retry_after_ms(err) or fallback` silently discards it and sleeps. A [token budget](/book/patterns/cost/token-budget-enforcement) of `0` means *exhausted*; `budget or default` hands back the default. A retrieved `k` of `0` means *retrieve nothing*.
 
 Reach for `x if x is not None else y` in Python wherever the TypeScript says `??`, and reserve `or` for the cases where you genuinely want every falsy value replaced.
 
@@ -90,11 +90,11 @@ Reach for `x if x is not None else y` in Python wherever the TypeScript says `??
 | Chain a cause | `new E(msg, { cause: e })` | `raise E(msg) from e` |
 | Anything can be thrown | **Yes**, `catch (e: unknown)` | No, must derive from `BaseException` |
 
-That last row is why TypeScript samples in this book narrow with `instanceof` before reading fields off a caught value, and Python samples do not need to. It also means [the error classifier](/docs/reliability/error-taxonomy) has slightly more defensive work to do on the TypeScript side.
+That last row is why TypeScript samples in this book narrow with `instanceof` before reading fields off a caught value, and Python samples do not need to. It also means [the error classifier](/book/reliability/error-taxonomy) has slightly more defensive work to do on the TypeScript side.
 
 ## Hashing and canonical JSON
 
-Used for [idempotency keys](/docs/tools/idempotency) and [config bundle hashes](/docs/production/versioning), where an unstable serialization is a real bug rather than a style issue.
+Used for [idempotency keys](/book/tools/idempotency) and [config bundle hashes](/book/production/versioning), where an unstable serialization is a real bug rather than a style issue.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -126,7 +126,7 @@ The two do **not** produce identical bytes for the same object by default. Pytho
 
 ## Time, IDs, and randomness
 
-The three things [durable workflow code must not call directly](/docs/durable-execution/determinism-and-retries).
+The three things [durable workflow code must not call directly](/book/durable-execution/determinism-and-retries).
 
 | | TypeScript | Python |
 | --- | --- | --- |
@@ -161,16 +161,16 @@ Three places where the tracks are not literal translations, deliberately:
 
 **Discriminated unions vs. sentinel returns.** TypeScript returns `{ ok: true } | { ok: false, reason: string }` because the type checker narrows on the tag. Python returns `tuple[bool, str | None]`, which is idiomatic but weaker. A caller that ignores the second element compiles fine in both, and only TypeScript will complain about reading `.reason` off the success branch.
 
-**Context managers.** Python's `async with` is the natural home for [transaction scoping](/docs/security/tenant-isolation) and lease handling; TypeScript uses a callback-taking function (`withTenant(id, async tx => ...)`). Same guarantee, different shape.
+**Context managers.** Python's `async with` is the natural home for [transaction scoping](/book/security/tenant-isolation) and lease handling; TypeScript uses a callback-taking function (`withTenant(id, async tx => ...)`). Same guarantee, different shape.
 
 **Type-level enforcement.** Where the book says a value is "required, not optional," such as the retrieval principal or the delegation on a backend client, TypeScript expresses it in the type and Python expresses it as a required positional argument. Both work; only one is checked before the code runs.
 
 <Aside type="note" title="If you only read one track">
 Read the samples in the language you ship in and skim the other for the comment lines. The comments carry the design decision; the code carries the idiom, and the design is what this book is about.
 
-The one place to read both is the [dispatcher](/docs/capstone/building-it), because the numbered checks line up one-to-one and seeing the same eight steps in two languages is a reasonable check that you have understood what each one is for.
+The one place to read both is the [dispatcher](/book/capstone/building-it), because the numbered checks line up one-to-one and seeing the same eight steps in two languages is a reasonable check that you have understood what each one is for.
 </Aside>
 
 ---
 
-Next: [Temporal Pattern Index](/docs/appendix/temporal-pattern-index), every pattern in the Temporal catalog, mapped to where this book uses it.
+Next: [Temporal Pattern Index](/book/appendix/temporal-pattern-index), every pattern in the Temporal catalog, mapped to where this book uses it.

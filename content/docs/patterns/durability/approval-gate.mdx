@@ -5,7 +5,7 @@ description: "Block a workflow indefinitely on a human decision without holding 
 
 ## Problem
 
-The agent has computed a $2,500 credit. That is [tier 1](/docs/human-in-the-loop/risk-tiers), so a person has to approve it.
+The agent has computed a $2,500 credit. That is [tier 1](/book/human-in-the-loop/risk-tiers), so a person has to approve it.
 
 The person is asleep. It is Friday evening, and they will look at the queue on Monday.
 
@@ -51,11 +51,11 @@ The workflow **blocks on a condition** awaiting a signal, races it against a tim
 
 Four rules:
 
-**No effect before the pause, in the same unit of work.** [The rule that survives either mechanism](/docs/human-in-the-loop/interrupts-vs-signals): everything above the wait re-executes on resume, so an effect placed before it happens twice. The effect goes in its own step, after the decision.
+**No effect before the pause, in the same unit of work.** [The rule that survives either mechanism](/book/human-in-the-loop/interrupts-vs-signals): everything above the wait re-executes on resume, so an effect placed before it happens twice. The effect goes in its own step, after the decision.
 
-**Store the rendered card, as bytes.** [The approval card is assembled from state that will have moved](/docs/human-in-the-loop/approval-gates): balances settle, documents get superseded. Storing a *reference* proves nothing, because re-rendering next year produces a different card. The stored bytes are what demonstrates the decision was informed.
+**Store the rendered card, as bytes.** [The approval card is assembled from state that will have moved](/book/human-in-the-loop/approval-gates): balances settle, documents get superseded. Storing a *reference* proves nothing, because re-rendering next year produces a different card. The stored bytes are what demonstrates the decision was informed.
 
-**Re-derive authorization on resume; never restore it.** The approver may have changed roles, and the tier threshold may have been lowered on Wednesday. [Policy and authorization resolve at the moment of the action](/docs/production/rollout), which means the resumed run re-checks rather than replaying Friday's answer.
+**Re-derive authorization on resume; never restore it.** The approver may have changed roles, and the tier threshold may have been lowered on Wednesday. [Policy and authorization resolve at the moment of the action](/book/production/rollout), which means the resumed run re-checks rather than replaying Friday's answer.
 
 **Give the timeout a policy, not a hang.** Escalate to a second approver, expire and cancel, or auto-approve below a threshold, but decide, and record which branch fired. A gate whose timeout behavior is "wait forever" is a queue of stuck runs nobody can explain.
 
@@ -152,13 +152,13 @@ The comment at the bottom is the pattern's most-violated rule. `requestApproval`
 
 ## Trade-offs
 
-**The wait consumes a workflow, not a process.** That is cheap and not free: each pending approval is a live execution with an event history, a timer, and a place in your [system limits](/docs/patterns/durability/continue-as-new-memory). Thousands of long-pending approvals is a real number to watch.
+**The wait consumes a workflow, not a process.** That is cheap and not free: each pending approval is a live execution with an event history, a timer, and a place in your [system limits](/book/patterns/durability/continue-as-new-memory). Thousands of long-pending approvals is a real number to watch.
 
-**The queue becomes the bottleneck, predictably.** [The risk-tiers chapter](/docs/human-in-the-loop/risk-tiers) predicts it and [the capstone's first month](/docs/capstone/operating-it) hits it: p95 queue age drifts past the SLA, and the fix is raising the tier-0 cap based on which amounts were historically approved unchanged. The gate needs a queue-age alert from day one.
+**The queue becomes the bottleneck, predictably.** [The risk-tiers chapter](/book/human-in-the-loop/risk-tiers) predicts it and [the capstone's first month](/book/capstone/operating-it) hits it: p95 queue age drifts past the SLA, and the fix is raising the tier-0 cap based on which amounts were historically approved unchanged. The gate needs a queue-age alert from day one.
 
-**Approval fatigue is an attack surface, not just a UX problem.** Flooding a reviewer with benign requests until approval is reflex is [a documented technique](/docs/human-in-the-loop/risk-tiers). Every gate you add spends attention an adversary can also draw against.
+**Approval fatigue is an attack surface, not just a UX problem.** Flooding a reviewer with benign requests until approval is reflex is [a documented technique](/book/human-in-the-loop/risk-tiers). Every gate you add spends attention an adversary can also draw against.
 
-**The dedup window has to outlive the pause.** A run that waits from Friday to Monday and then issues a credit is outside a 24-hour dedup window: [the Friday-to-Monday bug](/docs/reliability/idempotency-in-practice), and the single most important thing to [inject in a test](/docs/reliability/failure-injection) for this pattern.
+**The dedup window has to outlive the pause.** A run that waits from Friday to Monday and then issues a credit is outside a 24-hour dedup window: [the Friday-to-Monday bug](/book/reliability/idempotency-in-practice), and the single most important thing to [inject in a test](/book/reliability/failure-injection) for this pattern.
 
 ## When not to use it
 
@@ -168,18 +168,18 @@ The comment at the bottom is the pattern's most-violated rule. `requestApproval`
 
 **When nobody will service it.** A gate routed to a queue nobody owns is a run that hangs and an incident later. Route to a named owner with a named backup, or do not add the gate.
 
-**When notification would do.** [Notify-and-proceed](/docs/human-in-the-loop/risk-tiers) means act now, tell someone, and let them intervene. It is the right posture for a large middle band and costs no waiting at all.
+**When notification would do.** [Notify-and-proceed](/book/human-in-the-loop/risk-tiers) means act now, tell someone, and let them intervene. It is the right posture for a large middle band and costs no waiting at all.
 
 <Aside type="note" title="Why this is the pattern that decides your architecture">
 Of everything in this part, the approval gate is the one that most often forces Tier 3. A team can defer durable execution for retries, for crashes, even for long-running work. A queue and a state table cover a surprising amount.
 
-They cannot defer it for this. **A run that pauses for three days and resumes with its reasoning intact is the requirement that a queue plus a database cannot meet**, because what has to survive is not the data but the agent's position in its own loop. That is exactly what an event history is, and it is why [the two architecture questions](/docs/production/reference-architecture) put "does a run outlive one request" first.
+They cannot defer it for this. **A run that pauses for three days and resumes with its reasoning intact is the requirement that a queue plus a database cannot meet**, because what has to survive is not the data but the agent's position in its own loop. That is exactly what an event history is, and it is why [the two architecture questions](/book/production/reference-architecture) put "does a run outlive one request" first.
 </Aside>
 
 ## Related
 
-- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): which calls need a gate at all, and why fewer is safer
-- [Approval Gates](/docs/human-in-the-loop/approval-gates): the card, the queue, and what the reviewer is shown
-- [Interrupts vs. Signals](/docs/human-in-the-loop/interrupts-vs-signals): the two mechanisms, and the effect-placement rule
-- [Updatable SLA Timer](/docs/patterns/durability/sla-timer): the deadline this races against
-- [Idempotency in Practice](/docs/reliability/idempotency-in-practice): sizing the dedup window to the approval pause
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): which calls need a gate at all, and why fewer is safer
+- [Approval Gates](/book/human-in-the-loop/approval-gates): the card, the queue, and what the reviewer is shown
+- [Interrupts vs. Signals](/book/human-in-the-loop/interrupts-vs-signals): the two mechanisms, and the effect-placement rule
+- [Updatable SLA Timer](/book/patterns/durability/sla-timer): the deadline this races against
+- [Idempotency in Practice](/book/reliability/idempotency-in-practice): sizing the dedup window to the approval pause

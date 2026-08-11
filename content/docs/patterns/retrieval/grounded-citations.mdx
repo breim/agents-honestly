@@ -53,7 +53,7 @@ Three layers, cheapest first, and only the last one is expensive.
 
 Four rules:
 
-**Resolve against this run's retrieved set, not the corpus.** A citation naming a real chunk the run never retrieved is still fabricated. Check membership in `ctx.retrievedIds`, which the [trace already records](/docs/observability/replay-debugging) for replay and incident scoping.
+**Resolve against this run's retrieved set, not the corpus.** A citation naming a real chunk the run never retrieved is still fabricated. Check membership in `ctx.retrievedIds`, which the [trace already records](/book/observability/replay-debugging) for replay and incident scoping.
 
 **Require citations per claim, not per response.** A single marker at the end of a paragraph covers everything and nothing. Ask for markers at the clause level, which is what makes the freight sentence separable from the returns sentence.
 
@@ -153,7 +153,7 @@ async def score_faithfulness(answer: str, chunks: dict[str, str]) -> dict:
 </Tab>
 </Tabs>
 
-The split between the two functions is the design. The mechanical check is a [guardrail](/docs/evals/online-evals): it runs on every response, fails closed, and costs nothing. The faithfulness score is an *eval*: it samples, reports a distribution, and is never on the critical path.
+The split between the two functions is the design. The mechanical check is a [guardrail](/book/evals/online-evals): it runs on every response, fails closed, and costs nothing. The faithfulness score is an *eval*: it samples, reports a distribution, and is never on the critical path.
 
 ## Trade-offs
 
@@ -163,7 +163,7 @@ The split between the two functions is the design. The mechanical check is a [gu
 
 **Citation markers cost tokens and leak into prose.** `[c-8812]` in customer-facing text is noise. Generate markers internally and render them as links, footnotes, or nothing depending on the surface: the check runs on the internal form.
 
-**Entailment judges are themselves models.** An LLM-as-judge or an NLI model has its own error rate and its own [drift](/docs/observability/drift). Pin the judge version like any other model, and treat a moving faithfulness score with a stable system as a judge problem until proven otherwise.
+**Entailment judges are themselves models.** An LLM-as-judge or an NLI model has its own error rate and its own [drift](/book/observability/drift). Pin the judge version like any other model, and treat a moving faithfulness score with a stable system as a judge problem until proven otherwise.
 
 ## When not to use it
 
@@ -173,20 +173,20 @@ The split between the two functions is the design. The mechanical check is a [gu
 
 **As a gate, when latency is tight.** Run the mechanical checks inline and the semantic one asynchronously on a sample. A four-second grounding check on a support reply is worse than the problem.
 
-**Before recall is fixed.** If the right chunk was never retrieved, grounding checks correctly report that the answer is unsupported, which is true, useless, and points at the wrong stage. [Fix retrieval first](/docs/retrieval/retrieval-evals).
+**Before recall is fixed.** If the right chunk was never retrieved, grounding checks correctly report that the answer is unsupported, which is true, useless, and points at the wrong stage. [Fix retrieval first](/book/retrieval/retrieval-evals).
 
 <Aside type="note" title="Why this is the metric to run in production">
 Most quality metrics need a reference answer, which is why they live in CI on a labeled fixture set and cannot follow you into production.
 
-Faithfulness does not. It compares the response against the context that produced it, both of which you already have on every single request. That makes it the rare measurement that runs on real traffic, at real volume, on questions nobody wrote fixtures for, and it is the signal behind the [sustained-drop alert](/docs/production/operating-manual) that catches a regression before anyone files a complaint.
+Faithfulness does not. It compares the response against the context that produced it, both of which you already have on every single request. That makes it the rare measurement that runs on real traffic, at real volume, on questions nobody wrote fixtures for, and it is the signal behind the [sustained-drop alert](/book/production/operating-manual) that catches a regression before anyone files a complaint.
 
-It is also, precisely, a detector for the [semantic failure class](/docs/reliability/error-taxonomy): the one with no exception type and no error rate.
+It is also, precisely, a detector for the [semantic failure class](/book/reliability/error-taxonomy): the one with no exception type and no error rate.
 </Aside>
 
 ## Related
 
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): grounding fails when the right chunk is not in the prompt; fix that first
-- [Parent–Child Chunks](/docs/patterns/retrieval/parent-child-chunks): cite the child, send the parent
-- [Trajectory Evals](/docs/evals/trajectory-evals): grounding claims against tool results, not just retrieved text
-- [Online Evals](/docs/evals/online-evals): the sampling discipline the semantic layer needs
-- [Context Poisoning](/docs/context/context-poisoning): the failure this detects when the bad value came from the agent itself
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): grounding fails when the right chunk is not in the prompt; fix that first
+- [Parent–Child Chunks](/book/patterns/retrieval/parent-child-chunks): cite the child, send the parent
+- [Trajectory Evals](/book/evals/trajectory-evals): grounding claims against tool results, not just retrieved text
+- [Online Evals](/book/evals/online-evals): the sampling discipline the semantic layer needs
+- [Context Poisoning](/book/context/context-poisoning): the failure this detects when the bad value came from the agent itself

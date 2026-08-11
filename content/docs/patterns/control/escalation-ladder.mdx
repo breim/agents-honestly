@@ -7,9 +7,9 @@ description: "Defined rungs from autonomous to assisted to human-owned."
 
 An agent has two states: it handled the ticket, or it did not.
 
-That binary produces two bad outcomes and no good ones. When it cannot finish, the customer gets *"I'm unable to help with this"* and a human gets a ticket with none of the work attached, [an escalation that followed the rule and failed the contract](/docs/first-agent/the-problem). When it can *almost* finish, it finishes anyway, because the alternative is giving up entirely.
+That binary produces two bad outcomes and no good ones. When it cannot finish, the customer gets *"I'm unable to help with this"* and a human gets a ticket with none of the work attached, [an escalation that followed the rule and failed the contract](/book/first-agent/the-problem). When it can *almost* finish, it finishes anyway, because the alternative is giving up entirely.
 
-The same binary shows up on the other side. The system is either fully autonomous on a path or fully gated, so the response to any doubt is to add an approval, and [approvals spend a finite budget of attention](/docs/human-in-the-loop/risk-tiers) that an adversary can also draw against.
+The same binary shows up on the other side. The system is either fully autonomous on a path or fully gated, so the response to any doubt is to add an approval, and [approvals spend a finite budget of attention](/book/human-in-the-loop/risk-tiers) that an adversary can also draw against.
 
 What is missing is the middle: an agent that does the parts it can, hands over the parts it cannot, and degrades one rung at a time rather than falling off a cliff.
 
@@ -57,7 +57,7 @@ Four rules:
 
 **Every rung carries the work forward.** Whatever rung a run lands on, the human receives the original request, everything retrieved with citations, every tool call and result, and the reason for the rung. A rung that hands over a bare ticket has thrown away the run.
 
-**Map triggers to rungs deliberately.** [Budget exhaustion](/docs/patterns/control/bounded-autonomy) and *no progress* are different failures and belong on different rungs: the first has usable partial work and goes to assisted; the second is stuck and goes to human-owned. A [taint ceiling](/docs/security/prompt-injection) or a [policy refusal](/docs/reliability/error-taxonomy) goes straight to approval or human-owned regardless of how much work was done.
+**Map triggers to rungs deliberately.** [Budget exhaustion](/book/patterns/control/bounded-autonomy) and *no progress* are different failures and belong on different rungs: the first has usable partial work and goes to assisted; the second is stuck and goes to human-owned. A [taint ceiling](/book/security/prompt-injection) or a [policy refusal](/book/reliability/error-taxonomy) goes straight to approval or human-owned regardless of how much work was done.
 
 **Never move down silently.** A run may be promoted to a higher rung mid-flight; it may not lower its own rung. The rung is set by code from the run's state, and the model has no way to argue itself into more autonomy.
 
@@ -158,7 +158,7 @@ The unknown-trigger default is `HumanOwned`. A trigger nobody mapped is a situat
 
 ## Trade-offs
 
-**Every rung needs an owner and an SLA.** Rung 2 with no queue and rung 3 with no approver are both hangs. This is organizational work, and it is the part that determines whether the ladder functions, [the capstone's first month](/docs/capstone/operating-it) found six of eight backlog items were about exactly this.
+**Every rung needs an owner and an SLA.** Rung 2 with no queue and rung 3 with no approver are both hangs. This is organizational work, and it is the part that determines whether the ladder functions, [the capstone's first month](/book/capstone/operating-it) found six of eight backlog items were about exactly this.
 
 **The middle rungs shift load rather than removing it.** Assisted work still costs a person twenty seconds. At high volume that is a real headcount number, and it is the honest comparison: twenty seconds of review against eight minutes of doing it, not against zero.
 
@@ -177,7 +177,7 @@ The unknown-trigger default is `HumanOwned`. A trigger nobody mapped is a situat
 **When the rungs cannot be distinguished in practice.** If nobody can tell you the difference between rung 1 and rung 2 in your product, you have four rungs and two behaviors. Collapse them.
 
 <Aside type="note" title="Two different ladders, and they are easy to conflate">
-[The map has an escalation ladder too](/docs/the-map), and it answers a different question. That one is about **architecture**: function, workflow, rules, agent, multi-agent, each rung more capable and less predictable, chosen once at design time.
+[The map has an escalation ladder too](/book/the-map), and it answers a different question. That one is about **architecture**: function, workflow, rules, agent, multi-agent, each rung more capable and less predictable, chosen once at design time.
 
 This one is about **autonomy at runtime**: how much of this particular run's outcome the agent owns, decided per run from what actually happened.
 
@@ -186,8 +186,8 @@ They interact in one place worth noticing. A system that cannot build the runtim
 
 ## Related
 
-- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): the tier of a call, which is one of the triggers that sets a rung
-- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the caps whose exhaustion promotes a run
-- [Approval Gate](/docs/patterns/durability/approval-gate): the mechanism behind rung 3
-- [Escalation and Audit](/docs/human-in-the-loop/escalation-and-audit): what the handover package must contain
-- [Fallbacks and Circuit Breakers](/docs/reliability/fallbacks-and-breakers): the human rung as a fallback when infrastructure degrades
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): the tier of a call, which is one of the triggers that sets a rung
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the caps whose exhaustion promotes a run
+- [Approval Gate](/book/patterns/durability/approval-gate): the mechanism behind rung 3
+- [Escalation and Audit](/book/human-in-the-loop/escalation-and-audit): what the handover package must contain
+- [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers): the human rung as a fallback when infrastructure degrades

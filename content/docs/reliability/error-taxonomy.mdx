@@ -53,17 +53,17 @@ Part XVI is classical distributed-systems discipline applied to a component that
 
 | Class | Examples | Retry? | Handled where |
 | --- | --- | --- | --- |
-| **Transient** | Socket reset, 5xx, 529 overloaded, 429 | Yes, one layer, with backoff | [Timeouts and retries](/docs/reliability/timeouts-and-retries) |
+| **Transient** | Socket reset, 5xx, 529 overloaded, 429 | Yes, one layer, with backoff | [Timeouts and retries](/book/reliability/timeouts-and-retries) |
 | **Permanent** | Context length exceeded, 400 malformed, unknown tool, schema violation | **Never** | Fail the step; fix in code |
-| **Policy** | Content refusal, authorization denied, [tier requires approval](/docs/human-in-the-loop/risk-tiers), [taint ceiling](/docs/security/prompt-injection) | **Never** | [Escalation](/docs/human-in-the-loop/escalation-and-audit) |
-| **Budget** | Token cap, run deadline, [retry budget](/docs/reliability/timeouts-and-retries) exhausted, max turns | No. That is what exhausted means | [Cost engineering](/docs/production/cost-engineering) |
-| **Semantic** | Wrong answer, invented policy, [poisoned context](/docs/context/context-poisoning) | Meaningless | [Evals](/docs/evals/eval-discipline), [tracing](/docs/observability/what-a-trace-must-answer) |
+| **Policy** | Content refusal, authorization denied, [tier requires approval](/book/human-in-the-loop/risk-tiers), [taint ceiling](/book/security/prompt-injection) | **Never** | [Escalation](/book/human-in-the-loop/escalation-and-audit) |
+| **Budget** | Token cap, run deadline, [retry budget](/book/reliability/timeouts-and-retries) exhausted, max turns | No. That is what exhausted means | [Cost engineering](/book/production/cost-engineering) |
+| **Semantic** | Wrong answer, invented policy, [poisoned context](/book/context/context-poisoning) | Meaningless | [Evals](/book/evals/eval-discipline), [tracing](/book/observability/what-a-trace-must-answer) |
 
 Three of the five rows are frequently misfiled, and each misfiling has a signature cost.
 
-**Context length exceeded is permanent, not transient.** It arrives as a `400` in the middle of a long run, looks like an API error, and gets retried. The same oversized prompt fails identically three more times and you are billed for each rejection. The recovery is [compaction](/docs/context/compaction) and re-entry, which is a different code path entirely.
+**Context length exceeded is permanent, not transient.** It arrives as a `400` in the middle of a long run, looks like an API error, and gets retried. The same oversized prompt fails identically three more times and you are billed for each rejection. The recovery is [compaction](/book/context/compaction) and re-entry, which is a different code path entirely.
 
-**A content refusal is policy, not transient.** The reflex is to rephrase and try again. That is the reflex of someone building a workaround for a control. If a refusal is wrong, that is a prompt or a product problem to fix deliberately; if it is right, retrying until it passes is the [worst possible response](/docs/security/prompt-injection).
+**A content refusal is policy, not transient.** The reflex is to rephrase and try again. That is the reflex of someone building a workaround for a control. If a refusal is wrong, that is a prompt or a product problem to fix deliberately; if it is right, retrying until it passes is the [worst possible response](/book/security/prompt-injection).
 
 **Budget exhaustion is not an error at all.** It is the system working. Logging it at `ERROR` trains everyone to ignore the error channel, and the correct handling is a clean stop with a partial result, which is a legitimate outcome, not a failure.
 
@@ -141,7 +141,7 @@ def classify_provider_error(status: int, body: dict) -> AgentError:
 </Tab>
 </Tabs>
 
-Two fields carry the design. `code` is **yours**, stable across vendor rewording. Your metrics, alerts, and [retry policy](/docs/reliability/timeouts-and-retries) key on it. And the adapter captures `retryAfterMs` at the boundary because it is available exactly there and nowhere later.
+Two fields carry the design. `code` is **yours**, stable across vendor rewording. Your metrics, alerts, and [retry policy](/book/reliability/timeouts-and-retries) key on it. And the adapter captures `retryAfterMs` at the boundary because it is available exactly there and nowhere later.
 
 ## Every error has two audiences
 
@@ -153,14 +153,14 @@ A tool error is not only an exception your code handles. If you return it to the
 | --- | --- | --- |
 | **Transient** | Retries, one layer, with backoff | **Nothing.** It never learns the call was retried |
 | **Permanent: your bug** | Fails the step, alerts | Nothing. It cannot fix your serialization |
-| **Permanent: the model's mistake** | Does not retry | **The error, [written as an instruction](/docs/tools/errors-as-instructions)** |
+| **Permanent: the model's mistake** | Does not retry | **The error, [written as an instruction](/book/tools/errors-as-instructions)** |
 | **Policy** | Escalates | A neutral statement that approval is required |
 | **Budget** | Stops or degrades | That it must conclude with what it has |
 | **Semantic** | — | — |
 
-The third row is the one worth splitting out explicitly, because "permanent" contains two different things. `account 9917 not found` is permanent in the sense that retrying the identical call is pointless, and it is also **the model's mistake and the model's to recover**, so it goes back into the transcript as guidance. `TypeError: cannot read property of undefined` in your adapter is also permanent and the model can do nothing with it; showing it just [pollutes the context](/docs/context/context-as-budget) with noise.
+The third row is the one worth splitting out explicitly, because "permanent" contains two different things. `account 9917 not found` is permanent in the sense that retrying the identical call is pointless, and it is also **the model's mistake and the model's to recover**, so it goes back into the transcript as guidance. `TypeError: cannot read property of undefined` in your adapter is also permanent and the model can do nothing with it; showing it just [pollutes the context](/book/context/context-as-budget) with noise.
 
-The first row matters for the opposite reason. A transient failure that your infrastructure recovered from should be **invisible** to the model. Otherwise it sees `Error: socket hang up` in its history and starts reasoning about network conditions, or worse, [calls the tool again itself](/docs/reliability/timeouts-and-retries), which is the fourth retry layer nobody configured.
+The first row matters for the opposite reason. A transient failure that your infrastructure recovered from should be **invisible** to the model. Otherwise it sees `Error: socket hang up` in its history and starts reasoning about network conditions, or worse, [calls the tool again itself](/book/reliability/timeouts-and-retries), which is the fourth retry layer nobody configured.
 
 > **Errors the model can act on go into the transcript. Errors it cannot act on stay in your logs.**
 
@@ -168,14 +168,14 @@ The first row matters for the opposite reason. A transient failure that your inf
 
 Class ⑤ is the reason this chapter is not just a rewrite of a standard SRE table.
 
-A semantic failure produces a `200 OK`, a well-formed result, a clean trace, valid arguments, and a wrong answer. Nothing raises. Your error rate does not move. Your latency does not move. Every dashboard in the [operating manual](/docs/production/operating-manual) stays green while the product gets worse.
+A semantic failure produces a `200 OK`, a well-formed result, a clean trace, valid arguments, and a wrong answer. Nothing raises. Your error rate does not move. Your latency does not move. Every dashboard in the [operating manual](/book/production/operating-manual) stays green while the product gets worse.
 
-It has appeared in nearly every part of this book under different names: [poisoning](/docs/context/context-poisoning), [drift](/docs/observability/drift), a [retrieval miss](/docs/retrieval/retrieval-evals), a [wrong-but-plausible tool result](/docs/tools/result-design), an [injected instruction obeyed](/docs/security/prompt-injection). What unites them is the shape: **the system reports success and the outcome is wrong.**
+It has appeared in nearly every part of this book under different names: [poisoning](/book/context/context-poisoning), [drift](/book/observability/drift), a [retrieval miss](/book/retrieval/retrieval-evals), a [wrong-but-plausible tool result](/book/tools/result-design), an [injected instruction obeyed](/book/security/prompt-injection). What unites them is the shape: **the system reports success and the outcome is wrong.**
 
 <Aside type="caution" title="Which is why the reliability part cannot cover it">
 Everything in Part XVI operates on errors that raise. Retries, breakers, budgets, and backpressure are all machinery for signals your code receives.
 
-Semantic failure emits no signal, so it needs a different apparatus: [graded evals](/docs/evals/scoring) that compare output against a rubric, [claim grounding](/docs/evals/trajectory-evals) against what the tools actually returned, [online monitoring](/docs/evals/online-evals) of production quality, and [traces detailed enough](/docs/observability/what-a-trace-must-answer) to reconstruct why.
+Semantic failure emits no signal, so it needs a different apparatus: [graded evals](/book/evals/scoring) that compare output against a rubric, [claim grounding](/book/evals/trajectory-evals) against what the tools actually returned, [online monitoring](/book/evals/online-evals) of production quality, and [traces detailed enough](/book/observability/what-a-trace-must-answer) to reconstruct why.
 
 That is why Parts XIV and XV come before this one. Reliability engineering handles the failures that announce themselves; the ones that don't were someone else's chapter, and they are the majority of what actually goes wrong.
 </Aside>
@@ -186,7 +186,7 @@ The practical instruction is to **give class ⑤ a place in your taxonomy anyway
 
 A last observation that changes how incidents read.
 
-A provider degradation starts as transient. Retries fire, so the [retry budget](/docs/reliability/timeouts-and-retries) exhausts: budget. Latency rises, so runs hit their deadline: budget again. Some runs fall back to a smaller model, which produces worse tool arguments: permanent errors that are the *model's* mistakes. Those runs take more turns, spend more tokens, and produce weaker answers: semantic.
+A provider degradation starts as transient. Retries fire, so the [retry budget](/book/reliability/timeouts-and-retries) exhausts: budget. Latency rises, so runs hit their deadline: budget again. Some runs fall back to a smaller model, which produces worse tool arguments: permanent errors that are the *model's* mistakes. Those runs take more turns, spend more tokens, and produce weaker answers: semantic.
 
 One root cause, four classes, four dashboards, and an incident that looks like four unrelated problems if your classes are not linked back to a cause. Which is the argument for carrying the **run ID and the originating error code** through every derived failure: the taxonomy tells you what to do next, and only the trace tells you why you are here.
 
@@ -195,20 +195,20 @@ One root cause, four classes, four dashboards, and an incident that looks like f
 | Signal | Class | Response |
 | --- | --- | --- |
 | `529 Overloaded` | Transient | SDK retries with jitter; invisible to the model |
-| `429` with `Retry-After` | Transient | Honor the header; feeds [backpressure](/docs/reliability/backpressure) |
+| `429` with `Retry-After` | Transient | Honor the header; feeds [backpressure](/book/reliability/backpressure) |
 | `context_too_long` | Permanent | Compact and re-enter. Never retried |
 | `account not found` | Permanent (model's) | Returned to the model as an instruction |
 | Adapter `TypeError` | Permanent (yours) | Fails the step, pages, never shown to the model |
 | Content refusal | Policy | Escalates with the original request attached |
-| Taint ceiling / tier gate | Policy | [Approval request](/docs/human-in-the-loop/approval-gates), not an error |
+| Taint ceiling / tier gate | Policy | [Approval request](/book/human-in-the-loop/approval-gates), not an error |
 | Run cost cap | Budget | Degrade at 70%, clean stop at 100% with a partial result |
-| Wrong refund policy quoted | **Semantic** | Nothing here catches it. [Eval suite](/docs/evals/ci-for-agents) and grounding checks |
+| Wrong refund policy quoted | **Semantic** | Nothing here catches it. [Eval suite](/book/evals/ci-for-agents) and grounding checks |
 
 The last row is deliberately in the table and deliberately without a mechanism. It is the most expensive failure in the hour of logs at the top of this chapter, and Part XVI has nothing to say about it, which is worth seeing in the same table as the ones it does handle.
 
 ---
 
-Next: [Timeouts, Retries, and Backoff](/docs/reliability/timeouts-and-retries), getting these wrong turns a provider blip into an outage and a bill.
+Next: [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries), getting these wrong turns a provider blip into an outage and a bill.
 
 ## Takeaways
 

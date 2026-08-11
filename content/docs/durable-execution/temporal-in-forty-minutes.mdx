@@ -5,7 +5,7 @@ description: "Workflows, activities, workers, task queues, event history, replay
 
 Six nouns. Learn them in order, because each one exists because of the one before it, and there is no seventh you need today.
 
-Still no AI in this chapter. [The previous one explained why](/docs/durable-execution/why-durable-execution), and the example is a refund with nobody thinking about it.
+Still no AI in this chapter. [The previous one explained why](/book/durable-execution/why-durable-execution), and the example is a refund with nobody thinking about it.
 
 ## The six nouns
 
@@ -200,7 +200,7 @@ Four things in there are doing more than they look like.
 
 **The retry policy is configuration.** You attach it to the activity call rather than writing it as a loop, and it applies to every attempt, including ones that happen on a different worker after a crash.
 
-**`workflowId` is a deduplication key.** Starting `refund-4921` twice does not start two refunds. The second call finds the existing execution. That is [idempotency](/docs/tools/idempotency) arriving one level up, and it is free.
+**`workflowId` is a deduplication key.** Starting `refund-4921` twice does not start two refunds. The second call finds the existing execution. That is [idempotency](/book/tools/idempotency) arriving one level up, and it is free.
 
 ## What happens when it crashes
 
@@ -213,9 +213,9 @@ The worker dies between `issueCredit` and `sendReply`. Nothing is lost, and noth
 5. Execution reaches `sendReply`, which is not in history, so it runs for real.
 6. The workflow completes.
 
-The crash did not repeat the refund, because the effect's *result* was journalled, not because anyone wrote recovery logic. That is [the distinction Part VII drew](/docs/langgraph/persistence) between resuming a graph and not re-running a completed effect, arriving as a mechanism you can point at.
+The crash did not repeat the refund, because the effect's *result* was journalled, not because anyone wrote recovery logic. That is [the distinction Part VII drew](/book/langgraph/persistence) between resuming a graph and not re-running a completed effect, arriving as a mechanism you can point at.
 
-Note the scope, because it is the half people over-read: this defeats *replay* duplication. An activity that timed out with no response is a different problem. The platform cannot know whether it landed, so it retries, and only [an idempotency key](/docs/tools/idempotency) stops that from becoming a second refund.
+Note the scope, because it is the half people over-read: this defeats *replay* duplication. An activity that timed out with no response is a different problem. The platform cannot know whether it landed, so it retries, and only [an idempotency key](/book/tools/idempotency) stops that from becoming a second refund.
 
 ## Event history, concretely
 
@@ -231,7 +231,7 @@ The history for that execution is a list you can read:
    …
 ```
 
-Inputs, results, retries, timers, in order, durable. It is the audit log you were going to build from application logs, and it exists because replay needs it: [the by-product that keeps paying](/docs/observability/replay-debugging).
+Inputs, results, retries, timers, in order, durable. It is the audit log you were going to build from application logs, and it exists because replay needs it: [the by-product that keeps paying](/book/observability/replay-debugging).
 
 <Aside type="note" title="You do not replay the whole history on every step">
 The obvious worry: a workflow with ten thousand events re-runs from the top on every task, forever?
@@ -249,7 +249,7 @@ A task queue is just a name, agreed between whoever starts work and whoever perf
 - **Isolation** is giving slow or noisy work its own queue, so it cannot starve everything else.
 - **Deployment** is per queue. The workers on `refunds` can ship independently of the workers on `reports`.
 
-Two 2026 additions matter here, both now generally available: **task-queue priority**, so the server dispatches urgent work first, and **fairness**, which distributes compute proportionally across tenants or workload types so one heavy customer cannot starve the rest. That is the multi-tenant knob, and it belongs to [Part XI's scaling chapter](/docs/durability/scale-and-qos). But it is worth knowing it exists at the queue level rather than being something you build.
+Two 2026 additions matter here, both now generally available: **task-queue priority**, so the server dispatches urgent work first, and **fairness**, which distributes compute proportionally across tenants or workload types so one heavy customer cannot starve the rest. That is the multi-tenant knob, and it belongs to [Part XI's scaling chapter](/book/durability/scale-and-qos). But it is worth knowing it exists at the queue level rather than being something you build.
 
 ## Waiting is a line of code
 
@@ -259,7 +259,7 @@ await sleep('3 days');
 
 That is a durable timer recorded in history. No process is held, no thread blocks, no row in a table with a cron polling it. The workflow is not running at all. It is a row in the server's storage with a timer against it, and in three days a worker picks it up and continues on the next line.
 
-This is the mechanism that makes [an approval that waits for a person](/docs/human-in-the-loop/approval-gates) cost nothing while it waits, and it is the single feature most often reimplemented badly by hand.
+This is the mechanism that makes [an approval that waits for a person](/book/human-in-the-loop/approval-gates) cost nothing while it waits, and it is the single feature most often reimplemented badly by hand.
 
 ## Deploying while workflows are running
 
@@ -273,19 +273,19 @@ That materially reduces the cost this book flagged one chapter ago, which is wor
 
 **You know:** the six nouns, the workflow/activity split and the test for it, how a crash recovers, what is in a history, how routing and scaling work, and how to wait for three days.
 
-**You do not yet know:** the determinism rules in detail and how to configure retries and timeouts properly, which is [the next chapter](/docs/durable-execution/determinism-and-retries); how to get data into a running execution and answers out of it, and how to decompose a large one, which is [the chapter after](/docs/durable-execution/signals-and-children).
+**You do not yet know:** the determinism rules in detail and how to configure retries and timeouts properly, which is [the next chapter](/book/durable-execution/determinism-and-retries); how to get data into a running execution and answers out of it, and how to decompose a large one, which is [the chapter after](/book/durable-execution/signals-and-children).
 
-That is enough to read the rest of Part X, and enough to run [the dev server from Setup](/docs/setup) and watch a refund survive you killing the worker mid-run. That is the exercise, and it takes about four minutes.
+That is enough to read the rest of Part X, and enough to run [the dev server from Setup](/book/setup) and watch a refund survive you killing the worker mid-run. That is the exercise, and it takes about four minutes.
 
 ## Atlas, still waiting
 
 Nothing above mentioned a model, and that was the point. The refund workflow is a plain program that happens to be crash-proof.
 
-Atlas's version has one difference: a step in the middle whose output is not a function of its input. That difference is the entire subject of [Part XI](/docs/durability/agent-as-workflow). The nouns will not change.
+Atlas's version has one difference: a step in the middle whose output is not a function of its input. That difference is the entire subject of [Part XI](/book/durability/agent-as-workflow). The nouns will not change.
 
 ---
 
-Next: [Determinism, Retries, and Timers](/docs/durable-execution/determinism-and-retries). The rules that make replay work, and the retry policies you will actually configure.
+Next: [Determinism, Retries, and Timers](/book/durable-execution/determinism-and-retries). The rules that make replay work, and the retry policies you will actually configure.
 
 ## Takeaways
 

@@ -20,7 +20,7 @@ Three components, and the middle one is the whole point.
 
 **Length normalization.** Long documents contain more of everything, so raw counts are discounted by length. Otherwise your longest policy document wins every query.
 
-Hold on to the second one, because it is exactly the information the [embeddings chapter](/docs/retrieval/embeddings) said gets destroyed:
+Hold on to the second one, because it is exactly the information the [embeddings chapter](/book/retrieval/embeddings) said gets destroyed:
 
 > BM25 knows that `RB-400` appeared in three documents out of forty thousand, and treats a match as near-conclusive. An embedding cannot represent "this exact rare token was present". The tokenizer split it into fragments before the vector existed.
 
@@ -38,7 +38,7 @@ The operational consequence:
 
 > **Lexical search has no training cutoff.** Meridian launches a product line next month with part numbers and terminology no model has ever encountered. Those documents are fully searchable the moment they're indexed, while every learned retriever handles them a little worse, permanently, until it is retrained.
 
-That's the [drift](/docs/observability/drift) problem from the embeddings chapter, and lexical search is structurally immune to it. In a corpus that grows new vocabulary, whether products, incident codes, customer names, or acronyms, that immunity compounds.
+That's the [drift](/book/observability/drift) problem from the embeddings chapter, and lexical search is structurally immune to it. In a corpus that grows new vocabulary, whether products, incident codes, customer names, or acronyms, that immunity compounds.
 
 ## What it wins, concretely
 
@@ -51,7 +51,7 @@ That's the [drift](/docs/observability/drift) problem from the embeddings chapte
 | Newly coined terms | A product launched last month | Not in the model's vocabulary at all |
 | Exact quotes | Anything the user pasted | The user is telling you the exact string; use it |
 
-The unifying test from [the routing chapter](/docs/retrieval/where-does-the-answer-live) still holds: **if a human would find it with Ctrl-F, use lexical.**
+The unifying test from [the routing chapter](/book/retrieval/where-does-the-answer-live) still holds: **if a human would find it with Ctrl-F, use lexical.**
 
 ## Your analyzer has its own tokenizer problem
 
@@ -83,11 +83,11 @@ Being fair to the other side, because this chapter argues for both rather than f
 
 **Morphology beyond stemming.** Compound words, inflected languages, and anything where the same meaning has structurally different surface forms.
 
-These are precisely dense retrieval's strengths, which is not a coincidence: the two methods fail in complementary directions. That complementarity is the entire argument for the [next chapter](/docs/retrieval/hybrid-and-reranking).
+These are precisely dense retrieval's strengths, which is not a coincidence: the two methods fail in complementary directions. That complementarity is the entire argument for the [next chapter](/book/retrieval/hybrid-and-reranking).
 
 ## In practice: the second index
 
-You do not need another system. In the schema from [two chapters ago](/docs/retrieval/vector-search), lexical search is one more index on the same table:
+You do not need another system. In the schema from [two chapters ago](/book/retrieval/vector-search), lexical search is one more index on the same table:
 
 ```sql
 ALTER TABLE policy_chunks
@@ -101,7 +101,7 @@ CREATE INDEX ON policy_chunks USING gin (identifiers);
 
 Two fields on purpose: `content_tsv` gets the English analyzer with stemming, for prose. `identifiers` is an exact-match array populated during ingestion by a pattern match for part numbers, order IDs, and codes: no analyzer, no stemming, no lowercasing surprises.
 
-The same `WHERE` clauses apply. Tenant, version, and tier are [authorization](/docs/retrieval/metadata-and-authorization), and they are not optional on this path either. A second retrieval path is a second place to forget the filter, which is exactly why the last chapter insisted on one function.
+The same `WHERE` clauses apply. Tenant, version, and tier are [authorization](/book/retrieval/metadata-and-authorization), and they are not optional on this path either. A second retrieval path is a second place to forget the filter, which is exactly why the last chapter insisted on one function.
 
 ## Learned sparse, positioned honestly
 
@@ -113,7 +113,7 @@ Treat it as a possible upgrade to the dense side of a hybrid system, not as a re
 
 ## Atlas, concretely
 
-Both paths, always. `search_policies` runs BM25 over `content_tsv` and dense over `embedding`, plus an exact-match pass over `identifiers` whenever the triage step extracted a part number, which, from [the very first chapter of Part II](/docs/first-agent/one-call), it does, because entity extraction was in the v0 schema for exactly this reason.
+Both paths, always. `search_policies` runs BM25 over `content_tsv` and dense over `embedding`, plus an exact-match pass over `identifiers` whenever the triage step extracted a part number, which, from [the very first chapter of Part II](/book/first-agent/one-call), it does, because entity extraction was in the v0 schema for exactly this reason.
 
 Ticket #8812 mentions `RB-400`. The exact-match pass finds the four chunks that name that part. The dense pass finds the returns-policy language. Neither alone answers the ticket; the union, ranked properly, does.
 
@@ -121,7 +121,7 @@ Which is the next chapter.
 
 ---
 
-Next: [Hybrid Search and Reranking](/docs/retrieval/hybrid-and-reranking), fusing lexical and semantic candidates, then reranking for what actually answers the question.
+Next: [Hybrid Search and Reranking](/book/retrieval/hybrid-and-reranking), fusing lexical and semantic candidates, then reranking for what actually answers the question.
 
 ## Takeaways
 

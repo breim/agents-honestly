@@ -9,7 +9,7 @@ An agent run makes forty model calls, each re-sending a context that starts with
 
 They are not, and the response tells you why: `cache_read_input_tokens` is zero on every call. Somewhere in that prefix is a timestamp, or a tool list built per user, or a JSON serialization whose key order varies. The request succeeds, the answer is fine, and you pay full price forever.
 
-The mechanism, from [the caching chapter](/docs/foundations/prompt-caching): **the cache key is the exact bytes of the prompt up to the marked point, and any change anywhere in that prefix invalidates everything after it.** Providers render in a fixed order: tools, then system, then messages, so a change at position zero discards the whole request.
+The mechanism, from [the caching chapter](/book/foundations/prompt-caching): **the cache key is the exact bytes of the prompt up to the marked point, and any change anywhere in that prefix invalidates everything after it.** Providers render in a fixed order: tools, then system, then messages, so a change at position zero discards the whole request.
 
 ## Forces
 
@@ -57,7 +57,7 @@ Four rules:
 
 **Nothing time-varying above the breakpoint.** `datetime.now()` in a system prompt makes every request unique by construction. A timestamp the agent genuinely needs goes in the current user turn, where it invalidates nothing before it.
 
-**Serialize deterministically.** Sorted keys, stable field order, no `Set` or `dict` iteration order leaking into output. This is [the same canonicalization requirement as an idempotency key](/docs/tools/idempotency), for the same reason: an unstable serialization is an unstable key.
+**Serialize deterministically.** Sorted keys, stable field order, no `Set` or `dict` iteration order leaking into output. This is [the same canonicalization requirement as an idempotency key](/book/tools/idempotency), for the same reason: an unstable serialization is an unstable key.
 
 **Append, never substitute.** Adding a tool mid-conversation is cheap if it lands after the cached prefix; swapping the tool list rewrites position zero and discards everything. The general form: **an addition at the end is cheap; a substitution at the front is not.**
 
@@ -138,11 +138,11 @@ def assert_prefix_stable(a: dict, b: dict) -> None:
 
 **Rigidity in prompt design.** Anything you might want to vary, such as a per-tenant instruction, a persona, or a dynamically selected tool set, now has a cost, and the design has to route it below the breakpoint or accept the miss.
 
-**It fights [dynamic tool selection](/docs/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. The trade is almost always bad. Select per *conversation* rather than per request, or use append-style surfacing.
+**It fights [dynamic tool selection](/book/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. The trade is almost always bad. Select per *conversation* rather than per request, or use append-style surfacing.
 
 **Breakpoints are scarce.** With roughly four available per request, you cannot mark every boundary. So mark the one that matters, at the end of the genuinely invariant region, rather than sprinkling them.
 
-**Minimum lengths and TTLs vary.** Caching does not engage below a per-model minimum, and entries expire on a short default TTL with a longer option at a higher write premium. A prefix of a few hundred tokens may not cache at all. [The chapter](/docs/foundations/prompt-caching) has the economics; the point here is that the layout is necessary and not sufficient.
+**Minimum lengths and TTLs vary.** Caching does not engage below a per-model minimum, and entries expire on a short default TTL with a longer option at a higher write premium. A prefix of a few hundred tokens may not cache at all. [The chapter](/book/foundations/prompt-caching) has the economics; the point here is that the layout is necessary and not sufficient.
 
 ## When not to use it
 
@@ -150,18 +150,18 @@ def assert_prefix_stable(a: dict, b: dict) -> None:
 
 **When the prefix is small.** If tools and system total under the model's minimum cacheable length, there is nothing to cache and the layout constraint buys nothing.
 
-**When per-request variation is genuinely load-bearing.** A system that must swap models per step, or truly needs a different tool universe per tenant, has chosen something incompatible with caching. That can be the right choice: make it knowingly, and [measure what it costs](/docs/observability/cost-accounting) rather than discovering it later.
+**When per-request variation is genuinely load-bearing.** A system that must swap models per step, or truly needs a different tool universe per tenant, has chosen something incompatible with caching. That can be the right choice: make it knowingly, and [measure what it costs](/book/observability/cost-accounting) rather than discovering it later.
 
 <Aside type="caution" title="Verify, because an unverified cache is an assumed cache">
 Every response reports `cache_creation_input_tokens`, `cache_read_input_tokens`, and `input_tokens`, where the last is *only the uncached remainder*, not the size of your prompt.
 
-Put cache hit rate on the [cost dashboard](/docs/observability/cost-accounting) and alert when it drops. The drop is the leading indicator of a prefix change, and it will come from somewhere innocuous: a tool description edited for clarity, a feature flag appended to the system prompt, a model swap for one node. All three are one-line changes that a reviewer will approve without noticing.
+Put cache hit rate on the [cost dashboard](/book/observability/cost-accounting) and alert when it drops. The drop is the leading indicator of a prefix change, and it will come from somewhere innocuous: a tool description edited for clarity, a feature flag appended to the system prompt, a model swap for one node. All three are one-line changes that a reviewer will approve without noticing.
 </Aside>
 
 ## Related
 
-- [Prompt Caching](/docs/foundations/prompt-caching): the mechanism, the economics, and the full list of silent invalidators
-- [Cache-First Prefix](/docs/patterns/cost/cache-first-prefix): the same idea framed as a cost pattern
-- [Dynamic Selection](/docs/context/dynamic-selection): the trade this pattern is usually in tension with
-- [Rolling Summary](/docs/patterns/context/rolling-summary): why the summary sits below the breakpoint
-- [Versioning](/docs/production/versioning): the tool-catalogue hash, and why a description edit is a prompt change
+- [Prompt Caching](/book/foundations/prompt-caching): the mechanism, the economics, and the full list of silent invalidators
+- [Cache-First Prefix](/book/patterns/cost/cache-first-prefix): the same idea framed as a cost pattern
+- [Dynamic Selection](/book/context/dynamic-selection): the trade this pattern is usually in tension with
+- [Rolling Summary](/book/patterns/context/rolling-summary): why the summary sits below the breakpoint
+- [Versioning](/book/production/versioning): the tool-catalogue hash, and why a description edit is a prompt change

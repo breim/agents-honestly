@@ -11,7 +11,7 @@ It was delivered yesterday. The index was built at 02:00 and the delivery scan c
 
 Nothing errored. Retrieval returned a genuinely relevant, genuinely indexed document, and the answer was wrong in the way that costs a customer: confidently, specifically, and with no hedge. The failure is not retrieval quality. **It is that the question had a freshness requirement the retrieval path could not meet, and nothing checked.**
 
-The same shape appears on the document side. The returns policy was superseded at 09:00; the index still serves v6 alongside v7, and [the two disagree](/docs/first-agent/the-problem).
+The same shape appears on the document side. The returns policy was superseded at 09:00; the index still serves v6 alongside v7, and [the two disagree](/book/first-agent/the-problem).
 
 ## Forces
 
@@ -53,9 +53,9 @@ Four rules:
 
 **Stamp everything with as-of.** Every retrieved chunk carries `indexed_at` and every live result carries `fetched_at`, and both reach the model. A model told *"as of 02:00 today"* will hedge appropriately; a model told nothing will not.
 
-**Route on the question, and put the rule in the tool description.** *"Use `get_order` for current status. `query_warehouse` reports historical shipments and is current as of the last nightly build."* This is the same mechanism as [retrieval-as-tool routing](/docs/patterns/retrieval/retrieval-as-tool): at runtime the routing rule is a sentence in a tool description.
+**Route on the question, and put the rule in the tool description.** *"Use `get_order` for current status. `query_warehouse` reports historical shipments and is current as of the last nightly build."* This is the same mechanism as [retrieval-as-tool routing](/book/patterns/retrieval/retrieval-as-tool): at runtime the routing rule is a sentence in a tool description.
 
-**Filter superseded versions at the source.** `current: true` in the [predicate](/docs/patterns/retrieval/filtered-retrieval), not a post-hoc preference for the newest hit. A superseded document that never enters the candidate set cannot be cited, and the alternative, hoping the ranker prefers v7, fails silently.
+**Filter superseded versions at the source.** `current: true` in the [predicate](/book/patterns/retrieval/filtered-retrieval), not a post-hoc preference for the newest hit. A superseded document that never enters the candidate set cannot be cited, and the alternative, hoping the ranker prefers v7, fails silently.
 
 ## Code
 
@@ -139,13 +139,13 @@ async def retrieve_with_freshness(query: str, spec: SourceSpec, ctx) -> list[Pas
 
 ## Trade-offs
 
-**Live calls are slower, rate-limited, and can be down.** Routing to live improves correctness and adds a dependency to the request path, with the [breaker and fallback](/docs/reliability/fallbacks-and-breakers) treatment that implies. The honest fallback for a failed live call is usually *"I can't check that right now"*, not the stale indexed value, which is the thing you were avoiding.
+**Live calls are slower, rate-limited, and can be down.** Routing to live improves correctness and adds a dependency to the request path, with the [breaker and fallback](/book/reliability/fallbacks-and-breakers) treatment that implies. The honest fallback for a failed live call is usually *"I can't check that right now"*, not the stale indexed value, which is the thing you were avoiding.
 
 **Volatility classification is manual and drifts.** Someone decides that pricing is `fast` and inventory is `live`, and then the business changes. Review it when sources change, and treat a source with no classification as `live`: deny by default, in the freshness dimension.
 
 **As-of stamps cost tokens and can confuse.** A timestamp on every chunk is a few tokens each and occasionally makes the model hedge when it should not. Worth it: over-hedging is a much cheaper failure than a confidently stale answer.
 
-**Two paths to the same data can disagree.** The index says one thing, the live call another, and both reach the model in a long run. Prefer the live value explicitly and record the disagreement: a run where they diverge is a [poisoning](/docs/context/context-poisoning) risk and a signal about ingestion lag.
+**Two paths to the same data can disagree.** The index says one thing, the live call another, and both reach the model in a long run. Prefer the live value explicitly and record the disagreement: a run where they diverge is a [poisoning](/book/context/context-poisoning) risk and a signal about ingestion lag.
 
 ## When not to use it
 
@@ -155,10 +155,10 @@ async def retrieve_with_freshness(query: str, spec: SourceSpec, ctx) -> list[Pas
 
 **When the index is fresher than the tolerance for every question.** Near-real-time ingestion that lands within seconds makes the distinction moot for most sources, though `live` data should still bypass it, because "usually fresh" is not a guarantee and the failure is silent.
 
-**When the cost of a stale answer is low.** A search-suggestions feature does not need this. Reserve it for the paths where a wrong answer is expensive, which is the same [risk-tier](/docs/human-in-the-loop/risk-tiers) instinct applied to reads.
+**When the cost of a stale answer is low.** A search-suggestions feature does not need this. Reserve it for the paths where a wrong answer is expensive, which is the same [risk-tier](/book/human-in-the-loop/risk-tiers) instinct applied to reads.
 
 <Aside type="caution" title="Freshness is a retrieval failure that recall@k cannot see">
-Your [retrieval evals](/docs/retrieval/retrieval-evals) measure whether the right chunk was found. A stale chunk *is* the right chunk: it is the correct document about the correct order, and recall@k scores it as a hit.
+Your [retrieval evals](/book/retrieval/retrieval-evals) measure whether the right chunk was found. A stale chunk *is* the right chunk: it is the correct document about the correct order, and recall@k scores it as a hit.
 
 So this failure passes every retrieval metric you have and shows up only in answer-level correctness, usually via a customer. Two things catch it: fixture cases whose correct answer changed after the fixture's index build, and the `staleness_fallback` counter. Both are cheap; neither is standard.
 
@@ -167,8 +167,8 @@ The general lesson recurs across this book: a metric that grades the stage rathe
 
 ## Related
 
-- [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool): where the routing rule lives at runtime
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): the `current: true` predicate that excludes superseded versions
-- [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live): the freshness axis of the routing decision
-- [Ingestion Pipeline](/docs/retrieval/ingestion-pipeline): change detection, and why the lag exists
-- [Detecting Drift](/docs/observability/drift): a rising staleness fallback rate as an early corpus signal
+- [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool): where the routing rule lives at runtime
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): the `current: true` predicate that excludes superseded versions
+- [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live): the freshness axis of the routing decision
+- [Ingestion Pipeline](/book/retrieval/ingestion-pipeline): change detection, and why the lag exists
+- [Detecting Drift](/book/observability/drift): a rising staleness fallback rate as an early corpus signal

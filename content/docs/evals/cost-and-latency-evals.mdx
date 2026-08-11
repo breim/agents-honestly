@@ -64,7 +64,7 @@ Both failures come from reasoning about the axes separately. The per-outcome num
 
 An average latency is a number that describes nobody. The complaints, the abandonment, and the timeouts all come from the tail, so the scores are percentiles, per route.
 
-Three of them, because [Part XIII established](/docs/interface/streaming-ux) that they govern different things:
+Three of them, because [Part XIII established](/book/interface/streaming-ux) that they govern different things:
 
 | Score | Governs | Typical gate |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ Three of them, because [Part XIII established](/docs/interface/streaming-ux) tha
 | **Total time, p95** | Whether a person is still there | Per route |
 | **Share over a hard ceiling** | The tail that produces incidents | A small percentage |
 
-Time-to-first-token and total are not substitutes. [A run can be fast in total and feel broken](/docs/interface/streaming-ux), and one can take eight minutes and feel responsive. Gating on total alone optimises the wrong half of the experience.
+Time-to-first-token and total are not substitutes. [A run can be fast in total and feel broken](/book/interface/streaming-ux), and one can take eight minutes and feel responsive. Gating on total alone optimises the wrong half of the experience.
 
 ## Making them gates
 
@@ -87,7 +87,7 @@ The mechanics are unglamorous and the discipline is in applying all of them at o
 
 A suite that gates on quality alone rewards the cheat at the top of this chapter. A suite that gates on cost alone rewards a system that answers quickly and badly. **The gates only work as a set**, and the set is what makes "a correct answer that takes ninety seconds and costs a dollar" record as the failure it is.
 
-The noise band matters and is [the next chapter's subject](/docs/evals/ci-for-agents). A quality score that moves two points between identical runs cannot gate on a two-point regression.
+The noise band matters and is [the next chapter's subject](/book/evals/ci-for-agents). A quality score that moves two points between identical runs cannot gate on a two-point regression.
 
 ## What actually moves them
 
@@ -95,13 +95,13 @@ Reported and consistent with everything this book has built:
 
 **Trim reasoning depth where the task does not need it.** One reported case took cost per attempt from **$3.40 to about $2.30 with no measurable change in resolution rate**. That is the shape of most cost wins: something was being spent that was not buying anything.
 
-**Cache retrieval and tool results.** Plus [prompt caching](/docs/foundations/prompt-caching) on the stable prefix.
+**Cache retrieval and tool results.** Plus [prompt caching](/book/foundations/prompt-caching) on the stable prefix.
 
-**Cut the retry budget.** Retries are the quietest line item, and [a retry loop around a model call spends money at a rate worth alerting on](/docs/durable-execution/everything-that-breaks).
+**Cut the retry budget.** Retries are the quietest line item, and [a retry loop around a model call spends money at a rate worth alerting on](/book/durable-execution/everything-that-breaks).
 
-**Consolidate tools.** [Three chained calls collapsed into one](/docs/tools/tools-are-apis-for-models) removes two full model turns. That is the largest single lever, and it is a Part VIII decision rather than a Part XIV one.
+**Consolidate tools.** [Three chained calls collapsed into one](/book/tools/tools-are-apis-for-models) removes two full model turns. That is the largest single lever, and it is a Part VIII decision rather than a Part XIV one.
 
-**Shape results at the source.** [The multiplier on every unnecessary field is the number of turns after it](/docs/tools/result-design).
+**Shape results at the source.** [The multiplier on every unnecessary field is the number of turns after it](/book/tools/result-design).
 
 Notice that four of the five were decisions made in earlier parts. Cost evals mostly do not create optimisations; they **make earlier decisions visible and rank them.**
 
@@ -119,11 +119,11 @@ Notice that four of the five were decisions made in earlier parts. Cost evals mo
 
 Two rows carry the design. **Cost per resolved ticket is gated; cost per attempt is only reported.** So a release that improves resolution cannot claim a cost win it did not earn, and a release that quietly doubles escalations cannot hide behind a stable per-call figure.
 
-And the human wait is excluded from the action-required budget, because [a three-day approval is not latency](/docs/durable-execution/signals-and-children). It is the system working. Including it would make the correct behaviour score as the worst.
+And the human wait is excluded from the action-required budget, because [a three-day approval is not latency](/book/durable-execution/signals-and-children). It is the system working. Including it would make the correct behaviour score as the worst.
 
 ---
 
-Next: [Continuous Integration for Agents](/docs/evals/ci-for-agents), regression gates on a stochastic system: sample sizes, variance, flake budgets, statistical honesty.
+Next: [Continuous Integration for Agents](/book/evals/ci-for-agents), regression gates on a stochastic system: sample sizes, variance, flake budgets, statistical honesty.
 
 ## Takeaways
 

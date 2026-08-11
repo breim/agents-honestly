@@ -3,7 +3,7 @@ title: "Errors as Instructions"
 description: "A tool error is a prompt. Write it for the model that has to recover from it."
 ---
 
-[Part II established the mechanics](/docs/first-agent/first-tools): a failed tool returns a `tool_result` with `is_error: true`, you never throw, and you never drop a result for an issued call. It also made the observation this chapter is built on. Told *"Error: order 4921 not found"* the model says so; told *"Error: ORA-01722"* it guesses.
+[Part II established the mechanics](/book/first-agent/first-tools): a failed tool returns a `tool_result` with `is_error: true`, you never throw, and you never drop a result for an issued call. It also made the observation this chapter is built on. Told *"Error: order 4921 not found"* the model says so; told *"Error: ORA-01722"* it guesses.
 
 That gap is not a matter of politeness. Reported figures put it starkly: agents recover from **structured, actionable failure feedback over 85% of the time, and from ambiguous signals about 17%.** Same model, same task, same loop. The five-fold difference is the text you put in `content`.
 
@@ -29,14 +29,14 @@ An error that selects none of them produces the documented default behaviour, wh
 <Aside type="caution" title="The model should almost never be your retry mechanism">
 "Retry unchanged" is the branch people reach for first and the one that is least often correct.
 
-Transient failures belong to your [retry policy](/docs/reliability/timeouts-and-retries), a loop in your code, with backoff, running in milliseconds and costing nothing. If a transient error is reaching the model at all, it is usually because that policy already ran and already failed.
+Transient failures belong to your [retry policy](/book/reliability/timeouts-and-retries), a loop in your code, with backoff, running in milliseconds and costing nothing. If a transient error is reaching the model at all, it is usually because that policy already ran and already failed.
 
 Which means the message should say so: *"the warehouse did not respond after 3 attempts"* selects **stop**. It is both more accurate and cheaper than an error that invites the model to burn a model call re-issuing a request your infrastructure already tried three times.
 </Aside>
 
 ## The expensive branch is the one you forget to signal
 
-Omit terminality and you get a loop: the model calls, reads an error it cannot act on differently, and calls again. The [step and cost bounds from v0](/docs/first-agent/the-loop-by-hand) will catch it, which is what they are for. But you paid a full round trip per iteration to learn nothing, and the run ends in `halted` rather than a clean escalation.
+Omit terminality and you get a loop: the model calls, reads an error it cannot act on differently, and calls again. The [step and cost bounds from v0](/book/first-agent/the-loop-by-hand) will catch it, which is what they are for. But you paid a full round trip per iteration to learn nothing, and the run ends in `halted` rather than a clean escalation.
 
 There is a control-flow corollary worth stating separately, because no error message can fix it: **the same tool called twice with the same arguments and returning the same error is a signal, not a message problem.** Detect it in the dispatcher and break, because whatever the text says, the model has demonstrated it cannot act on it.
 
@@ -96,7 +96,7 @@ def tool_error(
 </Tab>
 </Tabs>
 
-The `error` code is for you. It is what your [trace](/docs/observability/what-a-trace-must-answer) groups on and what your tests assert against, and it must stay stable when you reword the message. The `message` and `next` are for the model. Keeping them in separate fields is what lets you improve one without breaking the other.
+The `error` code is for you. It is what your [trace](/book/observability/what-a-trace-must-answer) groups on and what your tests assert against, and it must stay stable when you reword the message. The `message` and `next` are for the model. Keeping them in separate fields is what lets you improve one without breaking the other.
 
 ## Before and after
 
@@ -114,7 +114,7 @@ Three things to notice.
 
 **The permission error tells the model what *not* to do.** Without *"do not try other account IDs,"* a helpful model will try 4472. The prohibition is doing as much work as the explanation, and it is the difference between a blocked call and a blocked call that turns into enumeration.
 
-**The limit error is a routing instruction.** A policy ceiling is enforced in the handler, because [strict schemas do not enforce `maximum`](/docs/tools/schema-and-granularity). It comes back naming the tool that handles the case. The block becomes a path forward instead of a dead end.
+**The limit error is a routing instruction.** A policy ceiling is enforced in the handler, because [strict schemas do not enforce `maximum`](/book/tools/schema-and-granularity). It comes back naming the tool that handles the case. The block becomes a path forward instead of a dead end.
 
 **The query error says what to change.** Not "too expensive" but *narrow the date range or add a region filter*, which is a specific, checkable mutation. This is the shape that produces the 85% recovery rate: name the constraint, name the fix.
 
@@ -131,16 +131,16 @@ Flagging an empty result as an error teaches the model the tool is broken, which
 
 ## Errors are permanent, and they accumulate
 
-Everything in a `tool_result` stays in the transcript and is re-sent on every subsequent request. A forty-line stack trace read three times is a meaningful fraction of the [context budget](/docs/context/context-as-budget), and it is not inert. It is text the model attends to while deciding everything that comes after.
+Everything in a `tool_result` stays in the transcript and is re-sent on every subsequent request. A forty-line stack trace read three times is a meaningful fraction of the [context budget](/book/context/context-as-budget), and it is not inert. It is text the model attends to while deciding everything that comes after.
 
 So: one or two sentences. No stack traces, no SQL, no internal hostnames, no other tenants' identifiers. Those belong in the `detail` field your trace records and the model never sees.
 
 <Aside type="caution" title="Never echo untrusted input back verbatim">
 `No account matching "Acme Industrial"` looks harmless. Now consider that the argument came from a model that read it out of a ticket body, and that ticket body was written by anyone with an email address.
 
-An error that interpolates attacker-controlled text has taken that text out of a quoted document and re-injected it into the transcript in the voice of your tooling. That is a meaningful upgrade in apparent authority. Tool results already [arrive as user content](/docs/first-agent/first-tools), so the payload is not gaining a privileged slot, but it is gaining the appearance of a system statement about the world.
+An error that interpolates attacker-controlled text has taken that text out of a quoted document and re-injected it into the transcript in the voice of your tooling. That is a meaningful upgrade in apparent authority. Tool results already [arrive as user content](/book/first-agent/first-tools), so the payload is not gaining a privileged slot, but it is gaining the appearance of a system statement about the world.
 
-Echo a normalized, truncated form, or refer to the argument by name rather than by value: *"the account_id you provided did not match any account."* [Prompt Injection](/docs/security/prompt-injection) covers the attack properly; the part that belongs in tool design is that **your error strings are an echo surface**, and most people never think of them that way.
+Echo a normalized, truncated form, or refer to the argument by name rather than by value: *"the account_id you provided did not match any account."* [Prompt Injection](/book/security/prompt-injection) covers the attack properly; the part that belongs in tool design is that **your error strings are an echo surface**, and most people never think of them that way.
 </Aside>
 
 ## Three audiences, one failure
@@ -163,7 +163,7 @@ The measurable claim, and the one to put on your dashboard: **of the tickets tha
 
 ---
 
-Next: [Tool Result Design](/docs/tools/result-design), what comes back lands in the context window forever. Shape it, cap it, summarize it.
+Next: [Tool Result Design](/book/tools/result-design), what comes back lands in the context window forever. Shape it, cap it, summarize it.
 
 ## Takeaways
 

@@ -90,13 +90,13 @@ Which is why reranking is necessarily a **second stage over a small set**, and w
    keep 5        (what the prompt actually gets)
 ```
 
-By now this shape should look familiar. It is the same one as [rescoring quantized vectors](/docs/retrieval/ann-indexes) and the same one as [recall-oriented selection followed by precision-oriented cutting](/docs/context/dynamic-selection). Search wide and cheap, then cut narrow and expensive. It keeps recurring because recall and precision want opposite things, and the only way to have both is to want them at different stages.
+By now this shape should look familiar. It is the same one as [rescoring quantized vectors](/book/retrieval/ann-indexes) and the same one as [recall-oriented selection followed by precision-oriented cutting](/book/context/dynamic-selection). Search wide and cheap, then cut narrow and expensive. It keeps recurring because recall and precision want opposite things, and the only way to have both is to want them at different stages.
 
 ## What reranking actually buys
 
 The usual claim is "better ordering," which undersells it in a way that matters for agents specifically.
 
-Recall from [Context as an Allocation Problem](/docs/context/context-as-budget) that near-miss content is the most expensive material you can put in a prompt: degradation tracks how confusable the answer is with its surroundings, and the chunks ranked 6th through 20th by a bi-encoder are *precisely* the near-misses. They scored highly because they resemble the target.
+Recall from [Context as an Allocation Problem](/book/context/context-as-budget) that near-miss content is the most expensive material you can put in a prompt: degradation tracks how confusable the answer is with its surroundings, and the chunks ranked 6th through 20th by a bi-encoder are *precisely* the near-misses. They scored highly because they resemble the target.
 
 So reranking's real job is not promoting the good chunk from rank 4 to rank 1. It is **removing the fifteen chunks that would otherwise have been in the prompt competing with it.** The generation improvement comes as much from what leaves as from what rises.
 
@@ -106,7 +106,7 @@ That reframes the cost calculation. A reranker that adds 80ms and lets you send 
 
 **Latency.** Two retrieval paths (run them in parallel; they're independent) plus a cross-encoder pass over the candidate set. Budget tens to low hundreds of milliseconds depending on candidate count and whether the model is local.
 
-**A third party sees everything you send.** A hosted reranker receives all 100 candidates, including the ones that were about to be filtered out. Re-read the [authorization chapter](/docs/retrieval/metadata-and-authorization): filter **before** you rerank, not after, or you have shipped restricted content to a vendor.
+**A third party sees everything you send.** A hosted reranker receives all 100 candidates, including the ones that were about to be filtered out. Re-read the [authorization chapter](/book/retrieval/metadata-and-authorization): filter **before** you rerank, not after, or you have shipped restricted content to a vendor.
 
 **It cannot fix bad recall.** This is the one people learn expensively. A reranker only reorders what it was given; if the correct chunk was never retrieved, no reranking recovers it. **Fix recall first, then precision.** A team tuning a reranker to solve a recall problem is optimizing the second stage of a pipeline whose first stage is broken.
 
@@ -114,7 +114,7 @@ That reframes the cost calculation. A reranker that adds 80ms and lets you send 
 
 The current variant worth naming: instead of a dedicated cross-encoder, ask a language model to score or order the candidates.
 
-It is more accurate on nuanced relevance, it can follow instructions ("prefer the current version," "prefer contract-tier documents"), and it needs no separate model to deploy. It is also slower and more expensive per candidate, and it is [nondeterministic](/docs/foundations/nondeterminism): the same candidate set can order differently on two runs.
+It is more accurate on nuanced relevance, it can follow instructions ("prefer the current version," "prefer contract-tier documents"), and it needs no separate model to deploy. It is also slower and more expensive per candidate, and it is [nondeterministic](/book/foundations/nondeterminism): the same candidate set can order differently on two runs.
 
 Sensible where the candidate set is small, quality dominates, and you already accept a model call. Less sensible as a per-request component in a latency budget. A useful middle path is to use it offline to *generate labels* for evaluating your cheap reranker, rather than in the request path at all.
 
@@ -126,7 +126,7 @@ Two metrics, and they answer different questions.
 
 **nDCG@k.** Is the right chunk near the top? This grades reranking, and it is the number that should move when you add one.
 
-And the honest caveat that Part XIV will make into a discipline: both are proxies. The number that matters is whether the agent answered correctly, and it is entirely possible to improve nDCG while the end-to-end answer rate is flat, which usually means your bottleneck was [chunking](/docs/retrieval/chunking) or generation, not ordering.
+And the honest caveat that Part XIV will make into a discipline: both are proxies. The number that matters is whether the agent answered correctly, and it is entirely possible to improve nDCG while the end-to-end answer rate is flat, which usually means your bottleneck was [chunking](/book/retrieval/chunking) or generation, not ordering.
 
 ## Atlas, concretely
 
@@ -140,7 +140,7 @@ On ticket #8812 the identifier list contributes the four chunks naming `RB-400`,
 
 ---
 
-Next: [SQL Is Still the Answer](/docs/retrieval/sql-is-still-the-answer), because "how much did we sell in Spain in Q2" is not a retrieval problem.
+Next: [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer), because "how much did we sell in Spain in Q2" is not a retrieval problem.
 
 ## Takeaways
 

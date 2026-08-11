@@ -7,9 +7,9 @@ description: "Classify first, then dispatch to a specialized path."
 
 One agent handles every ticket. It carries nine tools, a system prompt covering policy questions, aggregations, account relationships, credits, and escalation, and a context assembly that pre-loads a bit of everything because any of it might be needed.
 
-Every request pays for all of it. The tonnage question carries the refund policy language; the returns question carries the SQL schema description. Both pay the [full tool catalogue](/docs/tools/tool-discovery) on every turn, and both get a model choosing among nine options when three were plausible.
+Every request pays for all of it. The tonnage question carries the refund policy language; the returns question carries the SQL schema description. Both pay the [full tool catalogue](/book/tools/tool-discovery) on every turn, and both get a model choosing among nine options when three were plausible.
 
-The failures follow the same shape. The agent semantically searches for a number that lives in a database. It reaches for `issue_credit` on a question that was only asking about timelines. It takes six turns to do what a specialized path does in two. [Turn count is the strongest cost lever there is](/docs/production/cost-engineering).
+The failures follow the same shape. The agent semantically searches for a number that lives in a database. It reaches for `issue_credit` on a question that was only asking about timelines. It takes six turns to do what a specialized path does in two. [Turn count is the strongest cost lever there is](/book/production/cost-engineering).
 
 ## Forces
 
@@ -52,11 +52,11 @@ The failures follow the same shape. The agent semantically searches for a number
 
 Four rules:
 
-**Classify into a closed set with [structured output](/docs/foundations/structured-output).** A fixed enum, a small model, temperature at or near zero, where the model still takes one. [Current frontier models reject the sampling parameters outright](/docs/foundations/nondeterminism), so `temperature: 0` is a setting for the small classifier you route *with*, not something to carry into the large model you route *to*. This is the one step where the model's job is narrow enough to be genuinely reliable, and a free-form label defeats the point.
+**Classify into a closed set with [structured output](/book/foundations/structured-output).** A fixed enum, a small model, temperature at or near zero, where the model still takes one. [Current frontier models reject the sampling parameters outright](/book/foundations/nondeterminism), so `temperature: 0` is a setting for the small classifier you route *with*, not something to carry into the large model you route *to*. This is the one step where the model's job is narrow enough to be genuinely reliable, and a free-form label defeats the point.
 
 **Dispatch in code, not by prompting.** The classifier returns `policy`; a `switch` picks the path. Asking one model to both classify and then behave differently is the undifferentiated agent again, wearing a routing table.
 
-**Include an `unknown` label, and route it to a human.** A classifier forced to pick among five when the answer is none of them will pick confidently. The sixth label is what turns a misroute into an [escalation](/docs/human-in-the-loop/escalation-and-audit).
+**Include an `unknown` label, and route it to a human.** A classifier forced to pick among five when the answer is none of them will pick confidently. The sixth label is what turns a misroute into an [escalation](/book/human-in-the-loop/escalation-and-audit).
 
 **Record the label on the trace.** Routing accuracy is one of the rare deterministic assertions available in this field: *which path did this request take* has a right answer, and per-route metrics are how you find the path that is quietly failing.
 
@@ -165,7 +165,7 @@ The `PATHS` table is the pattern. Each entry is a *different agent configuration
 
 ## When not to use it
 
-**When the routing is knowable without a model.** [The determinism test](/docs/workflows/the-determinism-test) applies directly: if a form field, a queue, or an endpoint already determines the type, route on that. A classifier re-deriving something you were told is pure cost and a new failure mode.
+**When the routing is knowable without a model.** [The determinism test](/book/workflows/the-determinism-test) applies directly: if a form field, a queue, or an endpoint already determines the type, route on that. A classifier re-deriving something you were told is pure cost and a new failure mode.
 
 **When the paths barely differ.** If two routes share a prompt and a tool set, they are one route. Splitting for tidiness adds a classification decision that can be wrong in exchange for nothing.
 
@@ -174,17 +174,17 @@ The `PATHS` table is the pattern. Each entry is a *different agent configuration
 **Below a volume where per-route evals are affordable.** Five routes you cannot separately evaluate is five paths whose quality you are guessing at. Fewer routes, each measured, beats more routes, each assumed.
 
 <Aside type="note" title="Routing is the cheapest form of specialization, and the one people skip">
-When an agent underperforms, the reflexive moves are a better prompt, a bigger model, or [more agents](/docs/multi-agent/when-not-to). Routing is usually a better first move than any of them, and it is strictly cheaper: it removes tools from the prompt, shortens the loop, narrows the context, and makes each path separately measurable.
+When an agent underperforms, the reflexive moves are a better prompt, a bigger model, or [more agents](/book/multi-agent/when-not-to). Routing is usually a better first move than any of them, and it is strictly cheaper: it removes tools from the prompt, shortens the loop, narrows the context, and makes each path separately measurable.
 
-It is also what a "specialist agent" almost always turns out to be. A specialist is a system prompt and a tool subset, both available inside one agent for the price of a conditional edge, rather than a message boundary, a serialization format, a fresh context, and a [coordination tax](/docs/multi-agent/the-coordination-tax).
+It is also what a "specialist agent" almost always turns out to be. A specialist is a system prompt and a tool subset, both available inside one agent for the price of a conditional edge, rather than a message boundary, a serialization format, a fresh context, and a [coordination tax](/book/multi-agent/the-coordination-tax).
 
 If you are considering multiple agents for specialization, build the router first. It answers the same need, and if it is insufficient you will have learned exactly which part was insufficient.
 </Aside>
 
 ## Related
 
-- [Deterministic Rails](/docs/patterns/control/deterministic-rails), the general form: code owns control flow, the model owns judgment
-- [Plan Then Execute](/docs/patterns/control/plan-then-execute): the other way to separate deciding from doing
-- [Retrieval as a Tool](/docs/patterns/retrieval/retrieval-as-tool): routing expressed as tool descriptions instead of a classifier
-- [Model Cascade](/docs/patterns/cost/model-cascade): routing on difficulty rather than on type
-- [Routing and Orchestration](/docs/workflows/routing-and-orchestration): the chapter this pattern comes from
+- [Deterministic Rails](/book/patterns/control/deterministic-rails), the general form: code owns control flow, the model owns judgment
+- [Plan Then Execute](/book/patterns/control/plan-then-execute): the other way to separate deciding from doing
+- [Retrieval as a Tool](/book/patterns/retrieval/retrieval-as-tool): routing expressed as tool descriptions instead of a classifier
+- [Model Cascade](/book/patterns/cost/model-cascade): routing on difficulty rather than on type
+- [Routing and Orchestration](/book/workflows/routing-and-orchestration): the chapter this pattern comes from

@@ -3,7 +3,7 @@ title: "The Agent as a Workflow"
 description: "Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity."
 ---
 
-[Atlas v0](/docs/first-agent/the-loop-by-hand) was about eighty lines: a `for` loop, three bounds, a union of outcomes. This chapter is the same program on durable execution, and the interesting part is not the port. It is the five things the port forces you to change, each of which was a latent bug in the original.
+[Atlas v0](/book/first-agent/the-loop-by-hand) was about eighty lines: a `for` loop, three bounds, a union of outcomes. This chapter is the same program on durable execution, and the interesting part is not the port. It is the five things the port forces you to change, each of which was a latent bug in the original.
 
 ## One rule decides the whole layout
 
@@ -173,7 +173,7 @@ A 40 KB tool result is 40 KB in history, permanently, re-read on every cold repl
 
 So a tool returning a large result does not merely cost context. It can fail the activity outright.
 
-[Result design](/docs/tools/result-design) said to shape at the source rather than cut at the boundary. Here that advice becomes structural: the truncation, the field projection, the row cap all happen **inside the activity, before it returns**, so the oversized payload never enters the journal at all.
+[Result design](/book/tools/result-design) said to shape at the source rather than cut at the boundary. Here that advice becomes structural: the truncation, the field projection, the row cap all happen **inside the activity, before it returns**, so the oversized payload never enters the journal at all.
 
 ## 3 · The transcript is now the expensive part
 
@@ -183,7 +183,7 @@ A ten-turn conversation carrying real context can approach **40 KB of raw messag
 
 The recommended shape at that point is to stop keeping the transcript in the workflow: **the workflow holds a reference and a cursor; the messages live in an external store.** That trades away some of the "history is the complete record" property for the transcript specifically, which is a real loss and a necessary one.
 
-Atlas keeps the transcript inline for now, because one ticket is bounded. [Long-Lived Agents](/docs/durability/long-lived-agents) is where it stops being bounded and where continue-as-new enters.
+Atlas keeps the transcript inline for now, because one ticket is bounded. [Long-Lived Agents](/book/durability/long-lived-agents) is where it stops being bounded and where continue-as-new enters.
 
 ## 4 · Model calls stream and heartbeat, or you pay twice
 
@@ -233,25 +233,25 @@ async def call_model(req: dict) -> ModelResult:
 
 Heartbeating buys a second thing that matters more than liveness: **cancellation propagation.** When the workflow is cancelled, a heartbeating activity is told on its next heartbeat and can abort the in-flight request, instead of running to completion, generating tokens nobody will read, and billing you for them.
 
-Note also that the tokens leave through a side channel rather than the return value. An activity returns once, at the end; live output needs a separate path, which is [Part XIII's subject](/docs/interface/ui-to-durable-backend).
+Note also that the tokens leave through a side channel rather than the return value. An activity returns once, at the end; live output needs a separate path, which is [Part XIII's subject](/book/interface/ui-to-durable-backend).
 
 ## 5 · Everything else stayed the same, deliberately
 
-Parallel tool calls remain parallel. Awaiting several activities concurrently is deterministic, because the results come back from history in a recorded order rather than a raced one. The [read/write split](/docs/tools/read-and-write-tools) still applies inside the dispatcher: reads fan out, writes serialize.
+Parallel tool calls remain parallel. Awaiting several activities concurrently is deterministic, because the results come back from history in a recorded order rather than a raced one. The [read/write split](/book/tools/read-and-write-tools) still applies inside the dispatcher: reads fan out, writes serialize.
 
 The idempotency key is now trivially correct. v0 had to be careful to derive it deterministically; here `workflowInfo().workflowId` is stable by construction, and the step and tool-use ID make it unique per call.
 
 <Aside type="caution" title="Whatever you pass to an activity is written down">
 `requester: ticket.customerId` is an activity argument, so it lands in the event history, as does every tool input, every model response, and every result.
 
-Event histories are durable, exported, and retained. If a tool argument or a tool result carries personal data, that data now lives in an operational log with its own retention policy, which is a compliance question rather than an engineering one. The mitigations are the usual ones: pass identifiers rather than records, fetch the sensitive parts inside the activity, and configure a data converter that encrypts payloads. [Part XVII](/docs/security/pii-and-compliance) is where they are argued properly.
+Event histories are durable, exported, and retained. If a tool argument or a tool result carries personal data, that data now lives in an operational log with its own retention policy, which is a compliance question rather than an engineering one. The mitigations are the usual ones: pass identifiers rather than records, fetch the sensitive parts inside the activity, and configure a data converter that encrypts payloads. [Part XVII](/book/security/pii-and-compliance) is where they are argued properly.
 
 The point to carry now: **the audit trail this part sells you is also a copy of everything you passed through it.**
 </Aside>
 
 ## The seven decisions, revisited
 
-[Part II ended with a table](/docs/first-agent/the-loop-by-hand) of seven decisions a framework would have made silently. Here is what owns each one now:
+[Part II ended with a table](/book/first-agent/the-loop-by-hand) of seven decisions a framework would have made silently. Here is what owns each one now:
 
 | Decision | v0 | On durable execution |
 | --- | --- | --- |
@@ -269,7 +269,7 @@ Two moved to the platform. One got a new cost. Four are exactly as much your pro
 
 Atlas now survives crashes, deploys, provider outages, and a worker being reclaimed mid-refund. It picks the wrong tool exactly as often as it did before.
 
-Durable execution made the **machine** reliable. The [six failure clusters](/docs/durable-execution/everything-that-breaks) that belong to the model are untouched, and a system with a perfect event history and a bad tool catalogue fails every ticket identically, forever, with an immaculate record of having done so.
+Durable execution made the **machine** reliable. The [six failure clusters](/book/durable-execution/everything-that-breaks) that belong to the model are untouched, and a system with a perfect event history and a bad tool catalogue fails every ticket identically, forever, with an immaculate record of having done so.
 
 ## Atlas, scored
 
@@ -287,7 +287,7 @@ Resolution quality did not move, and should not have. Nothing about the model's 
 
 ---
 
-Next: [LangGraph on Temporal](/docs/durability/langgraph-on-temporal). The official plugin: choosing `execute_in` per node, what may run inside a workflow, and what must not.
+Next: [LangGraph on Temporal](/book/durability/langgraph-on-temporal). The official plugin: choosing `execute_in` per node, what may run inside a workflow, and what must not.
 
 ## Takeaways
 

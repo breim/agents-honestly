@@ -3,7 +3,7 @@ title: "Schema and Granularity"
 description: "Why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one."
 ---
 
-[Part IV settled the SQL case](/docs/retrieval/sql-is-still-the-answer): the accuracy gap, the semantic layer, the rails. It is not repeated here. What this chapter does is take the mechanism underneath that argument and show that it had nothing to do with databases, then spend the rest of its length on the half Part IV never touched: **the schema itself.**
+[Part IV settled the SQL case](/book/retrieval/sql-is-still-the-answer): the accuracy gap, the semantic layer, the rails. It is not repeated here. What this chapter does is take the mechanism underneath that argument and show that it had nothing to do with databases, then spend the rest of its length on the half Part IV never touched: **the schema itself.**
 
 ## `execute_sql` is a category, not a tool
 
@@ -23,7 +23,7 @@ That gives a rule with more reach than "don't give agents SQL":
 
 > **The schema is the only place a constraint exists before the model acts. Everything else is a request.**
 
-A description saying *"only use SELECT"* is a request. A system prompt saying *"never drop tables"* is a request. A parameter typed as an open string is a decision to have no constraint at all, and [the invariant/request distinction](/docs/first-agent/the-problem) says exactly what that costs.
+A description saying *"only use SELECT"* is a request. A system prompt saying *"never drop tables"* is a request. A parameter typed as an open string is a decision to have no constraint at all, and [the invariant/request distinction](/book/first-agent/the-problem) says exactly what that costs.
 
 So granularity is really one question: **how much of the program lives in your code, and how much arrives in a string the model wrote?**
 
@@ -50,15 +50,15 @@ So granularity is really one question: **how much of the program lives in your c
 | ③ Parameterized task | Arguments | The whole program | A wrong argument: visible, testable |
 | ④ Fixed action | The decision only | Everything | Called at the wrong moment |
 
-The boundary between ① and ② is the important one, and [Part IV named the asymmetry that makes it matter](/docs/retrieval/sql-is-still-the-answer): text-to-SQL fails with a confident wrong number, a semantic layer fails by refusing, and those are different kinds of event rather than two points on a quality scale. On this ladder the same split lands one rung down from the top. **Rung ① fails by answering; rungs ②–④ fail by refusing.** A refusal routes to a human and costs a few minutes; a wrong answer routes to a customer. That asymmetry is the whole reason this ladder is worth climbing down rather than up.
+The boundary between ① and ② is the important one, and [Part IV named the asymmetry that makes it matter](/book/retrieval/sql-is-still-the-answer): text-to-SQL fails with a confident wrong number, a semantic layer fails by refusing, and those are different kinds of event rather than two points on a quality scale. On this ladder the same split lands one rung down from the top. **Rung ① fails by answering; rungs ②–④ fail by refusing.** A refusal routes to a human and costs a few minutes; a wrong answer routes to a customer. That asymmetry is the whole reason this ladder is worth climbing down rather than up.
 
 ## Where to sit, per tool
 
-[The previous chapter](/docs/tools/tools-are-apis-for-models) posed the trade between composability and selection accuracy, and deferred it here. The resolution is that it is not one dial for your system. It is a per-tool decision with two inputs.
+[The previous chapter](/book/tools/tools-are-apis-for-models) posed the trade between composability and selection accuracy, and deferred it here. The resolution is that it is not one dial for your system. It is a per-tool decision with two inputs.
 
 **Does the question space cluster?** Real questions cluster hard. Meridian's support tickets ask about a dozen things in a hundred phrasings, which is why a dozen parameterized tools cover the large majority and the tail is short. When you *can* enumerate the jobs, rung ③ is correct and cheap. When the tail is long and genuinely valuable, with analysts asking things nobody anticipated, rung ② buys expressiveness without handing over the program.
 
-**How reversible is it?** This one overrides the first. A read tool that picks wrong wastes a turn and some tokens; a write tool that picks wrong moves money. **Write tools belong further down the ladder than their clustering alone would justify**, which is the subject of [the next chapter](/docs/tools/read-and-write-tools). Atlas's `issue_credit` is rung ④ with an approval gate, not because refunds are hard to parameterize but because the cost of being wrong is asymmetric.
+**How reversible is it?** This one overrides the first. A read tool that picks wrong wastes a turn and some tokens; a write tool that picks wrong moves money. **Write tools belong further down the ladder than their clustering alone would justify**, which is the subject of [the next chapter](/book/tools/read-and-write-tools). Atlas's `issue_credit` is rung ④ with an approval gate, not because refunds are hard to parameterize but because the cost of being wrong is asymmetric.
 
 The procedure, once it is running: log the calls, find the chains the model keeps repeating, and collapse those into one tool. Then log the **refusals**, the questions with no tool. That list, not your intuition, is where the next tool comes from.
 
@@ -84,7 +84,7 @@ What the SDKs do with them is genuinely clever and worth knowing. They strip uns
 <Aside type="caution" title="A valid call is not a permitted call">
 `account_id: "4471"` validates perfectly whether or not this ticket's requester is entitled to that account. `amount_cents: 5000000` validates perfectly at fifty thousand dollars.
 
-Schema validity says the shape is right. It says nothing about authority, nothing about magnitude, and nothing about whether the values correspond to anything real. [Structured output](/docs/foundations/structured-output) made this point about model claims generally; here it is the reason [the requester rule](/docs/tools/tools-are-apis-for-models) and the credit limit both live in your handler rather than in the schema.
+Schema validity says the shape is right. It says nothing about authority, nothing about magnitude, and nothing about whether the values correspond to anything real. [Structured output](/book/foundations/structured-output) made this point about model claims generally; here it is the reason [the requester rule](/book/tools/tools-are-apis-for-models) and the credit limit both live in your handler rather than in the schema.
 </Aside>
 
 ### Five rules for arguments
@@ -195,7 +195,7 @@ LIST_UNPAID_INVOICES = {
 Three parameters, three property descriptions, and no scalar whose unit or origin is left to inference. The amount outstanding is described as a return value in cents rather than accepted as an input, because this tool cannot move money. That is a granularity decision, not a schema one, and it is why the two halves of this chapter are one chapter.
 
 <Aside type="note" title="Property descriptions are nearly free">
-A handful of tokens each, sitting in the stable part of the prompt where [caching](/docs/foundations/prompt-caching) makes them cost almost nothing after the first request. The tool schemas are re-sent on every turn regardless; whether they are *useful* on every turn is your choice.
+A handful of tokens each, sitting in the stable part of the prompt where [caching](/book/foundations/prompt-caching) makes them cost almost nothing after the first request. The tool schemas are re-sent on every turn regardless; whether they are *useful* on every turn is your choice.
 </Aside>
 
 ## Atlas, concretely
@@ -214,11 +214,11 @@ The catalogue after this chapter, by rung:
 
 No tool at rung ①. That is not a policy Atlas follows; it is what happens when you apply the two inputs honestly to a support agent whose questions cluster and whose one write moves money.
 
-The number worth tracking is not the tool count. It is **how many of the twenty tickets end in a refusal because no tool fits**. That is your rung-③ tail showing itself, and it is the only evidence that should make you add a tool or move one up the ladder. [Part XIV](/docs/evals/datasets) makes that measurement routine.
+The number worth tracking is not the tool count. It is **how many of the twenty tickets end in a refusal because no tool fits**. That is your rung-③ tail showing itself, and it is the only evidence that should make you add a tool or move one up the ladder. [Part XIV](/book/evals/datasets) makes that measurement routine.
 
 ---
 
-Next: [Read Tools and Write Tools](/docs/tools/read-and-write-tools), different risk, different permissions, different review. Treating them alike is how agents cause incidents.
+Next: [Read Tools and Write Tools](/book/tools/read-and-write-tools), different risk, different permissions, different review. Treating them alike is how agents cause incidents.
 
 ## Takeaways
 

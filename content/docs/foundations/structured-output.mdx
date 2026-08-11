@@ -10,7 +10,7 @@ That entire apparatus is obsolete, and the thing that replaced it is worth under
 
 ## What the constraint actually does
 
-Recall from [the loop](/docs/foundations/what-is-an-agent) that generation is one token at a time, and each step produces a score for every token in the vocabulary. Constrained decoding inserts one operation into that step.
+Recall from [the loop](/book/foundations/what-is-an-agent) that generation is one token at a time, and each step produces a score for every token in the vocabulary. Constrained decoding inserts one operation into that step.
 
 Your schema is compiled into a state machine once, then cached. At each position, the machine knows which tokens could legally come next: after `{` you may have a quote, after `"total_cents"` you must have a colon, inside an integer field you may have digits. Everything else is masked to negative infinity before the token is sampled.
 
@@ -46,7 +46,7 @@ The schema constrains shape. It says nothing about truth.
 
 `{"order_id": "ORD-4921", "refund_cents": 4900}` is schema-valid whether or not that order exists and whether or not $49.00 is the right amount. You have removed an entire class of parsing bugs and removed none of the reasoning ones. Every validation your program owed before, it still owes: does this ID exist, is this within policy, does this total match the line items.
 
-This matters most where structured output is most tempting. An agent that emits a typed `issue_credit` payload *feels* verified in a way that free text does not. It isn't. The type system stops at the boundary of your process; the model's claim about the world is still a claim. [Tool design](/docs/tools/schema-and-granularity) and [approval gates](/docs/human-in-the-loop/approval-gates) exist because of exactly this gap.
+This matters most where structured output is most tempting. An agent that emits a typed `issue_credit` payload *feels* verified in a way that free text does not. It isn't. The type system stops at the boundary of your process; the model's claim about the world is still a claim. [Tool design](/book/tools/schema-and-granularity) and [approval gates](/book/human-in-the-loop/approval-gates) exist because of exactly this gap.
 
 ## The constraint tax
 
@@ -81,7 +81,7 @@ The same mechanism is reachable two ways, and choosing between them is a questio
 | Shape | One schema, always applied | Many schemas, model picks one |
 | Fits | Extraction, classification, grading | Agents |
 
-Response format is for when there is exactly one thing you want back. Tool schemas are for when the model's job includes deciding *which* thing, which is [the definition of an agent](/docs/foundations/what-is-an-agent), so the tool path is the one the rest of this book lives on.
+Response format is for when there is exactly one thing you want back. Tool schemas are for when the model's job includes deciding *which* thing, which is [the definition of an agent](/book/foundations/what-is-an-agent), so the tool path is the one the rest of this book lives on.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -152,7 +152,7 @@ The supported subset is smaller than JSON Schema, and the gaps are load-bearing.
 
 **Not expressible:** recursive schemas; numeric bounds (`minimum`, `maximum`); string length (`minLength`, `maxLength`); most array constraints. The SDKs quietly strip these and validate them client-side after the fact, which means they are assertions, not guarantees, and a violation surfaces as an exception rather than as impossible.
 
-So the rule is: **constrain what the grammar can constrain, validate the rest.** "Refund amount must be a number" is a schema concern. "Refund amount must be at most 5000 and at most the order total" is your code's concern, and it belongs there anyway, because it is policy. See [Errors as Instructions](/docs/tools/errors-as-instructions) for handing the violation back in a way the model can act on.
+So the rule is: **constrain what the grammar can constrain, validate the rest.** "Refund amount must be a number" is a schema concern. "Refund amount must be at most 5000 and at most the order total" is your code's concern, and it belongs there anyway, because it is policy. See [Errors as Instructions](/book/tools/errors-as-instructions) for handing the violation back in a way the model can act on.
 
 The most useful thing the grammar *can* do is `enum`. Anywhere your program branches on a string, an enum turns "the model wrote `Angry` instead of `angry`" from a bug you will eventually hit into a state that cannot occur. Reach for it before you reach for validation.
 
@@ -174,7 +174,7 @@ What it does not do is make the model reliable. The shape is deterministic; the 
 
 ---
 
-Next: [Why Your Agent Is Flaky](/docs/foundations/nondeterminism), sampling, the reproducibility you can and cannot buy, and what it does to your idea of a test.
+Next: [Why Your Agent Is Flaky](/book/foundations/nondeterminism), sampling, the reproducibility you can and cannot buy, and what it does to your idea of a test.
 
 ## Takeaways
 

@@ -4,7 +4,7 @@ description: "Choosing what the model sees per request instead of shipping every
 ---
 
 
-You have a [budget](/docs/context/context-as-budget) and a [frozen system prompt](/docs/context/system-prompt). This chapter is about the variable part, and about the default policy for filling it, which almost every agent inherits without choosing:
+You have a [budget](/book/context/context-as-budget) and a [frozen system prompt](/book/context/system-prompt). This chapter is about the variable part, and about the default policy for filling it, which almost every agent inherits without choosing:
 
 **Ship the union of everything any request might need.**
 
@@ -28,12 +28,12 @@ The industry default has been inverting toward this: just-in-time loading as the
 | --- | --- | --- |
 | **Tools** | Ticket category, or the model searching a catalogue | Large; schemas are billed on every step of every run |
 | **Instructions** | Task type; loaded like a skill when relevant | Large; most task-specific guidance applies to a minority of runs |
-| **Documents** | Retrieval, ranked and filtered | Largest, and [all of Part IV](/docs/retrieval/where-does-the-answer-live) |
+| **Documents** | Retrieval, ranked and filtered | Largest, and [all of Part IV](/book/retrieval/where-does-the-answer-live) |
 | **Examples** | Similarity to the current input | Moderate; few-shot examples strongly shape output style |
 
-History is the fifth, and it's different enough to get [its own chapter](/docs/context/compaction): you don't select history so much as continuously decide what survives.
+History is the fifth, and it's different enough to get [its own chapter](/book/context/compaction): you don't select history so much as continuously decide what survives.
 
-Atlas makes the first two decisions from the classification we already built in [v0](/docs/first-agent/one-call), which is a nice property: the router we shipped as a stopgap turns out to be the selection mechanism:
+Atlas makes the first two decisions from the classification we already built in [v0](/book/first-agent/one-call), which is a nice property: the router we shipped as a stopgap turns out to be the selection mechanism:
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -94,7 +94,7 @@ Note that `issue_credit` is only present for `action_required`. Selection is not
 
 Here is the tension nobody warns you about, and it will bite the first time you measure.
 
-Everything above varies per request. [Caching](/docs/foundations/prompt-caching) requires the prefix *not* to vary, and tools render at position zero. So a naive dynamic tool set means **every request is a cache miss**. You saved 3,000 tokens of schema and started paying full price for the other 40,000.
+Everything above varies per request. [Caching](/book/foundations/prompt-caching) requires the prefix *not* to vary, and tools render at position zero. So a naive dynamic tool set means **every request is a cache miss**. You saved 3,000 tokens of schema and started paying full price for the other 40,000.
 
 <Figure caption="Where you vary determines what you can cache. The same content in two places has an order-of-magnitude different cost." frame={false}>
 
@@ -180,7 +180,7 @@ That last row is the highest-value log line in this chapter. An agent that says 
 
 ---
 
-Next: [Memory: Short-Term, Long-Term, and Neither](/docs/context/memory), on thread state, durable user facts, and the knowledge base: three different things that people put in one vector store.
+Next: [Memory: Short-Term, Long-Term, and Neither](/book/context/memory), on thread state, durable user facts, and the knowledge base: three different things that people put in one vector store.
 
 ## Takeaways
 

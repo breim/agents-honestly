@@ -17,11 +17,11 @@ That is the case against, stated as evidence rather than opinion. This chapter i
 
 ## The tax is not a metaphor
 
-[The coordination tax chapter](/docs/multi-agent/the-coordination-tax) priced this in tokens and seconds. The short version, because it drives everything else:
+[The coordination tax chapter](/book/multi-agent/the-coordination-tax) priced this in tokens and seconds. The short version, because it drives everything else:
 
 **Context does not cross the boundary; a summary does.** Agent A read four documents and formed a judgment. Agent B receives three sentences. Everything B decides is downstream of a lossy compression that A chose, and B cannot tell what was dropped.
 
-**Errors corroborate instead of cancelling.** The hope is that a second agent catches the first one's mistake. In practice a reviewer reading the previous agent's conclusion is a second vote, not a check. [Part III made this argument about poisoning](/docs/context/context-poisoning) and it is the same mechanism here, with an org chart drawn on it.
+**Errors corroborate instead of cancelling.** The hope is that a second agent catches the first one's mistake. In practice a reviewer reading the previous agent's conclusion is a second vote, not a check. [Part III made this argument about poisoning](/book/context/context-poisoning) and it is the same mechanism here, with an org chart drawn on it.
 
 **Every boundary is a new failure surface.** A handoff can be dropped, duplicated, malformed, or infinitely bounced. None of those exist in a function call.
 
@@ -33,9 +33,9 @@ Which yields the sentence to hold onto, and it is the one the failure data suppo
 
 They are all structural. None of them is about capability.
 
-**1 · Context genuinely does not fit.** Not "the prompt is long": the task involves more material than any single window can hold while still reasoning well, and the [budget chapter's](/docs/context/context-as-budget) tools have been exhausted. Auditing four hundred files, or reading two hundred documents to answer one question. Here isolation is a [context-engineering technique](/docs/patterns/context/subagent-isolation) that happens to be implemented with agents, and it is the strongest case on the list.
+**1 · Context genuinely does not fit.** Not "the prompt is long": the task involves more material than any single window can hold while still reasoning well, and the [budget chapter's](/book/context/context-as-budget) tools have been exhausted. Auditing four hundred files, or reading two hundred documents to answer one question. Here isolation is a [context-engineering technique](/book/patterns/context/subagent-isolation) that happens to be implemented with agents, and it is the strongest case on the list.
 
-**2 · A trust or authority boundary must be enforced.** The agent reading untrusted content must not be the one holding the tools, which is [the dual-LLM pattern from Part XVII](/docs/security/prompt-injection), and it is a security architecture rather than a team of collaborators. The "agents" here do not negotiate; one is quarantined by construction.
+**2 · A trust or authority boundary must be enforced.** The agent reading untrusted content must not be the one holding the tools, which is [the dual-LLM pattern from Part XVII](/book/security/prompt-injection), and it is a security architecture rather than a team of collaborators. The "agents" here do not negotiate; one is quarantined by construction.
 
 **3 · Ownership is genuinely separate.** Two teams ship, version, evaluate, and are on call for two different agents with different release cycles. This is a real reason and it is an *organizational* one: you are paying the coordination tax to buy independent deployability, which is exactly the microservices trade and should be made with the same eyes open.
 
@@ -50,7 +50,7 @@ Everything else on the usual list does not survive examination:
 | "It parallelizes the work" | True only for genuinely independent items, see below |
 | "Each agent is easier to evaluate" | The composition is what users experience, and it is harder to evaluate |
 
-The first row is the common one and worth being blunt about. **A "specialist agent" is usually a system prompt.** If the specialization is a different instruction and a narrower tool list, that is a [routing decision inside one agent](/docs/workflows/routing-and-orchestration), which costs one conditional edge instead of a message boundary, a serialization format, a failure mode, and a fresh context.
+The first row is the common one and worth being blunt about. **A "specialist agent" is usually a system prompt.** If the specialization is a different instruction and a narrower tool list, that is a [routing decision inside one agent](/book/workflows/routing-and-orchestration), which costs one conditional edge instead of a message boundary, a serialization format, a failure mode, and a fresh context.
 
 ## The promotion test
 
@@ -84,17 +84,17 @@ Question four is the one that catches most premature splits, because "missing te
 
 ## What to build instead
 
-The alternative is not "one giant prompt." It is the thing [Part VI spent a whole part on](/docs/workflows/the-determinism-test): a workflow whose control flow you wrote, with model calls at the steps that genuinely need judgment.
+The alternative is not "one giant prompt." It is the thing [Part VI spent a whole part on](/book/workflows/the-determinism-test): a workflow whose control flow you wrote, with model calls at the steps that genuinely need judgment.
 
 | You wanted | Build |
 | --- | --- |
 | A research agent and a writer agent | One graph: retrieve node → draft node → check node |
-| A router agent | [A routing edge](/docs/workflows/routing-and-orchestration) |
-| A critic agent | [An evaluator-optimizer loop](/docs/workflows/evaluator-optimizer) with a bounded iteration count |
+| A router agent | [A routing edge](/book/workflows/routing-and-orchestration) |
+| A critic agent | [An evaluator-optimizer loop](/book/workflows/evaluator-optimizer) with a bounded iteration count |
 | A team of specialists | One agent with conditional tool exposure |
-| Parallel document analysis | [Map-reduce over isolated contexts](/docs/patterns/scale/mapreduce-tree), same shape, no negotiation |
+| Parallel document analysis | [Map-reduce over isolated contexts](/book/patterns/scale/mapreduce-tree), same shape, no negotiation |
 
-The last row is the one that resolves the parallelism argument honestly. Fanning out over two hundred documents *is* correct and it *is* faster, and it does not require agents that talk to each other. Each worker gets one document, returns a structured result, and never learns the others exist. The coordination tax is near zero because there is no coordination: the [map-reduce pattern](/docs/patterns/context/subagent-isolation) is deterministic orchestration over isolated model calls, and it is what most successful "multi-agent" systems turn out to be underneath.
+The last row is the one that resolves the parallelism argument honestly. Fanning out over two hundred documents *is* correct and it *is* faster, and it does not require agents that talk to each other. Each worker gets one document, returns a structured result, and never learns the others exist. The coordination tax is near zero because there is no coordination: the [map-reduce pattern](/book/patterns/context/subagent-isolation) is deterministic orchestration over isolated model calls, and it is what most successful "multi-agent" systems turn out to be underneath.
 
 <Aside type="note" title="Where fan-out genuinely wins">
 Read-heavy, embarrassingly parallel, independent items: searching many sources, analyzing many files, evaluating many candidates. Latency drops, no agent negotiates with another, and the reduce step is code.
@@ -106,19 +106,19 @@ The failure modes in the taxonomy cluster around the opposite shape: agents with
 
 Sometimes the answer is genuinely yes. Then the taxonomy is a checklist rather than a warning, and four rules cover most of it:
 
-**Write the contract as a schema.** What each agent receives and returns, [validated](/docs/foundations/structured-output), versioned, and tested independently. Prose handoffs are where inter-agent misalignment lives.
+**Write the contract as a schema.** What each agent receives and returns, [validated](/book/foundations/structured-output), versioned, and tested independently. Prose handoffs are where inter-agent misalignment lives.
 
 **Give every loop a termination condition and a budget.** Maximum turns, maximum cost, and a defined outcome when either is hit. "It should converge" is not a termination condition.
 
 **Make verification independent.** A checker that reads the previous agent's *conclusion* is a second vote. A checker that reads the *source data* is a check. This is the single highest-value structural fix available, and it maps directly onto the taxonomy's verification family.
 
-**Trace across the boundary.** One trace ID spanning every agent, or debugging becomes archaeology across three systems. The [tracing requirements](/docs/observability/what-a-trace-must-answer) get strictly harder here, which is another cost in the tax column.
+**Trace across the boundary.** One trace ID spanning every agent, or debugging becomes archaeology across three systems. The [tracing requirements](/book/observability/what-a-trace-must-answer) get strictly harder here, which is another cost in the tax column.
 
 ## Where the core path leaves you
 
 This is the last chapter of the shortest route through the book, so it is worth naming what you have.
 
-You can build an agent and know [why it is a loop](/docs/first-agent/the-loop-by-hand). You can [budget its context](/docs/context/context-as-budget), [put its answer where it belongs](/docs/retrieval/where-does-the-answer-live), and [tell when it should not have been an agent at all](/docs/workflows/the-determinism-test). You can [design tools that survive a model calling them](/docs/tools/tools-are-apis-for-models), make them [safe to repeat](/docs/tools/idempotency), [survive a crash mid-run](/docs/durable-execution/why-durable-execution), [put a person in the loop without drowning them](/docs/human-in-the-loop/risk-tiers), [know whether a change made it better](/docs/evals/eval-discipline), [find out what happened afterwards](/docs/observability/what-a-trace-must-answer), [contain what a hostile ticket can do](/docs/security/prompt-injection), and [pay a bill you can explain](/docs/production/cost-engineering).
+You can build an agent and know [why it is a loop](/book/first-agent/the-loop-by-hand). You can [budget its context](/book/context/context-as-budget), [put its answer where it belongs](/book/retrieval/where-does-the-answer-live), and [tell when it should not have been an agent at all](/book/workflows/the-determinism-test). You can [design tools that survive a model calling them](/book/tools/tools-are-apis-for-models), make them [safe to repeat](/book/tools/idempotency), [survive a crash mid-run](/book/durable-execution/why-durable-execution), [put a person in the loop without drowning them](/book/human-in-the-loop/risk-tiers), [know whether a change made it better](/book/evals/eval-discipline), [find out what happened afterwards](/book/observability/what-a-trace-must-answer), [contain what a hostile ticket can do](/book/security/prompt-injection), and [pay a bill you can explain](/book/production/cost-engineering).
 
 The thread through all of it is one claim, made in a different register each time: **the model is the part you do not control, so everything around it must be the part you do.** Deterministic control flow, typed state, argument-scoped authority, structural rather than requested constraints, and a record you can reconstruct.
 
@@ -131,7 +131,7 @@ What is left in this book is depth, not filler: the parts that matter when a spe
 
 ---
 
-Next: [The Brief](/docs/capstone/the-brief), one system, built end to end, with every constraint from the preceding twenty parts applied at once.
+Next: [The Brief](/book/capstone/the-brief), one system, built end to end, with every constraint from the preceding twenty parts applied at once.
 
 ## Takeaways
 

@@ -119,7 +119,7 @@ Then use two modes:
 
 **Re-run.** Call the model and tools again on the same input. The result may vary, so score the outcome and path rather than comparing bytes.
 
-Confusing the two produces false confidence. Replay cannot validate a changed prompt or model because it reuses the old answer. Re-run cannot localize a dispatcher refactor because the model may take a different path before reaching it. [Replay-Driven Debugging](/docs/observability/replay-debugging) implements the distinction.
+Confusing the two produces false confidence. Replay cannot validate a changed prompt or model because it reuses the old answer. Re-run cannot localize a dispatcher refactor because the model may take a different path before reaching it. [Replay-Driven Debugging](/book/observability/replay-debugging) implements the distinction.
 
 Recorded production data needs the same retention, access, and erasure controls as the system it came from. A fixture copied into Git has a longer life and a broader audience than the trace it was extracted from.
 
@@ -152,7 +152,7 @@ Fault: retrieval returns another tenant's chunk
 Attack: poisoned metadata tries to cross the filter
 ```
 
-The invariants are shared: no unauthorized effect, no duplicate effect, bounded execution, traceable outcome, and safe escalation. [Failure Injection](/docs/reliability/failure-injection) and [Adversarial Evals](/docs/security/adversarial-evals) differ in method and ownership, not in the safety properties they assert.
+The invariants are shared: no unauthorized effect, no duplicate effect, bounded execution, traceable outcome, and safe escalation. [Failure Injection](/book/reliability/failure-injection) and [Adversarial Evals](/book/security/adversarial-evals) differ in method and ownership, not in the safety properties they assert.
 
 ## Test doubles without lying to yourself
 
@@ -223,7 +223,7 @@ Every production incident enters at the lowest layer that can prevent it. A bad 
 
 ---
 
-Next: [Building a Dataset](/docs/evals/datasets), the examples and labels that make the statistical layers mean something.
+Next: [Building a Dataset](/book/evals/datasets), the examples and labels that make the statistical layers mean something.
 
 ## Takeaways
 

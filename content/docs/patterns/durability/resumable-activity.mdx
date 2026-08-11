@@ -54,7 +54,7 @@ Four rules:
 
 **Report a position that is meaningful after a restart.** An array index is fine when the input is a stable, ordered list. When it is a paginated query, report the *cursor*. An index into a result set that may have changed is a silent correctness bug.
 
-**Make the repeated slice safe.** Between the last heartbeat and the crash, some work happened and was not recorded, so it *will* be redone. If those items have side effects, they need [idempotency keys](/docs/reliability/idempotency-in-practice) or the pattern converts a lost hour into duplicated writes.
+**Make the repeated slice safe.** Between the last heartbeat and the crash, some work happened and was not recorded, so it *will* be redone. If those items have side effects, they need [idempotency keys](/book/reliability/idempotency-in-practice) or the pattern converts a lost hour into duplicated writes.
 
 **Set the heartbeat timeout well above the heartbeat interval.** Heartbeats are throttled by the worker: the effective interval is roughly the smaller of 80% of the heartbeat timeout and a default. So a timeout too close to your interval produces spurious failures on a healthy activity.
 
@@ -137,7 +137,7 @@ async def analyze_backlog(input: BacklogInput) -> Summary:
 </Tab>
 </Tabs>
 
-Carrying `acc` in the checkpoint is a judgement call. It makes resumption exact and it means the accumulator crosses the wire on every heartbeat: fine for counters and small aggregates, wrong for anything large. When the accumulator is big, write partial results to storage and carry a *reference* instead, which is [the same rule as activity payloads](/docs/patterns/durability/tool-as-activity).
+Carrying `acc` in the checkpoint is a judgement call. It makes resumption exact and it means the accumulator crosses the wire on every heartbeat: fine for counters and small aggregates, wrong for anything large. When the accumulator is big, write partial results to storage and carry a *reference* instead, which is [the same rule as activity payloads](/book/patterns/durability/tool-as-activity).
 
 ## Trade-offs
 
@@ -145,7 +145,7 @@ Carrying `acc` in the checkpoint is a judgement call. It makes resumption exact 
 
 **Checkpoint payloads travel on every heartbeat.** A large `acc` means a large payload at high frequency. Reference, don't embed.
 
-**Resumption logic is a second code path.** The resume branch runs rarely and is therefore [the least-tested code in the activity](/docs/reliability/failure-injection). Injecting a worker kill at minute thirty is the test that proves it works, and it belongs in CI.
+**Resumption logic is a second code path.** The resume branch runs rarely and is therefore [the least-tested code in the activity](/book/reliability/failure-injection). Injecting a worker kill at minute thirty is the test that proves it works, and it belongs in CI.
 
 **Position must be stable across attempts.** If the underlying query can return different rows between attempts, such as new tickets arriving or a re-index, an index is wrong and a cursor over a snapshot is right. This is the failure that produces silently incomplete results rather than an error.
 
@@ -155,7 +155,7 @@ Carrying `acc` in the checkpoint is a judgement call. It makes resumption exact 
 
 **When the work should be a child workflow instead.** If the "activity" is really a sequence of steps with their own retries and timers, it is a workflow, and each step gets durability for free without hand-rolled checkpoints.
 
-**When the batch is genuinely parallel.** Four thousand independent classifications are a [fan-out](/docs/patterns/scale/fan-out) or a [map-reduce tree](/docs/patterns/scale/mapreduce-tree), not one long activity. Each item becomes its own activity, each retries independently, and a redeploy loses only what was in flight.
+**When the batch is genuinely parallel.** Four thousand independent classifications are a [fan-out](/book/patterns/scale/fan-out) or a [map-reduce tree](/book/patterns/scale/mapreduce-tree), not one long activity. Each item becomes its own activity, each retries independently, and a redeploy loses only what was in flight.
 
 **When the work is not restartable at all.** A streaming operation with an unresumable connection, or a third-party job with no cursor. Then the honest answer is a shorter unit of work, not a checkpoint that cannot be honoured.
 
@@ -169,8 +169,8 @@ Resumable activities earn their place when the work is *genuinely sequential*: a
 
 ## Related
 
-- [Heartbeat for Long Tools](/docs/patterns/durability/heartbeat-long-tools): the same mechanism used for detection rather than resumption
-- [Tool as Activity](/docs/patterns/durability/tool-as-activity): why payloads should be references
-- [Batch Iterator](/docs/patterns/scale/batch-iterator): walking a large set as a workflow rather than an activity
-- [Fan-Out](/docs/patterns/scale/fan-out): the parallel alternative when the work is independent
-- [Failure Injection](/docs/reliability/failure-injection): killing the worker mid-activity, which is how the resume path gets tested
+- [Heartbeat for Long Tools](/book/patterns/durability/heartbeat-long-tools): the same mechanism used for detection rather than resumption
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): why payloads should be references
+- [Batch Iterator](/book/patterns/scale/batch-iterator): walking a large set as a workflow rather than an activity
+- [Fan-Out](/book/patterns/scale/fan-out): the parallel alternative when the work is independent
+- [Failure Injection](/book/reliability/failure-injection): killing the worker mid-activity, which is how the resume path gets tested

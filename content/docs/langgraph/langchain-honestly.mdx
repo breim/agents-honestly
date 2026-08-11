@@ -5,7 +5,7 @@ description: "What the abstraction earns, what to skip, and how to use it withou
 
 LangChain is simultaneously the most-adopted and most-criticized library in this field. Both facts are informative, and the useful move is to take them seriously at the same time rather than picking a side.
 
-[Part II ended](/docs/first-agent/what-a-framework-buys) with a rule: adopt a framework for the problem it solves, when you have that problem. This chapter applies that rule to a specific, moving target. That means being clear about what "LangChain" refers to, because most of the argument about it is people discussing different things.
+[Part II ended](/book/first-agent/what-a-framework-buys) with a rule: adopt a framework for the problem it solves, when you have that problem. This chapter applies that rule to a specific, moving target. That means being clear about what "LangChain" refers to, because most of the argument about it is people discussing different things.
 
 ## Five things wear the name
 
@@ -44,7 +44,7 @@ This is worth sitting with, because it's the general shape of how integration la
 It hasn't gone away entirely. Providers still differ on caching semantics, thinking configuration, beta features, and error taxonomies, and those are exactly the places where a generic abstraction is *least* likely to expose what you need. Which brings us to the sharpest practical point in this chapter.
 
 <Aside type="caution" title="The abstraction hides the mechanics you spent Part I learning">
-You now know that [tool schemas are billed on every request](/docs/foundations/tokens), that [one changed byte at the front of the prompt costs the whole cache](/docs/foundations/prompt-caching), and that `input_tokens` is only the uncached remainder.
+You now know that [tool schemas are billed on every request](/book/foundations/tokens), that [one changed byte at the front of the prompt costs the whole cache](/book/foundations/prompt-caching), and that `input_tokens` is only the uncached remainder.
 
 A generic wrapper is under no obligation to surface any of that. Cache breakpoints, per-request token breakdowns, and provider-specific controls are exactly the fields that get normalized away. When they're invisible, you tune a cost curve you cannot perceive.
 
@@ -67,9 +67,9 @@ Note the shape of that list: it is mostly **glue**. That's not faint praise. Glu
 
 ## What to skip
 
-**Prebuilt agents as a starting point.** You [wrote the loop](/docs/first-agent/the-loop-by-hand); you know what the eighty lines were and which decisions they contained. A prebuilt agent makes those decisions for you, out of sight, and the whole reason Part II exists is so you don't take that trade without seeing it. Use one when you have measured that its choices match yours.
+**Prebuilt agents as a starting point.** You [wrote the loop](/book/first-agent/the-loop-by-hand); you know what the eighty lines were and which decisions they contained. A prebuilt agent makes those decisions for you, out of sight, and the whole reason Part II exists is so you don't take that trade without seeing it. Use one when you have measured that its choices match yours.
 
-**Document loaders as an ingestion pipeline.** [Part IV](/docs/retrieval/ingestion-pipeline) argued that ingestion's hard problems are lifecycle, not parsing: change detection, deletion, reconciliation, idempotency. A loader gives you parsing. Treat it as one stage of a pipeline you own, not as the pipeline.
+**Document loaders as an ingestion pipeline.** [Part IV](/book/retrieval/ingestion-pipeline) argued that ingestion's hard problems are lifecycle, not parsing: change detection, deletion, reconciliation, idempotency. A loader gives you parsing. Treat it as one stage of a pipeline you own, not as the pipeline.
 
 **Chains for things that are three lines.** If the composition is `a` then `b`, write `b(a(x))`. An abstraction that turns two function calls into a DSL has added a layer and a vocabulary for nothing.
 
@@ -77,7 +77,7 @@ Note the shape of that list: it is mostly **glue**. That's not faint praise. Glu
 
 ## Let it own glue, never your domain
 
-The architectural rule, and it's the same list [Part II](/docs/first-agent/what-a-framework-buys) said stays yours across every rewrite:
+The architectural rule, and it's the same list [Part II](/book/first-agent/what-a-framework-buys) said stays yours across every rewrite:
 
 | Yours, always | Framework's, happily |
 | --- | --- |
@@ -105,7 +105,7 @@ Four practices, all cheap:
 
 ## The recommendation
 
-**Use LangGraph when [the determinism test](/docs/workflows/the-determinism-test) says you have a genuine agent step and you need what a graph provides:** explicit state, checkpointing, interruption at node boundaries, and a run shape you can inspect. That's a specific problem with a specific answer, and the next chapters are about it.
+**Use LangGraph when [the determinism test](/book/workflows/the-determinism-test) says you have a genuine agent step and you need what a graph provides:** explicit state, checkpointing, interruption at node boundaries, and a run shape you can inspect. That's a specific problem with a specific answer, and the next chapters are about it.
 
 **Use the integrations when breadth is the point.** During evaluation, or when you genuinely support many providers.
 
@@ -115,7 +115,7 @@ Four practices, all cheap:
 
 ---
 
-Next: [State, Nodes, Edges](/docs/langgraph/state-nodes-edges). The graph model, and rebuilding Atlas as an explicit state machine.
+Next: [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The graph model, and rebuilding Atlas as an explicit state machine.
 
 ## Takeaways
 

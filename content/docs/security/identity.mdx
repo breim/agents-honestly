@@ -44,7 +44,7 @@ Model ③ is the one to build. The token the backend receives carries two facts:
 
 ## The delegation chain, concretely
 
-The mechanism is not new and does not need inventing. **OAuth 2.0 Token Exchange (RFC 8693)** exists precisely for this: a service presents an incoming token and receives a new one, downscoped, that records itself as the actor. The claim is `act`, and it nests. `sub` is the user, `act.sub` is the agent, and the chain can extend if a [sub-agent](/docs/multi-agent/supervisor-and-handoff) is involved.
+The mechanism is not new and does not need inventing. **OAuth 2.0 Token Exchange (RFC 8693)** exists precisely for this: a service presents an incoming token and receives a new one, downscoped, that records itself as the actor. The claim is `act`, and it nests. `sub` is the user, `act.sub` is the agent, and the chain can extend if a [sub-agent](/book/multi-agent/supervisor-and-handoff) is involved.
 
 ```json
 {
@@ -56,7 +56,7 @@ The mechanism is not new and does not need inventing. **OAuth 2.0 Token Exchange
 }
 ```
 
-Everything the previous chapter asked for is expressible here: the scope is the [minimum mined from traces](/docs/security/least-privilege), the expiry makes it a run-scoped credential, and `act` is what turns "the service account did it" into "Atlas did it for user 8841 during run 4471."
+Everything the previous chapter asked for is expressible here: the scope is the [minimum mined from traces](/book/security/least-privilege), the expiry makes it a run-scoped credential, and `act` is what turns "the service account did it" into "Atlas did it for user 8841 during run 4471."
 
 <Aside type="note" title="On the standards churn">
 Vendor-specific on-behalf-of flows implement RFC 8693, and there is active IETF work on an agent-specific extension adding an explicit actor token and consent step. That work is a draft and not settled, so build against Token Exchange itself, which has been a published RFC since 2020, and treat the agent-specific additions as something to adopt when they stabilize rather than something to wait for.
@@ -68,10 +68,10 @@ The design does not depend on which draft wins. It depends on the token carrying
 
 The failure the delegation model prevents is subtler than the opening scene, and it is the one that survives a first pass at fixing this.
 
-Suppose you keep the service credential for retrieval but filter the *results* by the user's access before showing them. Authorization now happens, and the system is still wrong in three ways, all of which [the retrieval chapter](/docs/retrieval/metadata-and-authorization) established and which generalize past retrieval:
+Suppose you keep the service credential for retrieval but filter the *results* by the user's access before showing them. Authorization now happens, and the system is still wrong in three ways, all of which [the retrieval chapter](/book/retrieval/metadata-and-authorization) established and which generalize past retrieval:
 
 - The restricted content was read out of storage, so it existed in your process, your logs, and anything that ran before the filter.
-- The model saw it. A summary, a [memory write](/docs/context/memory), or a cached intermediate now carries content the user cannot access, and the filter does not follow it there.
+- The model saw it. A summary, a [memory write](/book/context/memory), or a cached intermediate now carries content the user cannot access, and the filter does not follow it there.
 - The backend's own audit log records a read that the user's access would have denied, so the system of record disagrees with your policy, and it is the system of record.
 
 > **Authorization applied after retrieval is a display preference. Authorization applied at the query is a boundary.**
@@ -80,7 +80,7 @@ The token is what makes the second one available, because it lets the *backend* 
 
 ## Where it actually breaks: the run outlives the session
 
-Everything above is standard practice and would be unremarkable, except that agents break its central assumption. Token exchange assumes a request-scoped flow: a user token arrives, you exchange it, you call the backend, you respond. Agents [pause for approval](/docs/human-in-the-loop/approval-gates), run for hours, [resume from a checkpoint](/docs/langgraph/persistence) three days later, and execute on schedules with no user present at all.
+Everything above is standard practice and would be unremarkable, except that agents break its central assumption. Token exchange assumes a request-scoped flow: a user token arrives, you exchange it, you call the backend, you respond. Agents [pause for approval](/book/human-in-the-loop/approval-gates), run for hours, [resume from a checkpoint](/book/langgraph/persistence) three days later, and execute on schedules with no user present at all.
 
 The user's token expired long before the run finished. Four situations, four different answers:
 
@@ -91,7 +91,7 @@ The user's token expired long before the run finished. Four situations, four dif
 | Resumed after approval, days later | Nothing live | Re-validate the delegation **and** re-check the user still holds the rights |
 | Scheduled, no user at all | Only a service identity | A **named** authority: an owner who granted it, recorded, revocable, reviewed |
 
-Row three is where correctness usually gets lost. A run that paused on Monday and resumes on Thursday must not simply replay Monday's authorization. The person may have changed roles, left the company, or had the relevant grant revoked. An agent that resumes with Monday's rights is a revocation that silently didn't happen, the same defect as [caching group membership in an index](/docs/retrieval/metadata-and-authorization).
+Row three is where correctness usually gets lost. A run that paused on Monday and resumes on Thursday must not simply replay Monday's authorization. The person may have changed roles, left the company, or had the relevant grant revoked. An agent that resumes with Monday's rights is a revocation that silently didn't happen, the same defect as [caching group membership in an index](/book/retrieval/metadata-and-authorization).
 
 So the rule for durable agents:
 
@@ -171,7 +171,7 @@ Then the audit requirement falls out for free, and it is worth stating as its ow
 
 > **Every privileged action must name three things: the user, the agent, and the run.**
 
-Two of the three are useless alone. "User 8841 issued a credit" hides the automation. "Atlas issued a credit" hides the authority it was borrowing. Only the triple lets you answer *why was this allowed*, which is the actual question. And it is the same triple [the trace has to carry](/docs/observability/what-a-trace-must-answer) for entirely different reasons.
+Two of the three are useless alone. "User 8841 issued a credit" hides the automation. "Atlas issued a credit" hides the authority it was borrowing. Only the triple lets you answer *why was this allowed*, which is the actual question. And it is the same triple [the trace has to carry](/book/observability/what-a-trace-must-answer) for entirely different reasons.
 
 ## Atlas, concretely
 
@@ -193,7 +193,7 @@ The last row is the one that changes what happens *after* an incident. Before, t
 
 ---
 
-Next: [Multi-Tenant Isolation](/docs/security/tenant-isolation), RBAC, ABAC, row-level security, and retrieval filters as an authorization boundary.
+Next: [Multi-Tenant Isolation](/book/security/tenant-isolation), RBAC, ABAC, row-level security, and retrieval filters as an authorization boundary.
 
 ## Takeaways
 

@@ -44,13 +44,13 @@ The naive control is a turn cap, and alone it is the wrong one. A run that hits 
 
 Four rules:
 
-**Size the caps per run, from what the run is worth.** A global monthly ceiling tells you nothing about whether this ticket deserved forty calls. The unit is [cost per resolved outcome against margin on one](/docs/production/cost-engineering): a ticket worth eight dollars gets a cap derived from eight dollars.
+**Size the caps per run, from what the run is worth.** A global monthly ceiling tells you nothing about whether this ticket deserved forty calls. The unit is [cost per resolved outcome against margin on one](/book/production/cost-engineering): a ticket worth eight dollars gets a cap derived from eight dollars.
 
-**Degrade before you stop.** At seventy percent of budget, switch to a cheaper model, narrow retrieval, and drop speculative calls. A hard stop produces a truncated run at the worst moment; a degrade produces a cheaper, slightly worse completion, the [same shape as a fallback](/docs/reliability/fallbacks-and-breakers), applied to money.
+**Degrade before you stop.** At seventy percent of budget, switch to a cheaper model, narrow retrieval, and drop speculative calls. A hard stop produces a truncated run at the worst moment; a degrade produces a cheaper, slightly worse completion, the [same shape as a fallback](/book/reliability/fallbacks-and-breakers), applied to money.
 
-**Every cap produces a defined outcome, and none of them is an exception.** A partial result marked incomplete, or an escalation carrying what was established. Budget exhaustion is [the system working](/docs/reliability/error-taxonomy), and logging it at `ERROR` teaches everyone to ignore the error channel.
+**Every cap produces a defined outcome, and none of them is an exception.** A partial result marked incomplete, or an escalation carrying what was established. Budget exhaustion is [the system working](/book/reliability/error-taxonomy), and logging it at `ERROR` teaches everyone to ignore the error channel.
 
-**Count what the model spends on its own behalf.** Retries, [reflection passes](/docs/patterns/control/reflection), critic calls, and abandoned branches all bill at full price. A budget that only counts productive turns is not a budget.
+**Count what the model spends on its own behalf.** Retries, [reflection passes](/book/patterns/control/reflection), critic calls, and abandoned branches all bill at full price. A budget that only counts productive turns is not a budget.
 
 ## Code
 
@@ -157,9 +157,9 @@ Note that `no_progress` escalates while the other three return a partial. That d
 
 **Caps sized for the average fail the tail.** The rare hard ticket is exactly the one that legitimately needs fifteen turns, and it is the one your p95-derived cap will cut off. Size from the p95 of *successful* runs, watch the cap-hit rate by route, and treat a rising one as a signal to investigate rather than to raise the number reflexively.
 
-**A partial result is a product decision, not a technical one.** What does the customer see when a run stops at seventy percent? Usually the right answer is that they see nothing and a person sees the work, which means every cap is also a load on the [escalation queue](/docs/human-in-the-loop/risk-tiers).
+**A partial result is a product decision, not a technical one.** What does the customer see when a run stops at seventy percent? Usually the right answer is that they see nothing and a person sees the work, which means every cap is also a load on the [escalation queue](/book/human-in-the-loop/risk-tiers).
 
-**Degrading changes the output quality silently.** A run that finished on the cheap rung produced a different answer than one that did not. Record which bounds fired, the same way you [record which model served](/docs/reliability/fallbacks-and-breakers), or quality analysis is comparing incomparable runs.
+**Degrading changes the output quality silently.** A run that finished on the cheap rung produced a different answer than one that did not. Record which bounds fired, the same way you [record which model served](/book/reliability/fallbacks-and-breakers), or quality analysis is comparing incomparable runs.
 
 **More knobs is more to tune wrong.** Five bounds is five numbers, and most teams get value from three: turns, money, and no-progress. Add the others when you have evidence they bind.
 
@@ -169,24 +169,24 @@ Note that `no_progress` escalates while the other three return a partial. That d
 
 The genuine "when not to" is about *which* bounds:
 
-**Skip the wall-clock deadline for async work.** A [durable run that pauses for approval](/docs/patterns/durability/approval-gate) legitimately spans days. Bound its *active* time, not its elapsed time, or the approval pause trips the deadline.
+**Skip the wall-clock deadline for async work.** A [durable run that pauses for approval](/book/patterns/durability/approval-gate) legitimately spans days. Bound its *active* time, not its elapsed time, or the approval pause trips the deadline.
 
 **Skip the money cap where value is not per-run.** A batch analysis over four thousand tickets has a job-level budget, not a per-item one.
 
-**Skip the turn cap when the work is a fixed plan.** [Plan-then-execute](/docs/patterns/control/plan-then-execute) bounds itself by construction. The plan has a step count, and a replan budget is the cap that matters instead.
+**Skip the turn cap when the work is a fixed plan.** [Plan-then-execute](/book/patterns/control/plan-then-execute) bounds itself by construction. The plan has a step count, and a replan budget is the cap that matters instead.
 
 <Aside type="caution" title="The cap that fires is doing a job; the cap that never fires is a guess">
 A bound nobody has seen trigger has not been validated. It might be correctly sized, or it might be an order of magnitude too high and quietly protecting nothing.
 
 So instrument the *distribution*, not just the events: the fraction of runs reaching 50%, 70%, and 90% of each bound. A cap where nothing ever exceeds 20% is not a control; a cap where a third of runs exceed 70% is about to become a product problem.
 
-And [inject the exhaustion deliberately](/docs/reliability/failure-injection). Force a run to hit each bound in CI and assert the outcome: does it produce a partial result, does the escalation carry the work, does it reach a terminal state, is the cost bounded on the failure path too. The bounds are the code that runs when things go wrong, which makes them [the least-exercised code in the system](/docs/reliability/failure-injection), and the code you most need to be correct.
+And [inject the exhaustion deliberately](/book/reliability/failure-injection). Force a run to hit each bound in CI and assert the outcome: does it produce a partial result, does the escalation carry the work, does it reach a terminal state, is the cost bounded on the failure path too. The bounds are the code that runs when things go wrong, which makes them [the least-exercised code in the system](/book/reliability/failure-injection), and the code you most need to be correct.
 </Aside>
 
 ## Related
 
-- [ReAct Loop](/docs/patterns/control/react-loop): the loop these bounds wrap, and where each check goes
-- [Cost Engineering](/docs/production/cost-engineering): deriving the money cap from unit economics
-- [Escalation Ladder](/docs/patterns/control/escalation-ladder): what a bound hands the work to
-- [Timeouts, Retries, and Backoff](/docs/reliability/timeouts-and-retries): the deadline, propagated per call
-- [Token Budget Enforcement](/docs/patterns/cost/token-budget-enforcement): the money bound, catalogued from the cost side
+- [ReAct Loop](/book/patterns/control/react-loop): the loop these bounds wrap, and where each check goes
+- [Cost Engineering](/book/production/cost-engineering): deriving the money cap from unit economics
+- [Escalation Ladder](/book/patterns/control/escalation-ladder): what a bound hands the work to
+- [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries): the deadline, propagated per call
+- [Token Budget Enforcement](/book/patterns/cost/token-budget-enforcement): the money bound, catalogued from the cost side

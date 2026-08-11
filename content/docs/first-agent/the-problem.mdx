@@ -54,7 +54,7 @@ Atlas has to reach into four places. Each has a property that will cause a speci
 
 **The policy corpus is not consistent.** Twelve hundred documents accumulated over nine years, with superseded versions still present and at least one pair that flatly disagree about return windows. A retrieval system that confidently surfaces the wrong one is worse than no retrieval, because it launders a stale document into an authoritative-sounding answer.
 
-**The warehouse is not a corpus.** "How much did we ship to Iberia in Q2" is an aggregation over forty million rows. No amount of embedding will answer it, and a vector index over row text is a slow, expensive, wrong way to do a `SUM`. This is the single most common architectural error in this field and it gets [its own chapter](/docs/retrieval/where-does-the-answer-live).
+**The warehouse is not a corpus.** "How much did we ship to Iberia in Q2" is an aggregation over forty million rows. No amount of embedding will answer it, and a vector index over row text is a slow, expensive, wrong way to do a `SUM`. This is the single most common architectural error in this field and it gets [its own chapter](/book/retrieval/where-does-the-answer-live).
 
 **The CRM is about relationships.** "Why is the Acme account at risk" is not a lookup. It is three hops: this account, its open tickets and their sentiment, its contract renewal date, its recent order volume against last year. The answer is the shape of the connections.
 
@@ -84,13 +84,13 @@ The two halves of Atlas pull in opposite directions, and that is the engineering
 
 **Acting wants narrowness.** Fewer capabilities, tighter limits, explicit approval, no ability to touch anything it wasn't asked to touch. Every capability you add widens the blast radius.
 
-Most agent demos only do the first half, which is why they demo well and ship badly. Meridian needs both in one system, and the resolution is one of the things this book is actually about: different authority for different actions, gated by [risk](/docs/human-in-the-loop/approval-gates) rather than by capability.
+Most agent demos only do the first half, which is why they demo well and ship badly. Meridian needs both in one system, and the resolution is one of the things this book is actually about: different authority for different actions, gated by [risk](/book/human-in-the-loop/approval-gates) rather than by capability.
 
 ## "Done" before code
 
 Here is where most projects go wrong, and it is not a technical failure.
 
-From [the last chapter](/docs/foundations/nondeterminism): you cannot write `expect(reply).toBe(...)`. So the usual acceptance-criteria habit, a list of behaviors someone will eyeball at the end, produces a system nobody can say is finished. The discipline that replaces it inverts the order: **write the criteria and the harness that measures them first, then build until it passes.**
+From [the last chapter](/book/foundations/nondeterminism): you cannot write `expect(reply).toBe(...)`. So the usual acceptance-criteria habit, a list of behaviors someone will eyeball at the end, produces a system nobody can say is finished. The discipline that replaces it inverts the order: **write the criteria and the harness that measures them first, then build until it passes.**
 
 That means the acceptance spec is not prose. It has four parts, and they are different kinds of thing.
 
@@ -151,7 +151,7 @@ Only then do we write code. In the next chapter, exactly one API call.
 
 ---
 
-Next: [One Call, Then Structure](/docs/first-agent/one-call), a raw completion and then a typed one. The smallest useful thing, and its limits.
+Next: [One Call, Then Structure](/book/first-agent/one-call), a raw completion and then a typed one. The smallest useful thing, and its limits.
 
 ## Takeaways
 

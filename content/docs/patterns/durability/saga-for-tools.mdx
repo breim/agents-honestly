@@ -9,7 +9,7 @@ The agent issues a $2,500 credit on order 4921. Then it updates the ticket statu
 
 The run fails. The credit is real and the customer has heard nothing about it. There is no transaction to roll back, because the three effects live in three systems and none of them has ever heard of the others.
 
-The instinct is to retry the whole run, and that makes it worse: [the credit is idempotent](/docs/reliability/idempotency-in-practice), so it does not double, but the ticket status flips again and the run may take a different path this time. And if the failure had been at the credit step instead, the agent would have a *partially applied* refund with no record anywhere saying which parts happened.
+The instinct is to retry the whole run, and that makes it worse: [the credit is idempotent](/book/reliability/idempotency-in-practice), so it does not double, but the ticket status flips again and the run may take a different path this time. And if the failure had been at the credit step instead, the agent would have a *partially applied* refund with no record anywhere saying which parts happened.
 
 ## Forces
 
@@ -18,7 +18,7 @@ The instinct is to retry the whole run, and that makes it worse: [the credit is 
 - **The agent chooses the steps at runtime.** Unlike a hand-written saga, the sequence is not known when the code is written.
 - **Compensations can themselves fail**, and a failed compensation is worse than the original failure because it is silent.
 - **Order matters**: undo in the reverse of the order you did.
-- **Some things cannot be undone at all.** [A sent email is gone](/docs/tools/read-and-write-tools).
+- **Some things cannot be undone at all.** [A sent email is gone](/book/tools/read-and-write-tools).
 
 ## Solution
 
@@ -48,11 +48,11 @@ Four rules:
 
 **Push the compensation, not the intent.** After `issue_credit` returns `cr_9104_1`, push a closure holding *that reference*. A compensation that has to re-derive what to undo will re-derive it wrong when the state has moved.
 
-**Name the pivot explicitly.** Order the steps so everything reversible happens before the first irreversible one, and mark that boundary in the code. Past the pivot, failure means [escalate to a human](/docs/human-in-the-loop/escalation-and-audit), not unwind, because unwinding is no longer possible.
+**Name the pivot explicitly.** Order the steps so everything reversible happens before the first irreversible one, and mark that boundary in the code. Past the pivot, failure means [escalate to a human](/book/human-in-the-loop/escalation-and-audit), not unwind, because unwinding is no longer possible.
 
 **Compensations are activities, with their own retries.** They run in a failure path where things are already broken, so they need at least the retry discipline of the forward path. A compensation that fails silently leaves the world in the state the saga existed to prevent.
 
-**The stack is workflow state, so it survives the crash.** This is the whole reason the pattern lives in [durable execution](/docs/patterns/durability/agent-as-entity-workflow): a compensation stack in process memory is gone precisely when the process dies, which is the case it was built for.
+**The stack is workflow state, so it survives the crash.** This is the whole reason the pattern lives in [durable execution](/book/patterns/durability/agent-as-entity-workflow): a compensation stack in process memory is gone precisely when the process dies, which is the case it was built for.
 
 ## Code
 
@@ -156,13 +156,13 @@ The dispatcher lines at the bottom are what make this work for an agent. **The s
 
 ## Trade-offs
 
-**Every reversible write needs a compensation written and tested.** That is real work per tool, and the compensation path is the [least-exercised code in the system](/docs/reliability/failure-injection). It runs only when something has already gone wrong. Inject failures to exercise it, or you are shipping an untested recovery.
+**Every reversible write needs a compensation written and tested.** That is real work per tool, and the compensation path is the [least-exercised code in the system](/book/reliability/failure-injection). It runs only when something has already gone wrong. Inject failures to exercise it, or you are shipping an untested recovery.
 
 **Compensation is not rollback, and the difference is visible.** `reverse_credit` appends a reversing entry to a ledger; it does not erase the original. The customer may see both lines on a statement, and someone in finance will ask. That is correct behavior and it needs to be explained once, in the product, rather than treated as a bug.
 
-**The pivot constrains the agent's ordering.** Putting all irreversible steps last is easy in hand-written code and awkward when a model picks the order. In practice this means the [dispatcher enforces it](/docs/capstone/building-it): a class ⑤ call is refused until the reversible work has settled, which is a real constraint on what the agent may do when.
+**The pivot constrains the agent's ordering.** Putting all irreversible steps last is easy in hand-written code and awkward when a model picks the order. In practice this means the [dispatcher enforces it](/book/capstone/building-it): a class ⑤ call is refused until the reversible work has settled, which is a real constraint on what the agent may do when.
 
-**Escalation after the pivot needs the whole picture.** The stack, the completed steps, and what could not be undone all go into the [escalation package](/docs/first-agent/the-problem). A person receiving *"the run failed"* after a partially applied refund is being handed an investigation, not a task.
+**Escalation after the pivot needs the whole picture.** The stack, the completed steps, and what could not be undone all go into the [escalation package](/book/first-agent/the-problem). A person receiving *"the run failed"* after a partially applied refund is being handed an investigation, not a task.
 
 ## When not to use it
 
@@ -170,22 +170,22 @@ The dispatcher lines at the bottom are what make this work for an agent. **The s
 
 **When one system owns all the effects.** If the credit and the status both live in your Postgres, use a transaction. A saga is what you build because you *cannot* have one.
 
-**When the operation is naturally idempotent and convergent.** [Declarative writes](/docs/tools/idempotency) that set a desired state, for example `set_priority('high')`, converge on retry and need no compensation. Prefer designing the tool this way over writing an undo for it.
+**When the operation is naturally idempotent and convergent.** [Declarative writes](/book/tools/idempotency) that set a desired state, for example `set_priority('high')`, converge on retry and need no compensation. Prefer designing the tool this way over writing an undo for it.
 
 **When the right answer is a human.** For a small number of high-value, low-frequency effects, an alert saying *"credit issued, reply not sent, ticket 9104"* may be better than an automated reversal, because reversing a customer-visible credit has its own cost, and a person can weigh it.
 
 <Aside type="caution" title="The step that cannot be undone is the one to design around">
-[A class ⑤ external write](/docs/tools/read-and-write-tools), such as a sent email, a posted webhook, or a message to a customer, has no compensation, because the undo would have to live inside someone else's system.
+[A class ⑤ external write](/book/tools/read-and-write-tools), such as a sent email, a posted webhook, or a message to a customer, has no compensation, because the undo would have to live inside someone else's system.
 
 Which makes the pivot a design decision rather than a bookkeeping one: **put the irreversible step last, alone in its unit of work, and check everything before it.** If `send_reply` is the final action and everything reversible has already settled, a failure at that step leaves a consistent world and a person to notify. If it happens in the middle, no amount of saga machinery recovers the situation.
 
-This is the same constraint [the one-effect-per-node rule](/docs/langgraph/graph-topologies) arrived at from graph design and [idempotency](/docs/tools/idempotency) arrived at from retries. Three independent lines of argument land on the same sequencing rule, which is usually a sign it is not negotiable.
+This is the same constraint [the one-effect-per-node rule](/book/langgraph/graph-topologies) arrived at from graph design and [idempotency](/book/tools/idempotency) arrived at from retries. Three independent lines of argument land on the same sequencing rule, which is usually a sign it is not negotiable.
 </Aside>
 
 ## Related
 
-- [Compensation](/docs/durability/compensation): the chapter, with ordering by reversibility and the failed-compensation problem in full
-- [Tool as Activity](/docs/patterns/durability/tool-as-activity): compensations are activities too, with their own retry policies
-- [Idempotency](/docs/tools/idempotency): the cheaper alternative when the operation can converge instead
-- [Read Tools and Write Tools](/docs/tools/read-and-write-tools): the five classes that decide which steps need a compensation
-- [Approval Gate](/docs/patterns/durability/approval-gate): what happens after the pivot, when a person has to decide
+- [Compensation](/book/durability/compensation): the chapter, with ordering by reversibility and the failed-compensation problem in full
+- [Tool as Activity](/book/patterns/durability/tool-as-activity): compensations are activities too, with their own retry policies
+- [Idempotency](/book/tools/idempotency): the cheaper alternative when the operation can converge instead
+- [Read Tools and Write Tools](/book/tools/read-and-write-tools): the five classes that decide which steps need a compensation
+- [Approval Gate](/book/patterns/durability/approval-gate): what happens after the pivot, when a person has to decide

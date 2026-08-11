@@ -16,7 +16,7 @@ The same blindness hides worse things. A run that got the right number by asking
 ## Forces
 
 - **The right answer for the wrong reason is a latent bug**, indistinguishable from correctness at the output.
-- **The path is recorded already**: [the trace has the tool calls, arguments, and retrieved IDs](/docs/observability/what-a-trace-must-answer).
+- **The path is recorded already**: [the trace has the tool calls, arguments, and retrieved IDs](/book/observability/what-a-trace-must-answer).
 - **Path assertions are deterministic**, which is rare and valuable here.
 - **Over-specifying the path makes the suite brittle**: a legitimate improvement that reorders two calls fails every fixture.
 - **Some steps are genuinely optional**, and requiring them forbids a better route.
@@ -54,9 +54,9 @@ Four rules:
 
 **Assert properties, not sequences.** *Called `search_policies` before answering* is robust. *Called `get_order`, then `search_policies`, then `compute_credit`* breaks the first time someone improves the routing, and a suite that fails on improvements gets disabled.
 
-**Write the forbidden assertions first.** *Never retrieved another tenant's chunk. Never called `issue_credit` on a read-only path. Never acted after the taint ceiling fired.* These are the [invariants](/docs/patterns/evaluation/golden-set), they gate with no threshold, and they are the rare place where a probabilistic system offers a hard yes-or-no.
+**Write the forbidden assertions first.** *Never retrieved another tenant's chunk. Never called `issue_credit` on a read-only path. Never acted after the taint ceiling fired.* These are the [invariants](/book/patterns/evaluation/golden-set), they gate with no threshold, and they are the rare place where a probabilistic system offers a hard yes-or-no.
 
-**Ground the answer to the path.** The strongest required assertion is that the output's claims trace to something the run actually retrieved or computed, which is [grounding](/docs/patterns/retrieval/grounded-citations) expressed as a trajectory property, and it is what catches the opening scene.
+**Ground the answer to the path.** The strongest required assertion is that the output's claims trace to something the run actually retrieved or computed, which is [grounding](/book/patterns/retrieval/grounded-citations) expressed as a trajectory property, and it is what catches the opening scene.
 
 **Bound the shape, not just the outcome.** Turn count, cost, and repeated calls. A run that produced the right answer in eleven turns is a regression even though its output is correct, and nothing but a trajectory assertion will report it.
 
@@ -177,7 +177,7 @@ The isolation assertion, *this chunk ID never appeared in the retrieval trace*, 
 
 **Over-specification produces brittleness.** Every step you require is a route you have forbidden. Require the minimum that makes the answer trustworthy, and let the agent find better paths to it.
 
-**It needs a trace with arguments, not just tool names.** [The same instrumentation replay and incident scoping need](/docs/observability/replay-debugging), which is three requirements landing on one field, usually a sign it is not optional.
+**It needs a trace with arguments, not just tool names.** [The same instrumentation replay and incident scoping need](/book/observability/replay-debugging), which is three requirements landing on one field, usually a sign it is not optional.
 
 **Trajectories change legitimately.** A routing improvement or a new tool shifts every path, and a suite full of sequence assertions fails wholesale. Property assertions survive this; sequence assertions are why teams stop trusting the suite.
 
@@ -191,22 +191,22 @@ The isolation assertion, *this chunk ID never appeared in the retrieval trace*, 
 
 **As the only assertion.** Path without output means a run that did all the right things and said something wrong. Assert both.
 
-**When the trace is not reliable.** If tool calls are dispatched from several places and only some are instrumented, the assertions are checking a partial record: [one dispatcher](/docs/production/reference-architecture) is a prerequisite for this pattern being meaningful.
+**When the trace is not reliable.** If tool calls are dispatched from several places and only some are instrumented, the assertions are checking a partial record: [one dispatcher](/book/production/reference-architecture) is a prerequisite for this pattern being meaningful.
 
 <Aside type="note" title="This is where the deterministic assertions live">
 Almost everything about evaluating an agent is probabilistic: a rubric score, a faithfulness rate, a resolution percentage, all noisy, all needing distributions and flake budgets and careful thresholds.
 
 The trajectory is not. *Did chunk `c-4410` appear in the retrieval trace for this principal?* has a yes-or-no answer. *Was `issue_credit` called?* has a yes-or-no answer. *Did any class ④ tool run after the taint ceiling fired?* has a yes-or-no answer.
 
-Those are the assertions that can gate a build with no threshold and no discussion, and they are how every [invariant](/docs/capstone/the-brief) in this book becomes testable: cross-tenant isolation, argument scoping, the taint ceiling, the no-uncited-policy rule.
+Those are the assertions that can gate a build with no threshold and no discussion, and they are how every [invariant](/book/capstone/the-brief) in this book becomes testable: cross-tenant isolation, argument scoping, the taint ceiling, the no-uncited-policy rule.
 
 **Take every deterministic assertion this field offers you.** There are not many, they are all in the trajectory, and a suite built only on scores is a suite that cannot enforce anything.
 </Aside>
 
 ## Related
 
-- [Golden Set](/docs/patterns/evaluation/golden-set): the cases these assertions run against
-- [Trajectory Evals](/docs/evals/trajectory-evals): the chapter, including claim-level grounding across steps
-- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): the grounding assertion, as its own pattern
-- [What a Trace Must Answer](/docs/observability/what-a-trace-must-answer): the instrumentation this depends on
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): the isolation invariant these assertions enforce
+- [Golden Set](/book/patterns/evaluation/golden-set): the cases these assertions run against
+- [Trajectory Evals](/book/evals/trajectory-evals): the chapter, including claim-level grounding across steps
+- [Grounded Citations](/book/patterns/retrieval/grounded-citations): the grounding assertion, as its own pattern
+- [What a Trace Must Answer](/book/observability/what-a-trace-must-answer): the instrumentation this depends on
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): the isolation invariant these assertions enforce

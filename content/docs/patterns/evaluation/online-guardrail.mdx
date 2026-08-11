@@ -5,7 +5,7 @@ description: "A cheap check on the path to the customer: invariants block, class
 
 ## Problem
 
-Everything else in this group runs *around* production. [Golden sets](/docs/patterns/evaluation/golden-set) gate a release, [shadow runs](/docs/patterns/evaluation/shadow-run) compare versions, [canaries](/docs/patterns/evaluation/canary-eval) score a slice, [judges](/docs/patterns/evaluation/judge-with-rubric) sample and report.
+Everything else in this group runs *around* production. [Golden sets](/book/patterns/evaluation/golden-set) gate a release, [shadow runs](/book/patterns/evaluation/shadow-run) compare versions, [canaries](/book/patterns/evaluation/canary-eval) score a slice, [judges](/book/patterns/evaluation/judge-with-rubric) sample and report.
 
 None of them is between the agent and the customer at the moment a reply is sent. So the run that cites a policy version retired last Tuesday, or includes an order number belonging to a different account, or emits a markdown image pointing at a URL from a retrieved document, gets sent, and gets caught later, by a measurement, after it has already arrived.
 
@@ -13,12 +13,12 @@ The last step needs its own check. And the moment you build one, it starts absor
 
 ## Forces
 
-- **The last step is the last chance.** [Class ⑤ writes cannot be undone](/docs/tools/read-and-write-tools).
+- **The last step is the last chance.** [Class ⑤ writes cannot be undone](/book/tools/read-and-write-tools).
 - **It sits in the latency path** of every single response.
 - **Some checks are total**: set membership, equality against recorded state.
 - **Some are classifiers**, with a false-negative rate an adversary can search against.
 - **False positives destroy the control**: a guardrail that blocks correct output gets disabled within a week.
-- **Blocking spends human attention**, from [the same finite budget as approvals](/docs/human-in-the-loop/risk-tiers).
+- **Blocking spends human attention**, from [the same finite budget as approvals](/book/human-in-the-loop/risk-tiers).
 
 ## Solution
 
@@ -58,7 +58,7 @@ Four rules:
 
 **A block is an escalation, not an error.** The response goes to a human with the failed assertion attached, and the customer sees nothing. A guardrail that returns a generic failure has converted a caught mistake into a visible one.
 
-**Tier 2 never blocks.** It routes to review, samples for measurement, and feeds [the quality alert](/docs/production/operating-manual). The moment a classifier blocks, its false-positive rate becomes a product outage and its false-negative rate becomes a security claim you cannot support.
+**Tier 2 never blocks.** It routes to review, samples for measurement, and feeds [the quality alert](/book/production/operating-manual). The moment a classifier blocks, its false-positive rate becomes a product outage and its false-negative rate becomes a security claim you cannot support.
 
 **Alert on the block rate itself.** A guardrail firing on 15% of responses has doubled the support queue and is probably mis-tuned. A guardrail firing on 0% has possibly stopped working. Both are worth knowing, and neither shows up in an error rate.
 
@@ -148,11 +148,11 @@ def guard(reply: Reply, ctx) -> tuple[str, list[str]]:
 </Tab>
 </Tabs>
 
-Every tier-1 check reads something the agent could not influence: `retrievedIds` was written by the retriever, `scratchpad` only accepts [tool-written values](/docs/patterns/context/structured-scratchpad), `ticket.contact` came from the record. That is what makes them assertions rather than opinions, and it is why they are safe to block on.
+Every tier-1 check reads something the agent could not influence: `retrievedIds` was written by the retriever, `scratchpad` only accepts [tool-written values](/book/patterns/context/structured-scratchpad), `ticket.contact` came from the record. That is what makes them assertions rather than opinions, and it is why they are safe to block on.
 
 ## Trade-offs
 
-**Latency on every response.** Tier 1 is microseconds: string extraction and set lookups. Tier 2 is milliseconds to seconds, which is why anything expensive [samples rather than gates](/docs/patterns/retrieval/grounded-citations).
+**Latency on every response.** Tier 1 is microseconds: string extraction and set lookups. Tier 2 is milliseconds to seconds, which is why anything expensive [samples rather than gates](/book/patterns/retrieval/grounded-citations).
 
 **False positives erode the control faster than false negatives.** A guardrail firing on correct output teaches operators to click through, and then it is worse than nothing because everyone believes it works. Tune toward under-flagging, measure the false-positive rate deliberately, and treat a rising one as an incident.
 
@@ -162,16 +162,16 @@ Every tier-1 check reads something the agent could not influence: `retrievedIds`
 
 ## When not to use it
 
-**As an injection defense.** The misuse this pattern must warn against. An injected instruction produces a well-formed, in-policy action: `issue_credit(4471, 250000)` is not a harmful *output*, so a check on the reply text never sees it. [Capability constraints](/docs/patterns/security/tool-permission-boundary) stop it.
+**As an injection defense.** The misuse this pattern must warn against. An injected instruction produces a well-formed, in-policy action: `issue_credit(4471, 250000)` is not a harmful *output*, so a check on the reply text never sees it. [Capability constraints](/book/patterns/security/tool-permission-boundary) stop it.
 
 **When the output is not customer-facing.** An internal draft a human will edit already has a reviewer. A gate in front of a human is friction without a boundary.
 
 **When the assertions are unavailable.** Without recorded chunk IDs and a typed scratchpad, tier 1 has nothing trustworthy to check against, and you are left with classifiers alone, which is a flagging system and should be described as one.
 
-**As a substitute for evals.** A guardrail is a runtime check on one response. It cannot tell you whether quality is drifting, and a team watching block rates instead of [sampled scores](/docs/evals/online-evals) is measuring its filter rather than its product.
+**As a substitute for evals.** A guardrail is a runtime check on one response. It cannot tell you whether quality is drifting, and a team watching block rates instead of [sampled scores](/book/evals/online-evals) is measuring its filter rather than its product.
 
 <Aside type="caution" title="Guardrail, invariant, and eval are three different things">
-The word does most of the damage. "Guardrail" suggests something that keeps you on the road; in practice this is a check with a miss rate, at the last possible moment, on the output of a system whose failures are [confident and well-formed](/docs/reliability/error-taxonomy).
+The word does most of the damage. "Guardrail" suggests something that keeps you on the road; in practice this is a check with a miss rate, at the last possible moment, on the output of a system whose failures are [confident and well-formed](/book/reliability/error-taxonomy).
 
 The distinctions worth holding, because every one of them gets blurred in practice:
 
@@ -181,13 +181,13 @@ A **guardrail** is a check that catches some mistakes on the way out. Deploy it.
 
 An **eval** measures quality over a population, offline or sampled. It tells you whether the system is getting better. A guardrail tells you nothing about that.
 
-And [a prompt instruction is none of the three](/docs/first-agent/the-problem).
+And [a prompt instruction is none of the three](/book/first-agent/the-problem).
 </Aside>
 
 ## Related
 
-- [Output Guardrail](/docs/patterns/security/output-guardrail): the same mechanism catalogued from the security side
-- [Grounded Citations](/docs/patterns/retrieval/grounded-citations): the three-layer version of the grounding checks in tier 1
-- [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion): the same deterministic assertions, applied in CI rather than at delivery
-- [Online Evals](/docs/evals/online-evals): why a guardrail is not an eval, and what to measure instead
-- [Partial Result Return](/docs/patterns/failure/partial-result-return): the `coverage` field tier 1 gates on
+- [Output Guardrail](/book/patterns/security/output-guardrail): the same mechanism catalogued from the security side
+- [Grounded Citations](/book/patterns/retrieval/grounded-citations): the three-layer version of the grounding checks in tier 1
+- [Trajectory Assertion](/book/patterns/evaluation/trajectory-assertion): the same deterministic assertions, applied in CI rather than at delivery
+- [Online Evals](/book/evals/online-evals): why a guardrail is not an eval, and what to measure instead
+- [Partial Result Return](/book/patterns/failure/partial-result-return): the `coverage` field tier 1 gates on

@@ -7,7 +7,7 @@ description: "The reason/act/observe cycle, and where it goes wrong."
 
 Some tasks cannot be planned. *"The pallet arrived crushed, three units unusable, order 4921"* requires finding out whether the order exists, what shipped, which damage policy applies, and what the credit works out to, and the second question depends on the first answer.
 
-A [fixed plan](/docs/patterns/control/plan-then-execute) written before any of that is known is a plan full of guesses. A single model call with no tools cannot look anything up.
+A [fixed plan](/book/patterns/control/plan-then-execute) written before any of that is known is a plan full of guesses. A single model call with no tools cannot look anything up.
 
 What is needed is a cycle: the model states what it is trying to establish, takes an action, reads the result, and decides again with that result in hand. That is **ReAct**, reason, act, observe, introduced by Yao et al. in 2022 and the shape underneath nearly every agent framework since.
 
@@ -17,7 +17,7 @@ It is also the shape that produces most agent failures in production, and this e
 
 - **Adaptivity is the whole value.** The next step is genuinely unknowable until the last observation.
 - **The loop has no natural stopping condition.** Nothing about "read a result and decide" says when to be finished.
-- **Cost grows superlinearly**: the transcript is re-sent every turn, so [input tokens grow roughly with the square of turn count](/docs/production/cost-engineering).
+- **Cost grows superlinearly**: the transcript is re-sent every turn, so [input tokens grow roughly with the square of turn count](/book/production/cost-engineering).
 - **Observations are attacker-influenced** and they are the input to the next control-flow decision.
 - **The reasoning text is not a plan**, it is a post-hoc-looking justification produced in the same breath as the action.
 - **A single wrong observation propagates**, because everything after it reasons from it.
@@ -57,13 +57,13 @@ The cycle itself is four lines. What makes it survivable in production is everyt
 
 Four rules:
 
-**Every exit path is defined, including the ugly ones.** Finished, out of turns, out of budget, out of time, not making progress, going in circles. Each produces a *specific* outcome: an answer, a partial result, or an [escalation with what it has](/docs/first-agent/the-problem). "It should converge" is not a termination condition, and missing termination is a named failure mode in the empirical taxonomy.
+**Every exit path is defined, including the ugly ones.** Finished, out of turns, out of budget, out of time, not making progress, going in circles. Each produces a *specific* outcome: an answer, a partial result, or an [escalation with what it has](/book/first-agent/the-problem). "It should converge" is not a termination condition, and missing termination is a named failure mode in the empirical taxonomy.
 
-**Detect no-progress, not just turn count.** An agent can burn its whole budget productively-looking: searching, re-reading, rephrasing. Track whether each turn added a *new* fact to the [scratchpad](/docs/patterns/context/structured-scratchpad); three turns without one means stop.
+**Detect no-progress, not just turn count.** An agent can burn its whole budget productively-looking: searching, re-reading, rephrasing. Track whether each turn added a *new* fact to the [scratchpad](/book/patterns/context/structured-scratchpad); three turns without one means stop.
 
-**Detect repetition explicitly.** The same tool with the same arguments twice is a loop, and the model will not notice because each turn looks locally reasonable. Hash `(tool, canonical(args))` and refuse the second call with [an instruction rather than an error](/docs/tools/errors-as-instructions).
+**Detect repetition explicitly.** The same tool with the same arguments twice is a loop, and the model will not notice because each turn looks locally reasonable. Hash `(tool, canonical(args))` and refuse the second call with [an instruction rather than an error](/book/tools/errors-as-instructions).
 
-**Keep the observation out of the control-flow decision where you can.** The [taint ceiling](/docs/security/prompt-injection) applies per turn: a run that has read external content cannot reach a high-class tool, whatever the next reasoning step concludes. This is what stops a retrieved instruction from steering the loop.
+**Keep the observation out of the control-flow decision where you can.** The [taint ceiling](/book/security/prompt-injection) applies per turn: a run that has read external content cannot reach a high-class tool, whatever the next reasoning step concludes. This is what stops a retrieved instruction from steering the loop.
 
 ## Code
 
@@ -160,21 +160,21 @@ async def react(state: RunState, ctx) -> Outcome:
 
 ## Trade-offs
 
-**Cost is superlinear in turns and hard to predict.** A twenty-turn run is not twenty times a one-turn run; on the input side it is closer to two hundred. This makes [p99 run cost](/docs/observability/cost-accounting) the number to watch, and the turn cap an economic control as much as a safety one.
+**Cost is superlinear in turns and hard to predict.** A twenty-turn run is not twenty times a one-turn run; on the input side it is closer to two hundred. This makes [p99 run cost](/book/observability/cost-accounting) the number to watch, and the turn cap an economic control as much as a safety one.
 
-**Reasoning text is not a commitment.** The model saying *"I will check the policy, then compute the credit"* is not a plan. It may do neither. Do not build approval flows or audit records on the assumption that stated intent predicts the next action; use [an actual plan object](/docs/patterns/control/plan-then-execute) if you need that.
+**Reasoning text is not a commitment.** The model saying *"I will check the policy, then compute the credit"* is not a plan. It may do neither. Do not build approval flows or audit records on the assumption that stated intent predicts the next action; use [an actual plan object](/book/patterns/control/plan-then-execute) if you need that.
 
-**One bad observation poisons everything after it.** The loop's strength, each decision informed by the last result, is also how a wrong tool result becomes a confidently wrong conclusion. The defenses are [re-reading rather than recalling](/docs/context/context-poisoning) and re-deriving values server-side, not better prompting.
+**One bad observation poisons everything after it.** The loop's strength, each decision informed by the last result, is also how a wrong tool result becomes a confidently wrong conclusion. The defenses are [re-reading rather than recalling](/book/context/context-poisoning) and re-deriving values server-side, not better prompting.
 
 **Latency is a serial chain.** Every turn is a full round trip, and nothing can be parallelized because step *n+1* is unknown until step *n* returns.
 
 ## When not to use it
 
-**When the steps are knowable.** [The determinism test](/docs/workflows/the-determinism-test): if you can enumerate the sequence, write it. A loop that does the same five things every time is a workflow paying a model to rediscover it.
+**When the steps are knowable.** [The determinism test](/book/workflows/the-determinism-test): if you can enumerate the sequence, write it. A loop that does the same five things every time is a workflow paying a model to rediscover it.
 
-**When the plan needs to be inspected or approved.** A reviewer cannot approve a loop. [Plan-then-execute](/docs/patterns/control/plan-then-execute) produces the artifact.
+**When the plan needs to be inspected or approved.** A reviewer cannot approve a loop. [Plan-then-execute](/book/patterns/control/plan-then-execute) produces the artifact.
 
-**On high-authority paths reading untrusted content.** The loop's control flow is the thing injection targets. Either fix the plan first, or accept the loop and make sure the [capability ceiling](/docs/patterns/security/tool-permission-boundary) is doing the work, never rely on the reasoning to resist.
+**On high-authority paths reading untrusted content.** The loop's control flow is the thing injection targets. Either fix the plan first, or accept the loop and make sure the [capability ceiling](/book/patterns/security/tool-permission-boundary) is doing the work, never rely on the reasoning to resist.
 
 **When latency budgets are tight.** Six serial round trips is not a sub-second experience. Route to a shorter path, or pre-load and answer in one call.
 
@@ -188,11 +188,11 @@ None of those are fixed by a better prompt, and all four are prevented by counte
 
 ## Related
 
-- [Plan Then Execute](/docs/patterns/control/plan-then-execute): the alternative when the sequence can be fixed in advance
-- [Bounded Autonomy](/docs/patterns/control/bounded-autonomy): the five caps, treated as their own pattern
-- [Router](/docs/patterns/control/router): shortening the loop by specializing the path before it starts
-- [Reflection](/docs/patterns/control/reflection): adding a self-critique turn, and what it does and does not buy
-- [The Loop by Hand](/docs/first-agent/the-loop-by-hand): building this from scratch, and the six things it cannot survive
+- [Plan Then Execute](/book/patterns/control/plan-then-execute): the alternative when the sequence can be fixed in advance
+- [Bounded Autonomy](/book/patterns/control/bounded-autonomy): the five caps, treated as their own pattern
+- [Router](/book/patterns/control/router): shortening the loop by specializing the path before it starts
+- [Reflection](/book/patterns/control/reflection): adding a self-critique turn, and what it does and does not buy
+- [The Loop by Hand](/book/first-agent/the-loop-by-hand): building this from scratch, and the six things it cannot survive
 
 ## References
 

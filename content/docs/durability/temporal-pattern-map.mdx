@@ -5,7 +5,7 @@ description: "A direct cross-reference from the Temporal design-pattern catalog 
 
 The [Temporal design-pattern catalog](https://temporal-sa.github.io/temporal-design-patterns/) holds around thirty-five patterns in twelve categories, curated by people who deploy this for a living, with a runnable example for each. It never mentions agents, and nearly every hard problem in Part XI already has a named solution in it.
 
-The exhaustive translation lives in [Appendix B](/docs/appendix/temporal-pattern-index): every pattern, the agent problem it solves, and where this book uses it. Look things up there.
+The exhaustive translation lives in [Appendix B](/book/appendix/temporal-pattern-index): every pattern, the agent problem it solves, and where this book uses it. Look things up there.
 
 **This chapter is the other direction.** Part XI has been eight chapters of individual mechanisms; this is them assembled into one system, in the order you would actually adopt them, and with the ones you probably will not need named as such.
 
@@ -42,7 +42,7 @@ The exhaustive translation lives in [Appendix B](/docs/appendix/temporal-pattern
 
 </Figure>
 
-Nine mechanisms, none of them invented here. That is the argument Part XI has been making since [the first chapter](/docs/durability/not-a-background-job): the hard parts of running an agent are not new problems, they are old problems arriving in a new costume.
+Nine mechanisms, none of them invented here. That is the argument Part XI has been making since [the first chapter](/book/durability/not-a-background-job): the hard parts of running an agent are not new problems, they are old problems arriving in a new costume.
 
 ## The order you actually adopt them
 
@@ -50,15 +50,15 @@ Nobody adopts nine patterns at once, and the sequence is not arbitrary. Each one
 
 | # | Symptom | Pattern | Chapter |
 | --- | --- | --- | --- |
-| 1 | More than one event can arrive per case | **Entity workflow + signal-with-start** | [Not a Background Job](/docs/durability/not-a-background-job) |
-| 2 | A tool has a side effect | **Tool as activity**, with a derived idempotency key | [The Agent as a Workflow](/docs/durability/agent-as-workflow) |
-| 3 | Two side effects can both happen, and the second can fail | **Saga with compensations** | [When Tools Have Side Effects](/docs/durability/compensation) |
-| 4 | A person must decide before something irreversible | **Approval gate**: update + durable timer | [Signals and Children](/docs/durable-execution/signals-and-children) |
-| 5 | Cases stay open long enough that history grows | **Continue-as-new**, with a reference and a cursor | [Long-Lived Agents](/docs/durability/long-lived-agents) |
-| 6 | You are getting 429s under normal load | **Downstream rate limiting**, on the task queue | [Scale and QoS](/docs/durability/scale-and-qos) |
-| 7 | A second tenant exists | **Fairness keys** | [Scale and QoS](/docs/durability/scale-and-qos) |
-| 8 | Someone says it feels slow to start | **Early return + eager start** | [Paying for Durability](/docs/durability/latency) |
-| 9 | The graph already exists and you don't want to rewrite it | **LangGraph plugin**, `execute_in` per node | [LangGraph on Temporal](/docs/durability/langgraph-on-temporal) |
+| 1 | More than one event can arrive per case | **Entity workflow + signal-with-start** | [Not a Background Job](/book/durability/not-a-background-job) |
+| 2 | A tool has a side effect | **Tool as activity**, with a derived idempotency key | [The Agent as a Workflow](/book/durability/agent-as-workflow) |
+| 3 | Two side effects can both happen, and the second can fail | **Saga with compensations** | [When Tools Have Side Effects](/book/durability/compensation) |
+| 4 | A person must decide before something irreversible | **Approval gate**: update + durable timer | [Signals and Children](/book/durable-execution/signals-and-children) |
+| 5 | Cases stay open long enough that history grows | **Continue-as-new**, with a reference and a cursor | [Long-Lived Agents](/book/durability/long-lived-agents) |
+| 6 | You are getting 429s under normal load | **Downstream rate limiting**, on the task queue | [Scale and QoS](/book/durability/scale-and-qos) |
+| 7 | A second tenant exists | **Fairness keys** | [Scale and QoS](/book/durability/scale-and-qos) |
+| 8 | Someone says it feels slow to start | **Early return + eager start** | [Paying for Durability](/book/durability/latency) |
+| 9 | The graph already exists and you don't want to rewrite it | **LangGraph plugin**, `execute_in` per node | [LangGraph on Temporal](/book/durability/langgraph-on-temporal) |
 
 Read the symptom column on its own. Every entry is something you can observe rather than something you can anticipate, which is the point. **These are responses, not architecture.** A team that adopts all nine before shipping has bought a great deal of machinery for problems it has not yet demonstrated.
 
@@ -68,27 +68,27 @@ The first three are close to mandatory the moment money moves. Four through seve
 
 Of the catalog's thirty-five, a typical production agent uses six to eight. The rest are not filler. They are answers to real problems that most systems never have. Four are adopted prematurely often enough to name:
 
-**MapReduce tree.** For a backfill too wide for one parent workflow. If your fan-out is thousands rather than millions, a parent with [batched children](/docs/durability/scale-and-qos) is simpler and sufficient.
+**MapReduce tree.** For a backfill too wide for one parent workflow. If your fan-out is thousands rather than millions, a parent with [batched children](/book/durability/scale-and-qos) is simpler and sufficient.
 
-**Sliding window.** Keeping N agents continuously in flight rather than in waves. Real, and unnecessary once a [rate-limited task queue](/docs/durability/scale-and-qos) is doing the pacing. The queue already smooths the waves.
+**Sliding window.** Keeping N agents continuously in flight rather than in waves. Real, and unnecessary once a [rate-limited task queue](/book/durability/scale-and-qos) is doing the pacing. The queue already smooths the waves.
 
 **Worker-specific task queues.** Pinning work to the worker holding a cache, a GPU, or a file. Correct when you have that affinity, and an unnecessary coupling when you do not.
 
-**Race / pick-first.** Query two providers and take the faster answer. Attractive, and it doubles your token spend on every call to save latency you measured at [1–2% of the turn](/docs/durability/latency).
+**Race / pick-first.** Query two providers and take the faster answer. Attractive, and it doubles your token spend on every call to save latency you measured at [1–2% of the turn](/book/durability/latency).
 
 The general test is the one this book keeps returning to: **a pattern you cannot name the triggering symptom for is a pattern you are adopting on speculation.**
 
 ## Where the catalog stops
 
-[The appendix names three gaps](/docs/appendix/temporal-pattern-index): nondeterminism sitting inside the unit of work, correctness that is not binary, and cost as a first-class failure mode. Part XI turned up four more, and they are the ones that only appear once you have actually built the thing.
+[The appendix names three gaps](/book/appendix/temporal-pattern-index): nondeterminism sitting inside the unit of work, correctness that is not binary, and cost as a first-class failure mode. Part XI turned up four more, and they are the ones that only appear once you have actually built the thing.
 
-**The compensation set is dynamic.** Classic sagas attach compensations to a designed sequence. The model chose an agent's sequence at runtime, so compensations have to live on [tools in the catalogue](/docs/durability/compensation) and the stack has to be built from what actually ran. No pattern in the catalog assumes its own step list is unknown at design time.
+**The compensation set is dynamic.** Classic sagas attach compensations to a designed sequence. The model chose an agent's sequence at runtime, so compensations have to live on [tools in the catalogue](/book/durability/compensation) and the stack has to be built from what actually ran. No pattern in the catalog assumes its own step list is unknown at design time.
 
-**The bottleneck is in someone else's account.** Every scaling pattern in the catalog assumes that adding capacity increases throughput. For an agent, [past the provider quota it decreases it](/docs/durability/scale-and-qos). That inverts the usual advice rather than merely qualifying it.
+**The bottleneck is in someone else's account.** Every scaling pattern in the catalog assumes that adding capacity increases throughput. For an agent, [past the provider quota it decreases it](/book/durability/scale-and-qos). That inverts the usual advice rather than merely qualifying it.
 
-**The audit trail is also a copy of your payloads.** The event history is the observability win of the whole approach, and it is [simultaneously a durable record of every argument and result you passed through it](/docs/durability/agent-as-workflow). That is a compliance surface the catalog has no reason to discuss and you cannot avoid.
+**The audit trail is also a copy of your payloads.** The event history is the observability win of the whole approach, and it is [simultaneously a durable record of every argument and result you passed through it](/book/durability/agent-as-workflow). That is a compliance surface the catalog has no reason to discuss and you cannot avoid.
 
-**Steerability conflicts with optimization.** [Local activities block signal delivery while they run](/docs/durability/latency), which is a fine trade for a batch pipeline and disqualifying for an agent a person is talking to. Several catalog patterns carry this shape: correct in general, wrong for the specific property agents need most.
+**Steerability conflicts with optimization.** [Local activities block signal delivery while they run](/book/durability/latency), which is a fine trade for a batch pipeline and disqualifying for an agent a person is talking to. Several catalog patterns carry this shape: correct in general, wrong for the specific property agents need most.
 
 ## Part XI, in one page
 
@@ -101,11 +101,11 @@ The whole part reduces to four claims:
 
 That fourth one is why Part X spent five chapters with no AI in sight, and why this chapter is a map rather than an invention.
 
-The catalog carries this part's shapes with the code attached: [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow) and [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory) for the long-lived run, [Tool as Activity](/docs/patterns/durability/tool-as-activity) for the placement decision above, [Saga for Tools](/docs/patterns/durability/saga-for-tools) for compensation, and [Approval Gate](/docs/patterns/durability/approval-gate), [Updatable SLA Timer](/docs/patterns/durability/sla-timer) and [Signal With Start](/docs/patterns/durability/signal-with-start) for the three things a run waits on.
+The catalog carries this part's shapes with the code attached: [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow) and [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory) for the long-lived run, [Tool as Activity](/book/patterns/durability/tool-as-activity) for the placement decision above, [Saga for Tools](/book/patterns/durability/saga-for-tools) for compensation, and [Approval Gate](/book/patterns/durability/approval-gate), [Updatable SLA Timer](/book/patterns/durability/sla-timer) and [Signal With Start](/book/patterns/durability/signal-with-start) for the three things a run waits on.
 
 ---
 
-Part XI ends here. Next: [Risk Tiers](/docs/human-in-the-loop/risk-tiers), Part XII, and classifying actions by reversibility and blast radius so the approval policy writes itself.
+Part XI ends here. Next: [Risk Tiers](/book/human-in-the-loop/risk-tiers), Part XII, and classifying actions by reversibility and blast radius so the approval policy writes itself.
 
 ## Takeaways
 

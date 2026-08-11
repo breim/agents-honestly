@@ -38,16 +38,16 @@ Four misreadings, in rough order of how expensive they are.
 
 **"MCP makes my agent better at using tools."** It does not. The model receives a name, a description, and a JSON Schema, identical whether that tool arrived over a protocol or was defined inline in your source file. The protocol terminates at your client; nothing about it reaches the model. **Every chapter of Part VIII still applies in full, and MCP performs none of it for you.** A badly described tool is badly described over any transport.
 
-**"MCP is a security boundary."** It is a transport with an authentication story, which is a different thing from an authorization model for your business rules. [The requester rule](/docs/tools/tools-are-apis-for-models), the amount ceilings, [the read/write split](/docs/tools/read-and-write-tools) are all still yours, and some of them now sit on the far side of a network boundary operated by someone else.
+**"MCP is a security boundary."** It is a transport with an authentication story, which is a different thing from an authorization model for your business rules. [The requester rule](/book/tools/tools-are-apis-for-models), the amount ceilings, [the read/write split](/book/tools/read-and-write-tools) are all still yours, and some of them now sit on the far side of a network boundary operated by someone else.
 
-**"Adding servers adds capability."** [The previous chapter measured what it actually adds](/docs/tools/tool-discovery): 200–500 tokens per definition, and selection accuracy degrading past thirty to fifty tools. Capability arrives, and so does a bill that is invisible until you measure selection on your own ticket set.
+**"Adding servers adds capability."** [The previous chapter measured what it actually adds](/book/tools/tool-discovery): 200–500 tokens per definition, and selection accuracy degrading past thirty to fifty tools. Capability arrives, and so does a bill that is invisible until you measure selection on your own ticket set.
 
-**"MCP replaces my API."** It is a *sibling* of your API for a different consumer, which is [the thesis of Part VIII](/docs/tools/tools-are-apis-for-models) restated at the protocol layer. An MCP server that wraps your REST endpoints one-to-one is the same anti-pattern in a new wrapper, and the ecosystem is full of them because generating one is a single command.
+**"MCP replaces my API."** It is a *sibling* of your API for a different consumer, which is [the thesis of Part VIII](/book/tools/tools-are-apis-for-models) restated at the protocol layer. An MCP server that wraps your REST endpoints one-to-one is the same anti-pattern in a new wrapper, and the ecosystem is full of them because generating one is a single command.
 
 <Aside type="note" title="The useful test">
 Ask what breaks if you delete the protocol and paste the tool definitions into your own catalogue.
 
-If the answer is "nothing, I'd just be maintaining an integration someone else currently maintains," that is MCP working exactly as designed, and it is a good trade. If the answer is "my agent would get worse at choosing tools" or "authorization would break," something is misattributed, and the [third chapter of this part](/docs/mcp/when-a-function-is-better) is about what to do instead.
+If the answer is "nothing, I'd just be maintaining an integration someone else currently maintains," that is MCP working exactly as designed, and it is a good trade. If the answer is "my agent would get worse at choosing tools" or "authorization would break," something is misattributed, and the [third chapter of this part](/book/mcp/when-a-function-is-better) is about what to do instead.
 </Aside>
 
 ## What is actually in the protocol
@@ -65,7 +65,7 @@ Three things a server offers, and three it can ask of the client. The split is w
 
 When someone says "we added MCP," they almost always mean tools. That is worth noticing, because **resources and prompts are the two primitives that make MCP something other than a remote function call.** A server that ships a well-designed extraction template, or exposes its documents as addressable read-only context the client can select from, is doing something your HTTP API genuinely cannot. Almost nobody does it.
 
-The bottom three invert the usual direction, and 2026-07-28 changed both halves of how. There is no initialization handshake to declare them in any more. Every request carries the client's capabilities inline in `_meta`, and a server needing one the client did not offer gets `MissingRequiredClientCapability` rather than a degraded answer. Nor does the server call the client. [Multi round-trip requests](/docs/mcp/servers-clients-transports) replaced server-initiated `sampling/createMessage` and `roots/list` with an `input_required` result that the client satisfies by **retrying the original request** with the answer attached.
+The bottom three invert the usual direction, and 2026-07-28 changed both halves of how. There is no initialization handshake to declare them in any more. Every request carries the client's capabilities inline in `_meta`, and a server needing one the client did not offer gets `MissingRequiredClientCapability` rather than a degraded answer. Nor does the server call the client. [Multi round-trip requests](/book/mcp/servers-clients-transports) replaced server-initiated `sampling/createMessage` and `roots/list` with an `input_required` result that the client satisfies by **retrying the original request** with the answer attached.
 
 So "does this server support sampling" was always the wrong question, since it is a fact about your client. And now there is a further one: **Roots and Sampling are deprecated**, on a twelve-month window, in favour of passing directories as ordinary tool parameters and calling your provider's API directly. Build on them today and you are building on a scheduled removal.
 
@@ -73,7 +73,7 @@ Two of the three deserve a flag beyond that:
 
 **Sampling** lets the server ask your client to run a model call. The design intent is sensible. A server author can add intelligence without holding API keys or paying for inference. The consequence is that a third party's server can cause **your** billing account to generate tokens, on a prompt you did not write. That is a trust decision, not a configuration one.
 
-**Elicitation** lets the server request input from the user mid-call: a confirmation, a missing parameter. It is the protocol growing its own version of [the approval gate](/docs/human-in-the-loop/approval-gates), and the same caution applies: a confirmation prompt authored by a third party is text you are rendering to your user with your product's authority.
+**Elicitation** lets the server request input from the user mid-call: a confirmation, a missing parameter. It is the protocol growing its own version of [the approval gate](/book/human-in-the-loop/approval-gates), and the same caution applies: a confirmation prompt authored by a third party is text you are rendering to your user with your product's authority.
 
 ## The 2026 spec got more boring, on purpose
 
@@ -87,25 +87,25 @@ The current revision, **2026-07-28**, is worth reading as a direction rather tha
 
 Every one of those makes MCP look **more like ordinary HTTP infrastructure and less like a bespoke session protocol.** That is the maturation signal, and it is good news operationally: your existing load balancer, cache, WAF, and rate limiter start working on it without special cases.
 
-It also quietly blesses a pattern this book already argued for. "State lives in an explicit, server-issued handle passed as an ordinary argument" is [the parameterized-tool discipline](/docs/tools/schema-and-granularity). The model carries an identifier it was given rather than a program it composed. The protocol converged on it from the other side.
+It also quietly blesses a pattern this book already argued for. "State lives in an explicit, server-issued handle passed as an ordinary argument" is [the parameterized-tool discipline](/book/tools/schema-and-granularity). The model carries an identifier it was given rather than a program it composed. The protocol converged on it from the other side.
 
 <Aside type="caution" title="Version, then verify">
 MCP has revised repeatedly and meaningfully: the original HTTP+SSE transport was deprecated in 2025-03-26, OAuth 2.1 became the authorization basis in 2025-06-18, and sessions were removed in 2026-07-28.
 
-Which means a server, a client, and a tutorial can each target a different revision and all be "MCP." Before debugging behaviour, check which revision each side implements. The [next chapter](/docs/mcp/servers-clients-transports) covers the transports and the auth story, where most of the skew actually bites.
+Which means a server, a client, and a tutorial can each target a different revision and all be "MCP." Before debugging behaviour, check which revision each side implements. The [next chapter](/book/mcp/servers-clients-transports) covers the transports and the auth story, where most of the skew actually bites.
 </Aside>
 
 ## What it costs you
 
 The honest ledger, since the benefits are well advertised:
 
-**A network boundary inside your agent loop.** Every MCP tool call is a hop with its own latency, timeout, and failure modes, inside a loop that [already costs two requests per tool use](/docs/first-agent/first-tools). Your `issue_credit` equivalent now has a second way to return "unknown," which is [the idempotency problem](/docs/tools/idempotency) arriving through a new door.
+**A network boundary inside your agent loop.** Every MCP tool call is a hop with its own latency, timeout, and failure modes, inside a loop that [already costs two requests per tool use](/book/first-agent/first-tools). Your `issue_credit` equivalent now has a second way to return "unknown," which is [the idempotency problem](/book/tools/idempotency) arriving through a new door.
 
 **A dependency that changes without your deploy.** A server can add a tool, reword a description, or alter behaviour on its own schedule. Your selection accuracy is downstream of text you do not control and did not review.
 
-**Descriptions as an attack surface.** In a multi-server catalogue, tool names and descriptions are how the model chooses, and a server that names and describes a tool aggressively can win calls that belong to another server. [Prompt injection](/docs/security/prompt-injection) covers the mechanics; the point here is that installing a server is trusting its prose, not just its code.
+**Descriptions as an attack surface.** In a multi-server catalogue, tool names and descriptions are how the model chooses, and a server that names and describes a tool aggressively can win calls that belong to another server. [Prompt injection](/book/security/prompt-injection) covers the mechanics; the point here is that installing a server is trusting its prose, not just its code.
 
-**Blast radius is the whole declared catalogue.** A server you installed can define any tool it likes, and [deferring a tool hides it from the model rather than from your threat model](/docs/tools/tool-discovery). Allowlists are the control; the protocol is not one.
+**Blast radius is the whole declared catalogue.** A server you installed can define any tool it likes, and [deferring a tool hides it from the model rather than from your threat model](/book/tools/tool-discovery). Allowlists are the control; the protocol is not one.
 
 ## Atlas, concretely
 
@@ -113,7 +113,7 @@ Meridian ends up on both sides of the protocol, and the asymmetry is the useful 
 
 **Consuming:** the freight carrier's tracking server. Meridian would never have written that integration well. It is the carrier's domain, the carrier's schema, and the carrier's release cadence. This is MCP doing exactly the job in the diagram.
 
-**Publishing:** Meridian exposes `crm_account_risk_profile` and `erp_list_unpaid_invoices` as a server, so the sales team's own agent can reach them. That agent is built by a different team, on a different stack, and the platform team will never see it. That is the framing [the core path](/docs/core-path) gave this part: *you need to expose your tools to agents you did not write.* The tool-design work from Part VIII is what makes that server worth consuming; the protocol is only the delivery.
+**Publishing:** Meridian exposes `crm_account_risk_profile` and `erp_list_unpaid_invoices` as a server, so the sales team's own agent can reach them. That agent is built by a different team, on a different stack, and the platform team will never see it. That is the framing [the core path](/book/core-path) gave this part: *you need to expose your tools to agents you did not write.* The tool-design work from Part VIII is what makes that server worth consuming; the protocol is only the delivery.
 
 **Not using it:** Atlas's own seven tools stay in-process function calls. Putting a protocol boundary between an agent and its own database adds a hop, a serialization, and a failure mode, and buys nothing. That is a whole chapter, two chapters from now.
 
@@ -124,7 +124,7 @@ Meridian ends up on both sides of the protocol, and the asymmetry is the useful 
 
 ---
 
-Next: [Servers, Clients, Transports](/docs/mcp/servers-clients-transports), building one, consuming one, and the auth story in between.
+Next: [Servers, Clients, Transports](/book/mcp/servers-clients-transports), building one, consuming one, and the auth story in between.
 
 ## Takeaways
 

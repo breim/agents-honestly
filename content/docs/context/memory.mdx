@@ -38,7 +38,7 @@ This chapter is mostly about telling them apart, because once you have, each is 
 
 **Durable facts** are small, specific truths about an entity that outlive any conversation: this account is net-60, this contact prefers email, this customer has an open dispute.
 
-**The knowledge base** is Meridian's policy corpus. It is not memory at all. It exists whether or not anyone ever talks to Atlas, and it is [Part IV's subject](/docs/retrieval/where-does-the-answer-live) rather than this chapter's.
+**The knowledge base** is Meridian's policy corpus. It is not memory at all. It exists whether or not anyone ever talks to Atlas, and it is [Part IV's subject](/book/retrieval/where-does-the-answer-live) rather than this chapter's.
 
 And the fourth category, the one worth naming because it absorbs a surprising amount of "memory" work: **things that are just your database.** Order history, ticket history, contract terms. These are facts the business already stores, with an owner, a schema, and a source of truth. Copying them into a memory store creates a second, worse copy that drifts. If the answer is in Postgres, the memory system is a `SELECT`.
 
@@ -58,7 +58,7 @@ There is a sharper way to say this: treating working state as a retrieval proble
 
 The default place agents keep working state is the transcript itself: everything the model concluded is in there, as prose, along with everything it retrieved and every tool result.
 
-That works until it doesn't, for two reasons already established. The transcript grows without bound, so it eventually gets [compacted](/docs/context/compaction) and your state is summarized away. And the transcript is [poisonable](/docs/context/context-poisoning): a wrong intermediate conclusion sits there as established fact for every subsequent step.
+That works until it doesn't, for two reasons already established. The transcript grows without bound, so it eventually gets [compacted](/book/context/compaction) and your state is summarized away. And the transcript is [poisonable](/book/context/context-poisoning): a wrong intermediate conclusion sits there as established fact for every subsequent step.
 
 The fix is to keep verified state in a typed object your code owns, and pass it forward explicitly:
 
@@ -70,7 +70,7 @@ The fix is to keep verified state in a typed object your code owns, and pass it 
      awaiting: "authority_check" }
 ```
 
-Three properties that the transcript version doesn't have: it is typed, so a malformed conclusion fails at the boundary rather than propagating; it is small, so it survives compaction; and it is *yours*, so the model can read it but cannot silently rewrite it. That is the [structured scratchpad](/docs/patterns/context/structured-scratchpad), and it is the single highest-value pattern in this part of the book.
+Three properties that the transcript version doesn't have: it is typed, so a malformed conclusion fails at the boundary rather than propagating; it is small, so it survives compaction; and it is *yours*, so the model can read it but cannot silently rewrite it. That is the [structured scratchpad](/book/patterns/context/structured-scratchpad), and it is the single highest-value pattern in this part of the book.
 
 ## Durable facts: writing is the hard part
 
@@ -150,7 +150,7 @@ The defenses are structural rather than clever: separate the three things, give 
 
 ---
 
-Next: [Compaction and Summarization](/docs/context/compaction), rewriting history so the agent can keep going, without losing the thing it needed.
+Next: [Compaction and Summarization](/book/context/compaction), rewriting history so the agent can keep going, without losing the thing it needed.
 
 ## Takeaways
 

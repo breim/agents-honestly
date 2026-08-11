@@ -31,7 +31,7 @@ CREATE INDEX ON policy_chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX ON policy_chunks (tier, region) WHERE superseded_at IS NULL;
 ```
 
-Read what that says. The vector is **a column**, alongside the version, the tier, and the supersession timestamp. `pipeline_ver` is there because of the [last chapter](/docs/retrieval/embeddings). And the query that uses it is a query:
+Read what that says. The vector is **a column**, alongside the version, the tier, and the supersession timestamp. `pipeline_ver` is there because of the [last chapter](/book/retrieval/embeddings). And the query that uses it is a query:
 
 ```sql
 SELECT id, document_id, version, content,
@@ -126,13 +126,13 @@ Retrieval that is called directly from agent code, in five places, with slightly
 
 ## Atlas, concretely
 
-Postgres, pgvector, HNSW, roughly 40,000 policy chunks. Filters: `superseded_at IS NULL` always, `tier` usually, `region` sometimes. Selectivity is mild, since the current-version filter removes maybe 30%, so post-filtering is fine, and `document_id` joins straight to the document metadata table that holds the citation the [acceptance spec](/docs/first-agent/the-problem) requires.
+Postgres, pgvector, HNSW, roughly 40,000 policy chunks. Filters: `superseded_at IS NULL` always, `tier` usually, `region` sometimes. Selectivity is mild, since the current-version filter removes maybe 30%, so post-filtering is fine, and `document_id` joins straight to the document metadata table that holds the citation the [acceptance spec](/book/first-agent/the-problem) requires.
 
-The part worth stealing: **the version filter is not optional and not a ranking signal.** It is a `WHERE` clause, enforced in the one function that does retrieval, exactly like tenancy. Meridian's corpus contains contradictory documents by design, which is why the [problem chapter](/docs/first-agent/the-problem) flagged it, and the resolution is structural, not semantic. Never ask an embedding to prefer the current version. Ask the database.
+The part worth stealing: **the version filter is not optional and not a ranking signal.** It is a `WHERE` clause, enforced in the one function that does retrieval, exactly like tenancy. Meridian's corpus contains contradictory documents by design, which is why the [problem chapter](/book/first-agent/the-problem) flagged it, and the resolution is structural, not semantic. Never ask an embedding to prefer the current version. Ask the database.
 
 ---
 
-Next: [Approximate Search, Honestly](/docs/retrieval/ann-indexes), covering HNSW, IVF, quantization, and the recall / latency / memory / build-time quadrilemma you are actually choosing between.
+Next: [Approximate Search, Honestly](/book/retrieval/ann-indexes), covering HNSW, IVF, quantization, and the recall / latency / memory / build-time quadrilemma you are actually choosing between.
 
 ## Takeaways
 

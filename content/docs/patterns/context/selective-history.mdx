@@ -7,7 +7,7 @@ description: "Retrieve the relevant past turns instead of replaying all of them.
 
 A long-running assistant has 240 turns of history with one customer. The current question is about a shipping address changed at turn 31.
 
-Every other approach to this is wrong in a different way. Sending all 240 turns is expensive and hits the window. [Compacting](/docs/patterns/context/context-compaction) or [summarizing](/docs/patterns/context/rolling-summary) will have compressed turn 31 into something like *"discussed logistics"* long ago, because at the time it was compressed nobody knew which turn would matter. Keeping the last N verbatim drops it entirely.
+Every other approach to this is wrong in a different way. Sending all 240 turns is expensive and hits the window. [Compacting](/book/patterns/context/context-compaction) or [summarizing](/book/patterns/context/rolling-summary) will have compressed turn 31 into something like *"discussed logistics"* long ago, because at the time it was compressed nobody knew which turn would matter. Keeping the last N verbatim drops it entirely.
 
 The common structure of those failures: **compression decides what to keep before knowing what will be asked.**
 
@@ -18,7 +18,7 @@ The common structure of those failures: **compression decides what to keep befor
 - **Old turns must remain exact.** A paraphrase of the address change is not the address change.
 - **Recency is genuinely privileged.** The last few turns are almost always relevant, and dropping them breaks coherence.
 - **Retrieval has a cost and a failure mode:** it can miss, and a miss looks like amnesia to the user.
-- **Retrieved turns land mid-context**, where [attention is weakest](/docs/foundations/context-window).
+- **Retrieved turns land mid-context**, where [attention is weakest](/book/foundations/context-window).
 
 ## Solution
 
@@ -53,7 +53,7 @@ Four rules:
 
 **Retrieve verbatim, and label the jump.** The point of this pattern is exactness: a paraphrase would be a summary, which is the thing being avoided. Mark retrieved turns explicitly (*"earlier in this conversation, at turn 31"*), because dropping a turn from 200 exchanges ago into the middle of the current context without a marker reads to the model as though it happened just now, and it will get the chronology wrong.
 
-**Put retrieved turns after the stable prefix and before the recent window.** They are the part that changes per request, so they must sit below the [cacheable region](/docs/patterns/context/stable-prefix), and they are the part most at risk of being [lost in the middle](/docs/foundations/context-window), which the explicit label partly mitigates.
+**Put retrieved turns after the stable prefix and before the recent window.** They are the part that changes per request, so they must sit below the [cacheable region](/book/patterns/context/stable-prefix), and they are the part most at risk of being [lost in the middle](/book/foundations/context-window), which the explicit label partly mitigates.
 
 ## Code
 
@@ -152,38 +152,38 @@ async def assemble(conv: str, question: str, history: list[Turn]) -> list[dict]:
 </Tab>
 </Tabs>
 
-The `conversationId` filter is not an optimization. It is the same [metadata-as-authorization](/docs/retrieval/metadata-and-authorization) rule as any other index: a history index without it will eventually surface one customer's turn in another customer's conversation, and it will do so as a fluent paraphrase with no access log.
+The `conversationId` filter is not an optimization. It is the same [metadata-as-authorization](/book/retrieval/metadata-and-authorization) rule as any other index: a history index without it will eventually surface one customer's turn in another customer's conversation, and it will do so as a fluent paraphrase with no access log.
 
 ## Trade-offs
 
 **Latency and cost per request.** An embedding call and a search on every turn, against carrying tens of thousands of tokens. Usually strongly positive on long conversations and clearly negative on short ones.
 
-**Retrieval can miss.** This is the pattern's characteristic failure and it is worse than it sounds, because a miss presents as the assistant forgetting something the user knows it was told. Mitigate as you would any retrieval: [hybrid search](/docs/retrieval/hybrid-and-reranking) so exact strings and IDs match lexically, and a generous recent window so the common case never depends on retrieval at all.
+**Retrieval can miss.** This is the pattern's characteristic failure and it is worse than it sounds, because a miss presents as the assistant forgetting something the user knows it was told. Mitigate as you would any retrieval: [hybrid search](/book/retrieval/hybrid-and-reranking) so exact strings and IDs match lexically, and a generous recent window so the common case never depends on retrieval at all.
 
 **Chronology confusion.** Retrieved turns arrive out of order relative to their neighbours. Sorting them chronologically and labelling the jump handles most of it; a model that still gets confused is a signal to raise `KEEP_RECENT` rather than to prompt harder.
 
-**Index maintenance.** Another store that must be [tenant-scoped, retained deliberately, and reachable by an erasure request](/docs/security/pii-and-compliance). It is a full-fidelity copy of every conversation, which is exactly the kind of store [the compliance chapter](/docs/security/tenant-isolation) warns gets built without anyone deciding to build it.
+**Index maintenance.** Another store that must be [tenant-scoped, retained deliberately, and reachable by an erasure request](/book/security/pii-and-compliance). It is a full-fidelity copy of every conversation, which is exactly the kind of store [the compliance chapter](/book/security/tenant-isolation) warns gets built without anyone deciding to build it.
 
 ## When not to use it
 
 **Short conversations.** Under a few dozen turns, send them all. This is the most common over-engineering in this group.
 
-**Task runs rather than conversations.** A run that investigates a ticket over twenty turns has no useful "past" to retrieve: everything is recent and everything is relevant. Use a [scratchpad](/docs/patterns/context/structured-scratchpad) and [compaction](/docs/patterns/context/context-compaction).
+**Task runs rather than conversations.** A run that investigates a ticket over twenty turns has no useful "past" to retrieve: everything is recent and everything is relevant. Use a [scratchpad](/book/patterns/context/structured-scratchpad) and [compaction](/book/patterns/context/context-compaction).
 
-**When the facts, not the turns, are what matter.** If what you need from turn 31 is *the address*, the right home is [a fact store](/docs/context/memory) or the scratchpad, not a retrieval over conversation text. Retrieving turns to recover a value is a workaround for state that should have been typed.
+**When the facts, not the turns, are what matter.** If what you need from turn 31 is *the address*, the right home is [a fact store](/book/context/memory) or the scratchpad, not a retrieval over conversation text. Retrieving turns to recover a value is a workaround for state that should have been typed.
 
-**When exactness is not required.** If a summary would genuinely do, a [rolling summary](/docs/patterns/context/rolling-summary) is cheaper and simpler.
+**When exactness is not required.** If a summary would genuinely do, a [rolling summary](/book/patterns/context/rolling-summary) is cheaper and simpler.
 
 <Aside type="note" title="This is the memory ambiguity, made concrete">
-[Three unrelated things are called memory](/docs/appendix/glossary), and this pattern sits precisely on the seam between two of them: it is *retrieval* applied to *the transcript*.
+[Three unrelated things are called memory](/book/appendix/glossary), and this pattern sits precisely on the seam between two of them: it is *retrieval* applied to *the transcript*.
 
 Which makes it the right tool for one question: "what was said, exactly, earlier in this conversation." And the wrong tool for the one it gets used for: "what do we know about this customer." The second is a fact store, with typed fields, provenance, and an erasure path. Reaching for selective history there means asking a similarity search to reconstruct a database, and it will be approximately right in a way that is very hard to audit.
 </Aside>
 
 ## Related
 
-- [Rolling Summary](/docs/patterns/context/rolling-summary): compress instead of retrieve, when exactness is not needed
-- [Context Compaction](/docs/patterns/context/context-compaction): rebuild at a boundary, for task runs rather than conversations
-- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): where a *value* from turn 31 should have lived
-- [Retrieval on Demand](/docs/patterns/context/retrieval-on-demand): the same idea, with the agent deciding when to search
-- [Memory](/docs/context/memory): the three things that share the word, and which one you actually need
+- [Rolling Summary](/book/patterns/context/rolling-summary): compress instead of retrieve, when exactness is not needed
+- [Context Compaction](/book/patterns/context/context-compaction): rebuild at a boundary, for task runs rather than conversations
+- [Structured Scratchpad](/book/patterns/context/structured-scratchpad): where a *value* from turn 31 should have lived
+- [Retrieval on Demand](/book/patterns/context/retrieval-on-demand): the same idea, with the agent deciding when to search
+- [Memory](/book/context/memory): the three things that share the word, and which one you actually need

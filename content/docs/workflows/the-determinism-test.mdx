@@ -3,7 +3,7 @@ title: "The Determinism Test"
 description: "One question that decides between a function, a workflow, and an agent, before you write anything."
 ---
 
-[Part I argued](/docs/foundations/when-not-to-build-an-agent) that most systems built as agents shouldn't be. This part is about what to build instead, and it starts by turning that argument into a procedure you can actually run.
+[Part I argued](/book/foundations/when-not-to-build-an-agent) that most systems built as agents shouldn't be. This part is about what to build instead, and it starts by turning that argument into a procedure you can actually run.
 
 The procedure has one refinement that changes everything, and it's the reason this is a separate chapter rather than a restatement:
 
@@ -19,11 +19,11 @@ For each step, three questions in order.
 
 **1 · Given the same input, must the same thing happen?**
 
-If yes, it's code. Not "should usually," not "we'd prefer". Must. Compliance checks, authorization, money movement, anything with a legal or contractual meaning. You cannot delegate a step where variance is unacceptable to a [component that varies](/docs/foundations/nondeterminism), and no prompt makes it not vary.
+If yes, it's code. Not "should usually," not "we'd prefer". Must. Compliance checks, authorization, money movement, anything with a legal or contractual meaning. You cannot delegate a step where variance is unacceptable to a [component that varies](/book/foundations/nondeterminism), and no prompt makes it not vary.
 
 **2 · Can I enumerate the outcomes?**
 
-If the step produces one of a known set, say a category, a route, or a boolean, then the model's job is **classification**, and its output goes into your control flow rather than being it. This is a bounded model call: [structured output](/docs/foundations/structured-output), an enum, and a `switch` you wrote. The model decides *which*, you decide *what happens next*.
+If the step produces one of a known set, say a category, a route, or a boolean, then the model's job is **classification**, and its output goes into your control flow rather than being it. This is a bounded model call: [structured output](/book/foundations/structured-output), an enum, and a `switch` you wrote. The model decides *which*, you decide *what happens next*.
 
 **3 · Does the next step depend on what this one returned?**
 
@@ -130,7 +130,7 @@ That difference compounds across a system. Six deterministic steps converge towa
 
 The test isn't run once. Two signals tell you a step is in the wrong column.
 
-**Promote to code when you've seen the distribution.** [Part I](/docs/foundations/when-not-to-build-an-agent) made the point: read your traces, and if a step's adaptive decision is the same decision every time, it's a function that's been paying model prices. This is the normal, healthy outcome of shipping an agent to learn the traffic.
+**Promote to code when you've seen the distribution.** [Part I](/book/foundations/when-not-to-build-an-agent) made the point: read your traces, and if a step's adaptive decision is the same decision every time, it's a function that's been paying model prices. This is the normal, healthy outcome of shipping an agent to learn the traffic.
 
 **Demote to adaptive when the branch list keeps growing.** This is the inverse signal, and the one people resist: your routing `switch` has fourteen cases, someone added three of them last month, and each new one is a small PR that another person has to remember. That is a system telling you the input space is not enumerable, and you are maintaining by hand a classification the model would do.
 
@@ -138,7 +138,7 @@ Neither direction is a failure. A system where every step is in the right column
 
 ---
 
-Next: [Sequential, Parallel, Fan-Out](/docs/workflows/composition-patterns), the composition shapes that cover most of what people reach for an agent to do.
+Next: [Sequential, Parallel, Fan-Out](/book/workflows/composition-patterns), the composition shapes that cover most of what people reach for an agent to do.
 
 ## Takeaways
 

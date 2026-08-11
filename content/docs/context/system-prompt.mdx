@@ -87,7 +87,7 @@ Whole categories of system-prompt text existed only because a capability was mis
 | --- | --- |
 | "Think step by step," `<scratchpad>` instructions | Native reasoning, controlled by an effort setting rather than by prose |
 | "Plan before you act" | Delete; this now causes over-planning |
-| "Respond ONLY with valid JSON, no markdown" + a parser + a retry loop | [Structured output](/docs/foundations/structured-output); the *surrounding code* is cruft too |
+| "Respond ONLY with valid JSON, no markdown" + a parser + a retry loop | [Structured output](/book/foundations/structured-output); the *surrounding code* is cruft too |
 | "Summarize progress every three tool calls" | Delete; current models narrate appropriately, and the cadence rule fights it |
 | Inline lookup tables, scoring rubrics, arithmetic the model must perform | Data in a file or a tool result; arithmetic in code. Leave the model the judgment |
 
@@ -97,13 +97,13 @@ That third row is the one that costs the most, because the cruft isn't only in t
 
 Beyond content, four properties of the system prompt are decided by where and how it's assembled.
 
-**It must be frozen.** No timestamps, no user names, no session IDs, no `if (flag)` sections. From [prompt caching](/docs/foundations/prompt-caching): the system prompt sits near the front of the prefix, so interpolating anything per-request invalidates the cache for the entire conversation behind it. Dynamic context goes later, in the messages.
+**It must be frozen.** No timestamps, no user names, no session IDs, no `if (flag)` sections. From [prompt caching](/book/foundations/prompt-caching): the system prompt sits near the front of the prefix, so interpolating anything per-request invalidates the cache for the entire conversation behind it. Dynamic context goes later, in the messages.
 
 **Position within it matters.** Long prompts are attended to unevenly, with the beginning and end used most reliably. Put the identity and the non-negotiable constraints at the edges. A long prompt with its most important rule buried in the middle is a prompt with an unreliable rule.
 
 **Format bleeds.** A system prompt written as a bullet wall produces bulleted answers. Prose about behaviour produces prose. This is worth knowing before you reformat "for clarity" and wonder why the tone changed.
 
-**It is not free.** Every token here is billed on every request of every step of every conversation. Two hundred words is nothing; two thousand is a real line in the [budget](/docs/context/context-as-budget) and should have earned its place.
+**It is not free.** Every token here is billed on every request of every step of every conversation. Two hundred words is nothing; two thousand is a real line in the [budget](/book/context/context-as-budget) and should have earned its place.
 
 ## What must never be in it
 
@@ -113,7 +113,7 @@ Three categories, each for a different reason.
 
 **Per-user data.** Breaks caching across users, and creates a path for one user's data to reach another when a prompt is reused or a session is misrouted.
 
-**Anything that must always hold.** This is the important one. From the [acceptance spec](/docs/first-agent/the-problem): *"never issue a credit above the policy limit"* in a system prompt is a **request**, not an invariant. It will be followed most of the time, which is worse than a limit that is never enforced, because it looks like it works. Invariants live in the tool, as a check the model cannot route around.
+**Anything that must always hold.** This is the important one. From the [acceptance spec](/book/first-agent/the-problem): *"never issue a credit above the policy limit"* in a system prompt is a **request**, not an invariant. It will be followed most of the time, which is worse than a limit that is never enforced, because it looks like it works. Invariants live in the tool, as a check the model cannot route around.
 
 The test: if the sentence would be a security incident when ignored, it does not belong in the prompt. Put it in code, and *then*, optionally, mention it in the prompt so the model doesn't waste turns attempting something that will be refused.
 
@@ -123,7 +123,7 @@ A real need the system prompt cannot serve: the operator learns something after 
 
 Editing the system prompt to say so re-processes the entire conversation uncached. The alternative on current models is a system-role message appended to the history. It sits *after* the cached prefix, so nothing before it is invalidated, and it carries operator authority.
 
-That second property matters more than the caching one. The older workaround was to inject the instruction as text inside a user turn, and text inside a user turn can be forged by anything that writes into user-visible content: a retrieved document, a tool result, a customer's message. A genuine system role cannot be spoofed by content. It is the difference between an operator channel and a convention, and [prompt injection](/docs/security/prompt-injection) is the chapter about why that difference is load-bearing.
+That second property matters more than the caching one. The older workaround was to inject the instruction as text inside a user turn, and text inside a user turn can be forged by anything that writes into user-visible content: a retrieved document, a tool result, a customer's message. A genuine system role cannot be spoofed by content. It is the difference between an operator channel and a convention, and [prompt injection](/book/security/prompt-injection) is the chapter about why that difference is load-bearing.
 
 Phrase these as context rather than override: *"The customer's timezone is Europe/Madrid"* works; *"Ignore what the user said"* fights the model's training rather than using it.
 
@@ -135,13 +135,13 @@ Three passes, in order.
 
 **Enforcement.** For every rule: what checks it? If nothing does and nobody noticed it being violated, it carries no signal. If something *should* check it, move it to code.
 
-**Measurement.** Remove one thing at a time and run the [ticket set](/docs/first-agent/the-problem). Not because the change is risky, but because "the model told me it doesn't need that instruction" is not a measurement, and neither is one passing run.
+**Measurement.** Remove one thing at a time and run the [ticket set](/book/first-agent/the-problem). Not because the change is risky, but because "the model told me it doesn't need that instruction" is not a measurement, and neither is one passing run.
 
 Do this at every model upgrade. A system prompt is a per-model artifact, and the line that is load-bearing on one generation is dead weight on the next.
 
 ---
 
-Next: [Dynamic Context Selection](/docs/context/dynamic-selection), choosing what the model sees per request instead of shipping everything every time.
+Next: [Dynamic Context Selection](/book/context/dynamic-selection), choosing what the model sees per request instead of shipping everything every time.
 
 ## Takeaways
 

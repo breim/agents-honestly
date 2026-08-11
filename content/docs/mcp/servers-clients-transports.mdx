@@ -3,7 +3,7 @@ title: "Servers, Clients, Transports"
 description: "Building one, consuming one, and the auth story in between."
 ---
 
-[The previous chapter](/docs/mcp/what-mcp-is) deferred three things here: transports, authorization, and version skew. They look like three topics and they are one, because a single decision determines all of them.
+[The previous chapter](/book/mcp/what-mcp-is) deferred three things here: transports, authorization, and version skew. They look like three topics and they are one, because a single decision determines all of them.
 
 ## The only decision that matters: where the server runs
 
@@ -25,7 +25,7 @@ The original remote transport used two endpoints, one for POSTing messages and o
 
 Existing SSE servers keep working, but if a tutorial has you configuring two URLs, it predates the current transport and probably predates the auth story below as well.
 
-Do not read the replacement as the resumable one, either. **2026-07-28 removed stream resumability from Streamable HTTP too**: no `Last-Event-ID`, no SSE event IDs, no message redelivery. A broken response stream loses the in-flight request, and the client must re-issue it as a *new* request with a new ID. Which is the same trade as the rest of that revision: the transport stopped remembering things, and what it forgets you retry. Note that this is the MCP transport, not [the SSE stream your own UI serves](/docs/interface/streaming-ux). That one still resumes, because you are the one buffering it.
+Do not read the replacement as the resumable one, either. **2026-07-28 removed stream resumability from Streamable HTTP too**: no `Last-Event-ID`, no SSE event IDs, no message redelivery. A broken response stream loses the in-flight request, and the client must re-issue it as a *new* request with a new ID. Which is the same trade as the rest of that revision: the transport stopped remembering things, and what it forgets you retry. Note that this is the MCP transport, not [the SSE stream your own UI serves](/book/interface/streaming-ux). That one still resumes, because you are the one buffering it.
 </Aside>
 
 ## Building one
@@ -119,15 +119,15 @@ server = Server(
 
 Two things in there matter more than the syntax.
 
-**`authInfo` / `ctx.auth` is where the requester comes from.** Not the arguments. This is [the same rule as every in-process tool](/docs/tools/tools-are-apis-for-models): the model chooses the subject, your code supplies the requester. The difference is that the requester now arrives as a validated token claim instead of a session variable. The rule did not change; its source did.
+**`authInfo` / `ctx.auth` is where the requester comes from.** Not the arguments. This is [the same rule as every in-process tool](/book/tools/tools-are-apis-for-models): the model chooses the subject, your code supplies the requester. The difference is that the requester now arrives as a validated token claim instead of a session variable. The rule did not change; its source did.
 
-**Publishing a server publishes your Part VIII work to strangers.** Descriptions, [namespacing](/docs/tools/tools-are-apis-for-models), [result shaping](/docs/tools/result-design), [error text](/docs/tools/errors-as-instructions): all of it now reaches consumers whose prompts you will never see and cannot fix. A vague description is a support ticket from someone else's product.
+**Publishing a server publishes your Part VIII work to strangers.** Descriptions, [namespacing](/book/tools/tools-are-apis-for-models), [result shaping](/book/tools/result-design), [error text](/book/tools/errors-as-instructions): all of it now reaches consumers whose prompts you will never see and cannot fix. A vague description is a support ticket from someone else's product.
 
 ## What stateless changed for whoever operates it
 
 The 2026-07-28 revision removed protocol sessions, and the operational consequence is the good kind of boring: **you can scale an MCP server behind a round-robin load balancer with no sticky routing and no shared session store.** Progress and log notifications stream inside the same POST exchange rather than requiring a connection to stay open.
 
-Cross-call state, where a server genuinely needs it, becomes an explicit server-issued handle passed back as an ordinary tool argument. That is [the parameterized-tool discipline](/docs/tools/schema-and-granularity) the protocol arrived at independently.
+Cross-call state, where a server genuinely needs it, becomes an explicit server-issued handle passed back as an ordinary tool argument. That is [the parameterized-tool discipline](/book/tools/schema-and-granularity) the protocol arrived at independently.
 
 The same revision removed the other thing that needed a live connection: **the server calling the client.** Where a server used to send `sampling/createMessage` or `elicitation/create` down an open channel, it now returns an ordinary result marked `input_required`, carrying the requests in an `inputRequests` field. The client gathers the answers and **retries the original request** with `inputResponses` attached. That is Multi Round-Trip Requests, and its operational point is the same one as the rest of this section: every exchange is now a plain request-response that any load balancer can route, and a dropped stream costs you a retry rather than a session.
 
@@ -175,10 +175,10 @@ Two of those steps carry the weight.
 <Aside type="note" title="Your MCP server is a resource server, not an identity provider">
 The single most useful framing for implementing this: MCP servers **validate** tokens, they do not **issue** them. Delegate to an authorization server you already run or already buy.
 
-Teams that read the auth spec and start building login flows have misread which half of OAuth they are on, and they are about to own an identity provider they did not want. Related: [Identity](/docs/security/identity) and [Least Privilege](/docs/security/least-privilege).
+Teams that read the auth spec and start building login flows have misread which half of OAuth they are on, and they are about to own an identity provider they did not want. Related: [Identity](/book/security/identity) and [Least Privilege](/book/security/least-privilege).
 </Aside>
 
-There is an agent-specific wrinkle the spec does not solve for you. The token represents a **user**, but the caller is an agent acting on that user's behalf, possibly hours later, possibly after [a run paused three days waiting for an approval](/docs/human-in-the-loop/approval-gates). Token lifetimes and agent run lifetimes are not the same clock, and the same mismatch shows up in [dedup windows](/docs/tools/idempotency). Decide deliberately whether a resumed run re-authenticates or carries a refreshable credential.
+There is an agent-specific wrinkle the spec does not solve for you. The token represents a **user**, but the caller is an agent acting on that user's behalf, possibly hours later, possibly after [a run paused three days waiting for an approval](/book/human-in-the-loop/approval-gates). Token lifetimes and agent run lifetimes are not the same clock, and the same mismatch shows up in [dedup windows](/book/tools/idempotency). Decide deliberately whether a resumed run re-authenticates or carries a refreshable credential.
 
 And where the token lives: **not in the model's context.** Tool results and arguments are prompt text; a credential placed there is durably persisted in the transcript. It belongs in your client's credential store, injected at the transport layer, invisible to the model. That is the same separation as every other secret in this book.
 
@@ -196,7 +196,7 @@ tools: [{ type: 'mcp_toolset', mcp_server_name: 'carrier' }],
 
 Declaring the server without referencing it in `tools` is the most common first-run failure: the connection is configured, nothing is exposed, and there is no error to read. Credentials attach separately, by design, so a reusable server declaration never carries a secret.
 
-Then the operational discipline, which is [the previous part's](/docs/tools/tool-discovery) rather than the protocol's: allowlist each server down to the tools you actually use, and treat a server version bump like any other dependency upgrade, because a reworded description changes your selection accuracy without changing a line of your code.
+Then the operational discipline, which is [the previous part's](/book/tools/tool-discovery) rather than the protocol's: allowlist each server down to the tools you actually use, and treat a server version bump like any other dependency upgrade, because a reworded description changes your selection accuracy without changing a line of your code.
 
 ## Version skew, concretely
 
@@ -216,7 +216,7 @@ Check the revision each side implements before debugging anything else. It is a 
 
 ## Atlas, concretely
 
-**Publishing.** Meridian runs one Streamable HTTP server. OAuth 2.1 with audience binding, and scopes split along [the read/write line](/docs/tools/read-and-write-tools): a `crm.read` scope that the sales agent gets, and a `erp.credit` scope that it does not. Stateless, so it sits behind the ordinary load balancer with no special routing.
+**Publishing.** Meridian runs one Streamable HTTP server. OAuth 2.1 with audience binding, and scopes split along [the read/write line](/book/tools/read-and-write-tools): a `crm.read` scope that the sales agent gets, and a `erp.credit` scope that it does not. Stateless, so it sits behind the ordinary load balancer with no special routing.
 
 **Consuming.** The freight carrier's server, over Streamable HTTP, with a stored refreshable credential and an allowlist of the four tracking tools Atlas actually calls.
 
@@ -232,7 +232,7 @@ Check the revision each side implements before debugging anything else. It is a 
 
 ---
 
-Next: [When a Plain Function Is Better](/docs/mcp/when-a-function-is-better), a protocol boundary you do not need is a protocol boundary that can fail.
+Next: [When a Plain Function Is Better](/book/mcp/when-a-function-is-better), a protocol boundary you do not need is a protocol boundary that can fail.
 
 ## Takeaways
 

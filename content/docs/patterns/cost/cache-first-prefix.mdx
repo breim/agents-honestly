@@ -9,7 +9,7 @@ The instinct when a prompt gets expensive is to make it shorter. Trim the exampl
 
 With prefix caching that instinct is backwards, and the arithmetic says so plainly. Cached input reads at roughly a tenth of the normal input rate, so **9,000 tokens of stable prefix that always hits cache costs about the same as 900 tokens that never does.** Trimming the stable part saves almost nothing while making the agent worse; the money is in the varying part, which nobody looks at.
 
-[Stable prefix](/docs/patterns/context/stable-prefix) covers the layout rule: order by stability, breakpoint at the last invariant position. This pattern is the economic consequence, which is a different design decision: **once the prefix is nearly free, put more in it.**
+[Stable prefix](/book/patterns/context/stable-prefix) covers the layout rule: order by stability, breakpoint at the last invariant position. This pattern is the economic consequence, which is a different design decision: **once the prefix is nearly free, put more in it.**
 
 ## Forces
 
@@ -157,11 +157,11 @@ def record_cache_economics(res, ctx) -> None:
 
 **The window is still finite.** A 9,000-token prefix is 9,000 tokens not available for retrieved context. Cheap is not free, and on a long run competing with a large transcript the trade can invert.
 
-**Prefix material must earn its place on quality, not just on price.** "It is nearly free" is a reason to *allow* eight worked examples, not a reason to add them. Measure whether they help: [an eval run](/docs/evals/ci-for-agents) with and without is a one-afternoon experiment.
+**Prefix material must earn its place on quality, not just on price.** "It is nearly free" is a reason to *allow* eight worked examples, not a reason to add them. Measure whether they help: [an eval run](/book/evals/ci-for-agents) with and without is a one-afternoon experiment.
 
 **Rare paths pay the write premium and never read it.** A workflow invoked twice a day may cost more with caching than without. Check invocation frequency against the cache TTL before enabling it everywhere.
 
-**It fights [dynamic tool selection](/docs/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. Select per conversation, or append rather than substitute.
+**It fights [dynamic tool selection](/book/context/dynamic-selection).** Trimming the catalogue per request saves a few thousand tokens of schema and loses the cache on everything after it. Select per conversation, or append rather than substitute.
 
 ## When not to use it
 
@@ -178,16 +178,16 @@ Every way this fails is a small, sensible-looking edit: a tool description tight
 
 None of them errors. The request succeeds, the answer is fine, and the bill silently returns to full price, often for months, because nobody is watching the one number that would show it.
 
-Which is why [the tool catalogue hash belongs in the config bundle](/docs/production/versioning) and why cache hit rate belongs on the [cost dashboard with an alert](/docs/observability/cost-accounting). The alert is the only thing standing between a one-line edit and a quiet 10× on your largest line item.
+Which is why [the tool catalogue hash belongs in the config bundle](/book/production/versioning) and why cache hit rate belongs on the [cost dashboard with an alert](/book/observability/cost-accounting). The alert is the only thing standing between a one-line edit and a quiet 10× on your largest line item.
 </Aside>
 
 ## Related
 
-- [Stable Prefix](/docs/patterns/context/stable-prefix): the layout rule and the full list of silent invalidators
-- [Prompt Caching](/docs/foundations/prompt-caching): the mechanism, the break-even arithmetic, and how to verify
-- [Batch API Offload](/docs/patterns/cost/batch-api-offload): the other discount, which stacks with this one
-- [Token and Cost Accounting](/docs/observability/cost-accounting): metering cached input separately, and alerting on hit rate
-- [Dynamic Selection](/docs/context/dynamic-selection): the trade this pattern is usually in tension with
+- [Stable Prefix](/book/patterns/context/stable-prefix): the layout rule and the full list of silent invalidators
+- [Prompt Caching](/book/foundations/prompt-caching): the mechanism, the break-even arithmetic, and how to verify
+- [Batch API Offload](/book/patterns/cost/batch-api-offload): the other discount, which stacks with this one
+- [Token and Cost Accounting](/book/observability/cost-accounting): metering cached input separately, and alerting on hit rate
+- [Dynamic Selection](/book/context/dynamic-selection): the trade this pattern is usually in tension with
 
 ## References
 

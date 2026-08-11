@@ -4,7 +4,7 @@ description: "Traversal, neighborhoods, and returning a subgraph small enough to
 ---
 
 
-You have entities, relationships, and a resolution pipeline that keeps them coherent. Now an agent asks a question, and there is an interface problem: a graph query returns a **subgraph**, and a prompt takes **text**, with a [budget](/docs/context/context-as-budget) measured in a few thousand tokens.
+You have entities, relationships, and a resolution pipeline that keeps them coherent. Now an agent asks a question, and there is an interface problem: a graph query returns a **subgraph**, and a prompt takes **text**, with a [budget](/book/context/context-as-budget) measured in a few thousand tokens.
 
 That mismatch is the whole chapter. Nearly every disappointing graph integration fails here rather than in the modeling.
 
@@ -24,7 +24,7 @@ Start at the Acme account and expand:
 
 Two hops is already past what you want in a prompt. Three hops is, for most enterprise graphs, "a large fraction of the database," reached by a query that looks completely reasonable.
 
-And **hub nodes** make it abrupt rather than gradual. One node connected to everything, whether a status, a country, or a popular part number, turns a traversal that passes through it into a scan. This is the practical cost of the [attributes-as-entities mistake](/docs/graphs/modeling-entities): a `Status: Open` node connects every open ticket in the company, so two hops from any ticket reaches every open ticket in the company.
+And **hub nodes** make it abrupt rather than gradual. One node connected to everything, whether a status, a country, or a popular part number, turns a traversal that passes through it into a scan. This is the practical cost of the [attributes-as-entities mistake](/book/graphs/modeling-entities): a `Status: Open` node connects every open ticket in the company, so two hops from any ticket reaches every open ticket in the company.
 
 ## Four patterns, in order of how often you need them
 
@@ -34,9 +34,9 @@ And **hub nodes** make it abrupt rather than gradual. One node connected to ever
 
 **3 · Neighborhood aggregation.** Traverse, then *compute over* the subgraph rather than returning it. This is the pattern most implementations skip, and the next section is about why it matters most.
 
-**4 · Precomputed community summaries.** For whole-corpus questions ("what themes appear across our at-risk accounts"), summarize clusters offline and retrieve the summaries. That's [the next chapter's](/docs/graphs/graphrag) territory, and it's expensive.
+**4 · Precomputed community summaries.** For whole-corpus questions ("what themes appear across our at-risk accounts"), summarize clusters offline and retrieve the summaries. That's [the next chapter's](/book/graphs/graphrag) territory, and it's expensive.
 
-Notice that the first pattern is a **parameterized query**, exactly like the [SQL tools](/docs/retrieval/sql-is-still-the-answer) from Part IV. The same discipline applies for the same reasons: you write the traversal, the model supplies the entry point, and it cannot construct a query that walks the whole graph.
+Notice that the first pattern is a **parameterized query**, exactly like the [SQL tools](/book/retrieval/sql-is-still-the-answer) from Part IV. The same discipline applies for the same reasons: you write the traversal, the model supplies the entry point, and it cannot construct a query that walks the whole graph.
 
 ## Aggregate at the boundary
 
@@ -66,7 +66,7 @@ The instinct is to serialize the subgraph and hand it over: 86 nodes as JSON, le
 
 The right-hand version is what the risk question actually needs. Counting, grouping, and date arithmetic are things a database does exactly and a language model does approximately, at output-token rates, over content that also crowds out everything else in the window.
 
-This is [result design](/docs/tools/result-design) applied to graphs, and the rule generalizes: **traverse in the graph, compute in the graph, return the conclusion.** Return the underlying nodes only when the model needs to quote or cite them, and then return the five that matter, not all sixty.
+This is [result design](/book/tools/result-design) applied to graphs, and the rule generalizes: **traverse in the graph, compute in the graph, return the conclusion.** Return the underlying nodes only when the model needs to quote or cite them, and then return the five that matter, not all sixty.
 
 <Aside type="caution" title="Sampling is not aggregation">
 A common fallback when a neighborhood exceeds the limit is to sample it: take 50 nodes uniformly and send those.
@@ -93,7 +93,7 @@ Two further rules from the same literature. **Deduplicate and order** the triple
 
 ## Bound everything, and report the bound
 
-Every traversal needs three limits: **maximum depth**, **maximum nodes**, and **a timeout**. That is the same discipline as [the agent loop](/docs/first-agent/the-loop-by-hand), for the same reason: an unbounded traversal is an unbounded query.
+Every traversal needs three limits: **maximum depth**, **maximum nodes**, and **a timeout**. That is the same discipline as [the agent loop](/book/first-agent/the-loop-by-hand), for the same reason: an unbounded traversal is an unbounded query.
 
 And the same rule about what happens at the limit: **hitting a bound is a result, not a truncation to hide.** Return it explicitly:
 
@@ -108,7 +108,7 @@ Silently returning the first 50 of 340 nodes is how an agent concludes that an a
 
 The subtlest security issue in Part V, and it does not have an analogue in document retrieval.
 
-In [Part IV](/docs/retrieval/metadata-and-authorization), the filter was applied once: this principal may see these chunks. A traversal is different, because **you can enter at an authorized node and walk to an unauthorized one.** The principal may see the Acme account. Two hops away is a shared supplier; one hop from there is another customer's order. Nothing about the entry check prevents that.
+In [Part IV](/book/retrieval/metadata-and-authorization), the filter was applied once: this principal may see these chunks. A traversal is different, because **you can enter at an authorized node and walk to an unauthorized one.** The principal may see the Acme account. Two hops away is a shared supplier; one hop from there is another customer's order. Nothing about the entry check prevents that.
 
 So the filter must be applied **at every hop**, as a predicate on traversal rather than a check at the boundary:
 
@@ -120,7 +120,7 @@ This is the row that most graph integrations get wrong, because traversal APIs m
 
 ## The graph is an index too
 
-One closing reminder, because a graph feels authoritative in a way a vector index doesn't: it is still a copy, built at ingestion time, and everything from [Where Does the Answer Live](/docs/retrieval/where-does-the-answer-live) applies.
+One closing reminder, because a graph feels authoritative in a way a vector index doesn't: it is still a copy, built at ingestion time, and everything from [Where Does the Answer Live](/book/retrieval/where-does-the-answer-live) applies.
 
 An account owner who changed this morning is whatever your last sync said. So the pattern that works is the same one: **traverse the graph for structure, then verify the volatile facts live** before acting on them. The graph tells you Acme has three escalated tickets and a renewal in sixty days; the ticket system tells you whether one was resolved an hour ago.
 
@@ -136,7 +136,7 @@ Twelve fields and three IDs, in place of a subgraph. That is the whole interface
 
 ---
 
-Next: [Evaluating Graph Quality](/docs/graphs/evaluating-graph-quality), on nodes, edges, paths, provenance, freshness, and whether the graph improved the answer.
+Next: [Evaluating Graph Quality](/book/graphs/evaluating-graph-quality), on nodes, edges, paths, provenance, freshness, and whether the graph improved the answer.
 
 ## Takeaways
 

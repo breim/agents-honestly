@@ -41,7 +41,7 @@ ModelProfile
 The first four rows come from documentation and a probe suite. The behavior scores come from your data. Keep those sources separate. A provider saying that a model supports tool calling means the endpoint accepts a tool schema. It does not mean the model selects `issue_credit` correctly from your catalogue.
 
 <Aside type="caution" title="Context size is a limit, not a quality score">
-A larger advertised window says that the request may fit. It says nothing about whether the model will use a fact buried at token 180,000. Test the positions and document shapes you will send, using the dilution checks from [The Context Window](/docs/foundations/context-window).
+A larger advertised window says that the request may fit. It says nothing about whether the model will use a fact buried at token 180,000. Test the positions and document shapes you will send, using the dilution checks from [The Context Window](/book/foundations/context-window).
 </Aside>
 
 ## Pick on completed-task economics
@@ -60,7 +60,7 @@ cost per resolved ticket
         tickets actually resolved
 ```
 
-A small model that retries twice and escalates often may cost more than a larger model that finishes once. A large model used for a binary router may burn money without moving accuracy. [Cost and Latency as Scores](/docs/evals/cost-and-latency-evals) turns this equation into an eval; the point here is to choose the denominator before choosing the model.
+A small model that retries twice and escalates often may cost more than a larger model that finishes once. A large model used for a binary router may burn money without moving accuracy. [Cost and Latency as Scores](/book/evals/cost-and-latency-evals) turns this equation into an eval; the point here is to choose the denominator before choosing the model.
 
 ## Reasoning effort belongs to the task
 
@@ -216,7 +216,7 @@ compare quality · trajectory · cost · latency
 promote or roll back the manifest
 ```
 
-Do not let an in-flight durable run drift onto a new model. Pin the profile for ordinary behavior and re-evaluate live authorization at the moment of action, the same split [Rollout and In-Flight Migration](/docs/production/rollout) applies to every other configuration change.
+Do not let an in-flight durable run drift onto a new model. Pin the profile for ordinary behavior and re-evaluate live authorization at the moment of action, the same split [Rollout and In-Flight Migration](/book/production/rollout) applies to every other configuration change.
 
 ## Atlas, concretely
 
@@ -230,7 +230,7 @@ There is no tuned model in v1. The pilot's failures are missing or stale evidenc
 
 ---
 
-Next: [When Not to Build an Agent](/docs/foundations/when-not-to-build-an-agent). The cheapest agent is the one you replaced with three if-statements and a good prompt.
+Next: [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent). The cheapest agent is the one you replaced with three if-statements and a good prompt.
 
 ## Takeaways
 

@@ -4,7 +4,7 @@ description: One long-lived workflow per business entity, holding the agent stat
 ---
 
 <Aside type="tip" title="Temporal pattern">
-This is the [Entity Workflow](https://temporal-sa.github.io/temporal-design-patterns/) pattern applied to agents. It composes with [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory), [Signal With Start](/docs/patterns/durability/signal-with-start), and [Updatable SLA Timer](/docs/patterns/durability/sla-timer). In practice you will use all four together.
+This is the [Entity Workflow](https://temporal-sa.github.io/temporal-design-patterns/) pattern applied to agents. It composes with [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory), [Signal With Start](/book/patterns/durability/signal-with-start), and [Updatable SLA Timer](/book/patterns/durability/sla-timer). In practice you will use all four together.
 </Aside>
 
 ## Problem
@@ -186,13 +186,13 @@ The same rule extends past the model call. Anything nondeterministic: clock read
 
 ## Trade-offs
 
-**You pay in event history.** Every signal, activity, and timer is persisted. Agent turns are chatty, so history grows fast, which is why [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory) is not optional here but part of the pattern.
+**You pay in event history.** Every signal, activity, and timer is persisted. Agent turns are chatty, so history grows fast, which is why [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory) is not optional here but part of the pattern.
 
-**Latency floor rises.** Each activity round-trip adds a few milliseconds of persistence. Irrelevant against a multi-second model call; noticeable if you wrap something that took 200 microseconds. See [Local Activities](/docs/patterns/durability/tool-as-activity).
+**Latency floor rises.** Each activity round-trip adds a few milliseconds of persistence. Irrelevant against a multi-second model call; noticeable if you wrap something that took 200 microseconds. See [Local Activities](/book/patterns/durability/tool-as-activity).
 
 **Determinism constrains how you write code.** Not hard, but it is a rule you have to hold in your head, and it bites during refactors more than during first drafts.
 
-**Workflow versioning is now your problem.** Changing the agent loop while thousands of instances are mid-flight requires Temporal's patching mechanism. Covered in [Deploying and Versioning Agents](/docs/production/versioning). Plan for it before you need it, not after.
+**Workflow versioning is now your problem.** Changing the agent loop while thousands of instances are mid-flight requires Temporal's patching mechanism. Covered in [Deploying and Versioning Agents](/book/production/versioning). Plan for it before you need it, not after.
 
 ## When not to use it
 
@@ -203,12 +203,12 @@ The same rule extends past the model call. Anything nondeterministic: clock read
 
 ## Related
 
-- [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory): required companion once history grows
-- [Signal With Start](/docs/patterns/durability/signal-with-start): deliver the first message without a separate "does it exist" check
-- [Request-Response via Update](/docs/patterns/durability/update-request-response): ask a running agent something and get a validated answer back
-- [Updatable SLA Timer](/docs/patterns/durability/sla-timer): deadlines that move when new information arrives
-- [Saga for Tool Side Effects](/docs/patterns/durability/saga-for-tools): when the refund succeeded and the email didn't
-- Chapter: [Long-Lived Agents](/docs/durability/long-lived-agents): the narrative walkthrough this entry compresses
+- [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory): required companion once history grows
+- [Signal With Start](/book/patterns/durability/signal-with-start): deliver the first message without a separate "does it exist" check
+- [Request-Response via Update](/book/patterns/durability/update-request-response): ask a running agent something and get a validated answer back
+- [Updatable SLA Timer](/book/patterns/durability/sla-timer): deadlines that move when new information arrives
+- [Saga for Tool Side Effects](/book/patterns/durability/saga-for-tools): when the refund succeeded and the email didn't
+- Chapter: [Long-Lived Agents](/book/durability/long-lived-agents): the narrative walkthrough this entry compresses
 
 ## References
 

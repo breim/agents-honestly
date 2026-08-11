@@ -151,7 +151,7 @@ Never run the agent before persisting the event. If the process dies after retur
 
 Event identity comes from the provider when available. Otherwise derive it from stable source fields, not from arrival time. Keep the raw payload for replay under the retention policy, and parse it through a versioned schema.
 
-Temporal's [Signal With Start](/docs/patterns/durability/signal-with-start) fits events that should create or wake a long-lived case. A status notification that should never create work belongs in the projection table instead.
+Temporal's [Signal With Start](/book/patterns/durability/signal-with-start) fits events that should create or wake a long-lived case. A status notification that should never create work belongs in the projection table instead.
 
 ## Polling is sometimes the honest design
 
@@ -186,7 +186,7 @@ integration adapter
 CRM / ERP / documents
 ```
 
-The adapter receives a delegation, not a global API key. Background jobs name a human owner and a service grant explicitly. [The Agent Is Not a Superuser](/docs/security/identity) covers token exchange and the `sub`/`act` distinction. The integration requirement is that no convenience constructor can omit them.
+The adapter receives a delegation, not a global API key. Background jobs name a human owner and a service grant explicitly. [The Agent Is Not a Superuser](/book/security/identity) covers token exchange and the `sub`/`act` distinction. The integration requirement is that no convenience constructor can omit them.
 
 Re-evaluate authorization at the live source for every effect. A workflow checkpoint from Tuesday does not prove that the employee still has permission on Thursday.
 
@@ -203,7 +203,7 @@ Maintain one quota policy per downstream service:
 - retry budget and breaker state;
 - cost attribution.
 
-The integration adapter reports the provider's reset and retry metadata in structured errors. [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure) decides admission before work begins. The adapter enforces the last line at the call.
+The integration adapter reports the provider's reset and retry metadata in structured errors. [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure) decides admission before work begins. The adapter enforces the last line at the call.
 
 ## Schema drift gets contract tests
 
@@ -238,7 +238,7 @@ oldest unapplied event
 last successful full reconciliation
 ```
 
-An event consumer with zero errors can still be wrong because the missing event never arrived. Reconciliation compares state, not processing logs. This is the same lesson as [Building the Ingestion Pipeline](/docs/retrieval/ingestion-pipeline). A green pipeline is not proof of a complete corpus.
+An event consumer with zero errors can still be wrong because the missing event never arrived. Reconciliation compares state, not processing logs. This is the same lesson as [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline). A green pipeline is not proof of a complete corpus.
 
 <FrameworkCheck decision="Keep domain adapters and tool contracts in application code. Use Temporal for long syncs and waits, and use MCP only when the integration crosses an ownership boundary.">
 <FrameworkOption name="plain">
@@ -275,7 +275,7 @@ All four adapters emit `SourceEnvelope`. A tool result without `observed_at` or 
 
 ---
 
-Next: [Computer-Using Agents](/docs/tools/computer-using-agents), for systems that expose a screen instead of an API and the larger action space that creates.
+Next: [Computer-Using Agents](/book/tools/computer-using-agents), for systems that expose a screen instead of an API and the larger action space that creates.
 
 ## Takeaways
 

@@ -21,7 +21,7 @@ The term gets used as a synonym for "too many permissions," which loses the two 
 | **Functionality** | What may it call? | A `run_sql` tool added for one migration, still in the catalogue |
 | **Autonomy** | What may it do unattended? | `issue_credit` executes without approval at any amount |
 
-Excessive **functionality** is the one that accumulates fastest, because tools are added by whoever needed one and removed by nobody. Every tool in the catalogue is a permission you granted, and, as [tool discovery](/docs/tools/tool-discovery) covered from the quality side, it is also context you pay for on every single turn. Here the same deletion has a second payoff: a tool that is not in the catalogue cannot be called by an injected instruction.
+Excessive **functionality** is the one that accumulates fastest, because tools are added by whoever needed one and removed by nobody. Every tool in the catalogue is a permission you granted, and, as [tool discovery](/book/tools/tool-discovery) covered from the quality side, it is also context you pay for on every single turn. Here the same deletion has a second payoff: a tool that is not in the catalogue cannot be called by an injected instruction.
 
 Excessive **autonomy** is the one that gets left out of the security review entirely, because it does not look like a permission. It is one. An agent that may do a thing *unattended* holds strictly more authority than one that may do the same thing with a human present, and the recent framing that makes this explicit is worth adopting:
 
@@ -55,9 +55,9 @@ Tool-level allowlisting, *this agent may call these tools*, is where nearly ever
 
 > **Bind every write to the entities already in scope for this run.**
 
-Atlas is working ticket #9104. That ticket names one account and one order. `issue_credit` restricted to *that* account, capped at the [tier-0 amount](/docs/human-in-the-loop/risk-tiers), is a tool an attacker can reach and cannot meaningfully use. The same tool with an open `account_id` parameter is a payments API with a natural-language frontend.
+Atlas is working ticket #9104. That ticket names one account and one order. `issue_credit` restricted to *that* account, capped at the [tier-0 amount](/book/human-in-the-loop/risk-tiers), is a tool an attacker can reach and cannot meaningfully use. The same tool with an open `account_id` parameter is a payments API with a natural-language frontend.
 
-The dispatcher enforces this from the run's own record, never from arguments the model produced, for the same reason [idempotency keys come from your code](/docs/tools/idempotency).
+The dispatcher enforces this from the run's own record, never from arguments the model produced, for the same reason [idempotency keys come from your code](/book/tools/idempotency).
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -139,7 +139,7 @@ def authorize(tool: str, args: dict, scope: RunScope) -> tuple[bool, str | None]
 </Tab>
 </Tabs>
 
-Two details do disproportionate work. The **aggregate** check is what stops the slow version of the attack: twenty credits of four hundred dollars each, every one under the per-call cap. And the **denial escalates** rather than raising. A refusal carrying `account X is not in scope` is a well-formed [approval request](/docs/human-in-the-loop/approval-gates), which keeps the control from being the thing operators route around when it fires on a legitimate edge case. A control people disable is worth less than one that is slightly too tight.
+Two details do disproportionate work. The **aggregate** check is what stops the slow version of the attack: twenty credits of four hundred dollars each, every one under the per-call cap. And the **denial escalates** rather than raising. A refusal carrying `account X is not in scope` is a well-formed [approval request](/book/human-in-the-loop/approval-gates), which keeps the control from being the thing operators route around when it fires on a legitimate edge case. A control people disable is worth less than one that is slightly too tight.
 
 ## Derive the minimum from traces, not from a meeting
 
@@ -150,12 +150,12 @@ The mining pass is unglamorous and takes an afternoon:
 1. Over ninety days of traces, collect the distinct `(tool, argument shape, backend operation)` triples actually exercised.
 2. Diff that set against what the credential and catalogue permit.
 3. Everything in the difference is a candidate for removal, and *the list is your finding*, whether or not you act on all of it.
-4. Remove in [shadow mode](/docs/evals/online-evals) first: log what *would* have been denied for a week before enforcing.
+4. Remove in [shadow mode](/book/evals/online-evals) first: log what *would* have been denied for a week before enforcing.
 
 Step four is the part that makes this survivable. Enforcing a mined policy directly breaks the rare legitimate path that did not appear in ninety days, at the worst possible moment. Log-only first, then enforce.
 
 <Aside type="note" title="Where the trace has to be good enough">
-This whole method depends on traces that record arguments, not just tool names. That is the same instrumentation [the trace chapter](/docs/observability/what-a-trace-must-answer) argued for on debugging grounds, and the same one incident scoping needs. Three separate requirements landing on one piece of instrumentation is usually a sign it is not optional.
+This whole method depends on traces that record arguments, not just tool names. That is the same instrumentation [the trace chapter](/book/observability/what-a-trace-must-answer) argued for on debugging grounds, and the same one incident scoping needs. Three separate requirements landing on one piece of instrumentation is usually a sign it is not optional.
 </Aside>
 
 ## Credentials that expire with the run
@@ -169,23 +169,23 @@ Standing credentials are the reason a compromise is unbounded in time. The alter
 | If leaked | Full access, indefinitely | An expired token |
 | Audit | "The service account did it" | The run ID is in the token |
 
-The last row is not a side benefit. A token that carries the run ID makes every downstream system's log answer *which agent run caused this*, without your having to correlate anything, and it is the mechanism [identity propagation](/docs/security/identity) builds on in the next chapter.
+The last row is not a side benefit. A token that carries the run ID makes every downstream system's log answer *which agent run caused this*, without your having to correlate anything, and it is the mechanism [identity propagation](/book/security/identity) builds on in the next chapter.
 
 ## The catalogue is not fixed at deploy time
 
 One agent-specific hole worth calling out, because it invalidates a permission review the moment it lands.
 
-[MCP servers](/docs/mcp/servers-clients-transports) and dynamic tool loading mean the tool catalogue can change *at runtime*. An agent connected to a server it does not control gets whatever tools that server advertises, described by text that server wrote, and a server can add tools or change a description after you reviewed it.
+[MCP servers](/book/mcp/servers-clients-transports) and dynamic tool loading mean the tool catalogue can change *at runtime*. An agent connected to a server it does not control gets whatever tools that server advertises, described by text that server wrote, and a server can add tools or change a description after you reviewed it.
 
 So "we audited the tool catalogue" is a claim about a moment, not a property, unless three things are true:
 
 **The set of servers is fixed by configuration**, not discovered. A server the agent can find is a server the agent will use.
 
-**Tool definitions are pinned and hashed.** A changed description is a change to your agent's instructions, [the description *is* prompt text](/docs/tools/tool-discovery), and that change should require the same review as a prompt change, which means it must first be detectable.
+**Tool definitions are pinned and hashed.** A changed description is a change to your agent's instructions, [the description *is* prompt text](/book/tools/tool-discovery), and that change should require the same review as a prompt change, which means it must first be detectable.
 
 **Newly appeared tools are denied by default.** The dispatcher's allowlist is authoritative; the catalogue is advisory. If a tool shows up that the allowlist does not name, the answer is no, and the alert is more interesting than the tool.
 
-This is the supply-chain row from [the threat model](/docs/security/threat-model), and it is the one where the attacker does not need to reach your agent at all. They need to reach something your agent trusts.
+This is the supply-chain row from [the threat model](/book/security/threat-model), and it is the one where the attacker does not need to reach your agent at all. They need to reach something your agent trusts.
 
 ## What least privilege does not do
 
@@ -193,7 +193,7 @@ Two honest limits, in the pattern of this part.
 
 **It bounds the incident; it does not prevent it.** Every control here assumes the agent will eventually be induced to do something wrong. The credit that Atlas issues to the correct account for the tier-0 amount because a hostile ticket asked it to is *within policy* and still an unwanted refund. That is the trade you accepted when you kept the trifecta's first two elements: least privilege converts a breach into a nuisance, which is the entire goal, and calling it prevention will get someone hurt.
 
-**Every tightening is a utility cost, and the cost is real.** A cap that fires on a legitimate $600 refund routes a customer to a queue. A scope that excludes a related account blocks a genuinely reasonable action. The sizing question, how tight before the agent stops being worth having, is not answerable from a security review. It is answerable from [evals](/docs/evals/eval-discipline) run at each proposed setting, which is the argument for having built them before you got here.
+**Every tightening is a utility cost, and the cost is real.** A cap that fires on a legitimate $600 refund routes a customer to a queue. A scope that excludes a related account blocks a genuinely reasonable action. The sizing question, how tight before the agent stops being worth having, is not answerable from a security review. It is answerable from [evals](/book/evals/eval-discipline) run at each proposed setting, which is the argument for having built them before you got here.
 
 ## Atlas, concretely
 
@@ -206,13 +206,13 @@ Two honest limits, in the pattern of this part.
 | `send_reply` recipient | An address argument | The ticket's contact record; no argument exists |
 | Credential lifetime | Standing, rotated quarterly | Minted per run, expires at completion |
 | MCP servers | Discovered from a registry | Three pinned endpoints, tool hashes checked |
-| Autonomy | Everything unattended | Tier 0 unattended; tier 1+ [escalates](/docs/human-in-the-loop/approval-gates) |
+| Autonomy | Everything unattended | Tier 0 unattended; tier 1+ [escalates](/book/human-in-the-loop/approval-gates) |
 
 The `send_reply` row is the shape to notice, and it recurs whenever this is done well: the strongest scoping did not add a check, it **removed a parameter**. There is no recipient argument to manipulate, so no policy about recipients has to be enforced, tested, or kept correct as the code changes. A capability the model cannot express is cheaper and more durable than one you validate on every call.
 
 ---
 
-Next: [The Agent Is Not a Superuser](/docs/security/identity), propagating user identity through the agent so it can never read what the user could not.
+Next: [The Agent Is Not a Superuser](/book/security/identity), propagating user identity through the agent so it can never read what the user could not.
 
 ## Takeaways
 

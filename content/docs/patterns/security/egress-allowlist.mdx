@@ -49,11 +49,11 @@ Four rules:
 
 **Deny the package registry at runtime.** `pip install` inside a live agent process is arbitrary third-party code execution in the middle of your run, and it is how a dependency-confusion attack reaches a system that never deploys unreviewed code. Dependencies are baked at image build.
 
-**Delete URL-shaped parameters rather than validating them.** A `webhook_url` argument with a hostname allowlist is a policy someone must maintain; a tool with no such argument has no policy to get wrong. This is [the same move as removing the recipient from `send_reply`](/docs/patterns/security/tool-permission-boundary), and it is the strongest available form of this pattern.
+**Delete URL-shaped parameters rather than validating them.** A `webhook_url` argument with a hostname allowlist is a policy someone must maintain; a tool with no such argument has no policy to get wrong. This is [the same move as removing the recipient from `send_reply`](/book/patterns/security/tool-permission-boundary), and it is the strongest available form of this pattern.
 
 **Treat model-authored output as an egress surface.** Markdown images, reference-style links, HTML, and anything a client will auto-fetch. The safe default for an agent handling private data is that its output contains **no remote resources at all**: text and internal links only.
 
-**Alert on denials, do not just drop them.** A blocked connection to an unexpected host is the highest-signal detection available anywhere in [Part XVII](/docs/security/threat-model). It is what a successful injection looks like from the outside, and a silent drop throws that away.
+**Alert on denials, do not just drop them.** A blocked connection to an unexpected host is the highest-signal detection available anywhere in [Part XVII](/book/security/threat-model). It is what a successful injection looks like from the outside, and a silent drop throws that away.
 
 ## Code
 
@@ -139,24 +139,24 @@ Note that layer ③ is a *transformation*, not a classifier. It does not try to 
 
 **Legitimate remote content stops working.** Product images in replies, avatars, embedded charts. The fix is to proxy them through your own domain from an internal store, which is work, and it is the work that converts an unbounded channel into a bounded one.
 
-**Allowlists must be maintained.** A new provider region, a new internal service, a vendor changing hostnames. Stale allowlists cause outages, so the list belongs in the [config bundle](/docs/production/versioning) with a review path, not in a firewall rule nobody can find.
+**Allowlists must be maintained.** A new provider region, a new internal service, a vendor changing hostnames. Stale allowlists cause outages, so the list belongs in the [config bundle](/book/production/versioning) with a review path, not in a firewall rule nobody can find.
 
 **DNS is easy to forget.** An agent that cannot open a socket but can resolve `<base64-payload>.attacker.example` still leaks, one hostname at a time. Route resolution through a controlled resolver, or accept that layer ① is partial.
 
-**Full denial is not always possible.** [`send_reply` is a class ⑤ external write](/docs/tools/read-and-write-tools): the product *is* sending bytes to a customer. The mitigation is that the recipient comes from the ticket record and the body carries no remote resources, which bounds the channel rather than closing it.
+**Full denial is not always possible.** [`send_reply` is a class ⑤ external write](/book/tools/read-and-write-tools): the product *is* sending bytes to a customer. The mitigation is that the recipient comes from the ticket record and the body carries no remote resources, which bounds the channel rather than closing it.
 
 ## When not to use it
 
 **When there is no private data.** An agent over a public corpus with no user context has nothing worth exfiltrating. Confirm that honestly, including the conversation itself, which is frequently private even when the corpus is not.
 
-**When there is no untrusted content.** [The trifecta needs all three](/docs/security/prompt-injection). If nothing attacker-influenced can enter the context, egress is a hygiene measure rather than a control, and re-check that assumption whenever a new ingestion path appears.
+**When there is no untrusted content.** [The trifecta needs all three](/book/security/prompt-injection). If nothing attacker-influenced can enter the context, egress is a hygiene measure rather than a control, and re-check that assumption whenever a new ingestion path appears.
 
-**As the only control.** Egress bounds the *leak*; it does nothing about an agent induced to issue a credit or send a wrong reply. [Capability constraints](/docs/patterns/security/tool-permission-boundary) are a separate axis.
+**As the only control.** Egress bounds the *leak*; it does nothing about an agent induced to issue a credit or send a wrong reply. [Capability constraints](/book/patterns/security/tool-permission-boundary) are a separate axis.
 
-**Where it would break a core workflow with no proxy path.** Then be explicit: document the exception, narrow it to specific hosts, and raise the [risk tier](/docs/human-in-the-loop/risk-tiers) on that path rather than quietly allowing everything.
+**Where it would break a core workflow with no proxy path.** Then be explicit: document the exception, narrow it to specific hosts, and raise the [risk tier](/book/human-in-the-loop/risk-tiers) on that path rather than quietly allowing everything.
 
 <Aside type="caution" title="This is usually the cheapest element of the trifecta to remove">
-[Private data, untrusted content, and an exfiltration vector](/docs/security/prompt-injection): any two are survivable, all three is an incident. For most agents the first two are the product: reading customer records and processing customer-written text is the job.
+[Private data, untrusted content, and an exfiltration vector](/book/security/prompt-injection): any two are survivable, all three is an incident. For most agents the first two are the product: reading customer records and processing customer-written text is the job.
 
 The third is often removable at almost no cost. An agent that can read your database and process hostile tickets is contained if there is nowhere for the bytes to go, and "no remote images in output, no URL parameters on tools, default-deny egress" costs a proxy for product images and nothing else.
 
@@ -165,11 +165,11 @@ EchoLeak is the argument stated as a CVE: an injection classifier was in place a
 
 ## Related
 
-- [Prompt Injection](/docs/security/prompt-injection): the lethal trifecta, and why element three is the one to remove
-- [Sandboxing and Credential Boundaries](/docs/security/sandboxing): egress policy for generated code, and the broker socket
-- [Tool Permission Boundary](/docs/patterns/security/tool-permission-boundary): removing URL parameters rather than validating them
-- [Output Guardrail](/docs/patterns/security/output-guardrail): the other check on the way out, and why it is mitigation
-- [PII, Audit, and Compliance](/docs/security/pii-and-compliance): what is actually at stake in the bytes that leave
+- [Prompt Injection](/book/security/prompt-injection): the lethal trifecta, and why element three is the one to remove
+- [Sandboxing and Credential Boundaries](/book/security/sandboxing): egress policy for generated code, and the broker socket
+- [Tool Permission Boundary](/book/patterns/security/tool-permission-boundary): removing URL parameters rather than validating them
+- [Output Guardrail](/book/patterns/security/output-guardrail): the other check on the way out, and why it is mitigation
+- [PII, Audit, and Compliance](/book/security/pii-and-compliance): what is actually at stake in the bytes that leave
 
 ## References
 

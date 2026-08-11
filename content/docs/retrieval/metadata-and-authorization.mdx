@@ -53,7 +53,7 @@ Never cache membership in the index. Read it from the live token, every request,
 
 ## Where the filter has to live
 
-From the [vector search chapter](/docs/retrieval/vector-search): filtering can happen before, during, or after the similarity search. That was a recall discussion. Here it is a security one, and the ordering matters differently.
+From the [vector search chapter](/book/retrieval/vector-search): filtering can happen before, during, or after the similarity search. That was a recall discussion. Here it is a security one, and the ordering matters differently.
 
 **Post-filtering is not a security boundary by itself.** If you retrieve the top 100 across the whole corpus and then drop unauthorized ones, the unauthorized content was still read out of storage, still travelled through your process, and was still available to anything that ran in between, which is the part people miss. If your pipeline reranks before filtering, you have sent restricted content to a reranker. If it logs candidates before filtering, restricted content is in your logs.
 
@@ -61,7 +61,7 @@ The rule is: **the filter belongs in the query, at the lowest level that can enf
 
 ## Five rules
 
-**1 · Deny by default.** A chunk with no tenant tag is invisible, not public. An ingestion job that fails to attach metadata should produce unreachable documents, not universally readable ones. Make the schema enforce it, on [the chunk table from Part IV](/docs/retrieval/vector-search):
+**1 · Deny by default.** A chunk with no tenant tag is invisible, not public. An ingestion job that fails to attach metadata should produce unreachable documents, not universally readable ones. Make the schema enforce it, on [the chunk table from Part IV](/book/retrieval/vector-search):
 
 ```sql
 ALTER TABLE policy_chunks
@@ -79,13 +79,13 @@ CREATE INDEX ON policy_chunks (tenant_id) WHERE superseded_at IS NULL;
                                       not defaulted, not nullable
 ```
 
-This is the [same discipline](/docs/first-agent/the-loop-by-hand) as `runTool(name, input, customerId)`. If there is any code path that can retrieve without a principal, whether a background job, a cache warmer, or an eval harness, that path is your vulnerability, and it will be written by someone in a hurry.
+This is the [same discipline](/book/first-agent/the-loop-by-hand) as `runTool(name, input, customerId)`. If there is any code path that can retrieve without a principal, whether a background job, a cache warmer, or an eval harness, that path is your vulnerability, and it will be written by someone in a hurry.
 
 **3 · The model cannot influence the filter.** Ever. `tenant_id` is never a tool argument, never derived from the ticket text, never something the model passes in. The model chooses *what to search for*; your code decides *what it is allowed to search*. A model that has read a document mentioning another account will happily ask about that account, and the only thing that makes this a non-event is that it cannot reach the parameter.
 
 **4 · One function, no exceptions.** Retrieval called from five places with slightly different filters is how the fifth one ships without a check. Make it a single, boring, well-tested function, and make the direct client inaccessible from agent code.
 
-**5 · Audit at the source, not at the answer.** Log what was retrieved and for whom, with document IDs, on every request. You cannot audit generated prose after the fact. The [trace](/docs/observability/what-a-trace-must-answer) of retrieved IDs is the only record that a leak happened, and it is the artifact a regulator will ask for.
+**5 · Audit at the source, not at the answer.** Log what was retrieved and for whom, with document IDs, on every request. You cannot audit generated prose after the fact. The [trace](/book/observability/what-a-trace-must-answer) of retrieved IDs is the only record that a leak happened, and it is the artifact a regulator will ask for.
 
 ## The leak that happens downstream
 
@@ -93,8 +93,8 @@ The rules above secure retrieval. They do not secure everything the retrieved co
 
 | Derived artifact | How the filter is lost |
 | --- | --- |
-| **Summaries** | A [compaction](/docs/context/compaction) pass reads tenant A's content and writes a summary that persists into a shared context |
-| **Memory** | A fact extracted in one customer's session gets written to a store loaded in another's: the [leakage failure mode](/docs/context/memory) |
+| **Summaries** | A [compaction](/book/context/compaction) pass reads tenant A's content and writes a summary that persists into a shared context |
+| **Memory** | A fact extracted in one customer's session gets written to a store loaded in another's: the [leakage failure mode](/book/context/memory) |
 | **Caches** | A cached answer keyed by question text, not by principal, served to the next asker |
 | **Embeddings of queries** | The question itself can be sensitive, and it goes to a third party |
 | **Reranker input** | Every candidate you send to a reranking service, including ones you were about to filter out |
@@ -107,7 +107,7 @@ Query embedding, reranking, and hosted vector search all mean sending content to
 
 ## Permissions are stale too
 
-One more consequence of the freshness axis from [Where Does the Answer Live](/docs/retrieval/where-does-the-answer-live), applied to the ACL rather than the content.
+One more consequence of the freshness axis from [Where Does the Answer Live](/book/retrieval/where-does-the-answer-live), applied to the ACL rather than the content.
 
 Your index holds a copy of the document's permissions as of the last ingestion. The source system changed them this morning. So even with membership read live, the *document side* of the intersection can be wrong.
 
@@ -137,7 +137,7 @@ Every chunk carries `tenant_id`, and Meridian's corpus additionally carries `tie
 
 ---
 
-Next: [Lexical Search and Why You Still Need It](/docs/retrieval/lexical-search), on BM25, exact match, and the ticket ID that semantic search will never find.
+Next: [Lexical Search and Why You Still Need It](/book/retrieval/lexical-search), on BM25, exact match, and the ticket ID that semantic search will never find.
 
 ## Takeaways
 

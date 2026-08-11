@@ -3,7 +3,7 @@ title: "Reducers and State Schemas"
 description: "What flows along an edge, what must not, and why this is where graphs get subtly wrong."
 ---
 
-In the [last chapter](/docs/langgraph/state-nodes-edges), nodes return partial updates, and the framework merges them into state. This chapter is about that merge, because it is where a graph stops being obvious.
+In the [last chapter](/book/langgraph/state-nodes-edges), nodes return partial updates, and the framework merges them into state. This chapter is about that merge, because it is where a graph stops being obvious.
 
 The merge rule for a key is its **reducer**. By default it's overwrite, so the update replaces the value. That's right for scalars and wrong for anything that accumulates. A `messages` list that gets overwritten rather than appended loses the conversation, which is why the append reducer is the first one everybody learns.
 
@@ -46,7 +46,7 @@ For a list you'll later count or filter, that's harmless. For anything downstrea
 | --- | --- |
 | Count, sum, group, filter | No, safe |
 | "The first finding" / `findings[0]` | **Yes**, now nondeterministic |
-| Concatenated into a prompt | **Yes**, different prompt, different [cache prefix](/docs/foundations/prompt-caching) |
+| Concatenated into a prompt | **Yes**, different prompt, different [cache prefix](/book/foundations/prompt-caching) |
 | Last-write-wins on a scalar | **Yes**, and this is the worst case |
 
 That last row deserves its own warning.
@@ -77,19 +77,19 @@ The prescriptive half of the chapter, and the one that prevents incidents rather
 | **Large blobs**: documents, images, full tool payloads | Every superstep re-serializes them; checkpoints balloon | A reference: an ID, a URI, a hash |
 | **Open connections, clients, file handles** | Not serializable; breaks resumption in a different process | Construct inside the node |
 | **The world's state**: live order status, current inventory | It's a stale copy the moment it's written | Re-fetch when you need it |
-| **Another tenant's anything** | State crosses node boundaries freely | [Filter before it enters](/docs/retrieval/metadata-and-authorization) |
+| **Another tenant's anything** | State crosses node boundaries freely | [Filter before it enters](/book/retrieval/metadata-and-authorization) |
 
-The fourth row is [the map's question](/docs/the-map) reappearing: *who owns this state?* Graph state holds **the run's** state: position, decisions, accumulated findings. It does not hold facts the business owns. An order total in graph state is a value that was true when a node read it and is now an assertion your system will keep repeating.
+The fourth row is [the map's question](/book/the-map) reappearing: *who owns this state?* Graph state holds **the run's** state: position, decisions, accumulated findings. It does not hold facts the business owns. An order total in graph state is a value that was true when a node read it and is now an assertion your system will keep repeating.
 
-And the second row is the one that quietly ruins things. A node that puts twelve retrieved documents into state has made every subsequent checkpoint carry twelve documents. With ten supersteps, you've written them ten times. Put the document *IDs* in state and re-fetch. Better still, put the [conclusion](/docs/graphs/graph-retrieval) in state and let the documents stay where they were.
+And the second row is the one that quietly ruins things. A node that puts twelve retrieved documents into state has made every subsequent checkpoint carry twelve documents. With ten supersteps, you've written them ten times. Put the document *IDs* in state and re-fetch. Better still, put the [conclusion](/book/graphs/graph-retrieval) in state and let the documents stay where they were.
 
 ## Checkpoint size is a state-schema problem
 
 That follows directly. Your checkpoint size is roughly **state size × supersteps**, and state size is monotonic if anything in it accumulates.
 
-The `messages` list is the usual culprit. It grows every turn by design, it's checkpointed every superstep, and the resulting storage curve is the same quadratic that [Part I](/docs/foundations/context-window) drew for context, because it's the same list.
+The `messages` list is the usual culprit. It grows every turn by design, it's checkpointed every superstep, and the resulting storage curve is the same quadratic that [Part I](/book/foundations/context-window) drew for context, because it's the same list.
 
-Which means the levers are the same ones: cap it, compact it, or externalize it. [Compaction](/docs/context/compaction) applied to graph state is a storage and latency move as much as a context-budget one, because every checkpoint write serializes whatever is there.
+Which means the levers are the same ones: cap it, compact it, or externalize it. [Compaction](/book/context/compaction) applied to graph state is a storage and latency move as much as a context-budget one, because every checkpoint write serializes whatever is there.
 
 ## Design the schema in two halves
 
@@ -119,9 +119,9 @@ Most graph states end up as one flat bag that mixes two very different things:
 
 Your conditional edges should read **only** from the left column. A routing function that has to parse the last message to decide where to go is a routing function you cannot unit-test. Feed it a typed state and it's three lines with obvious test cases.
 
-And notice what the left column is: it's [the typed scratchpad](/docs/patterns/context/structured-scratchpad) from Part III, arriving as the graph's state schema. That's a genuine convergence rather than a coincidence. The argument there was that verified state should live in a typed object your code owns rather than in the transcript, and a graph gives that object a first-class home with persistence attached.
+And notice what the left column is: it's [the typed scratchpad](/book/patterns/context/structured-scratchpad) from Part III, arriving as the graph's state schema. That's a genuine convergence rather than a coincidence. The argument there was that verified state should live in a typed object your code owns rather than in the transcript, and a graph gives that object a first-class home with persistence attached.
 
-It also gives you the [poisoning defense](/docs/context/context-poisoning) structurally: only the node that calls `get_order` can write `order_total_cents`. A number the model asserted has nowhere to go.
+It also gives you the [poisoning defense](/book/context/context-poisoning) structurally: only the node that calls `get_order` can write `order_total_cents`. A number the model asserted has nowhere to go.
 
 ## Atlas, concretely
 
@@ -145,15 +145,15 @@ class AtlasState(TypedDict):
 
 Three decisions in there worth stealing.
 
-**`findings` and `step` are the only parallel-written keys**, and both reducers are commutative. The three [outbound checks](/docs/workflows/evaluator-optimizer) run in parallel and each appends. No ordering assumption anywhere downstream: findings are filtered by criterion, never indexed.
+**`findings` and `step` are the only parallel-written keys**, and both reducers are commutative. The three [outbound checks](/book/workflows/evaluator-optimizer) run in parallel and each appends. No ordering assumption anywhere downstream: findings are filtered by criterion, never indexed.
 
 **`tenant_id` is set once at `START` and never appears in any node's return value.** Nodes aren't trusted not to write it; none of them do, and a test asserts the compiled graph's node signatures don't. Authorization does not travel as mutable state.
 
-**`outcome` is the [union from Part II](/docs/first-agent/the-loop-by-hand)**, now a state field. `finalize` asserts it is set, which makes "fell out of the graph without deciding anything" a caught error rather than a ticket marked resolved.
+**`outcome` is the [union from Part II](/book/first-agent/the-loop-by-hand)**, now a state field. `finalize` asserts it is set, which makes "fell out of the graph without deciding anything" a caught error rather than a ticket marked resolved.
 
 ---
 
-Next: [Conditional Edges and Subgraphs](/docs/langgraph/routing-and-subgraphs). Branching, loops, and composing graphs into reusable components.
+Next: [Conditional Edges and Subgraphs](/book/langgraph/routing-and-subgraphs). Branching, loops, and composing graphs into reusable components.
 
 ## Takeaways
 

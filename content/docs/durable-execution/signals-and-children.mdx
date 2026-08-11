@@ -107,7 +107,7 @@ class RefundWorkflow:
 </Tab>
 </Tabs>
 
-Three days of waiting, and no process is running. This is the mechanism underneath [approval gates](/docs/human-in-the-loop/approval-gates), the chapter that spends its length on *when* a human should be asked. The durable answer to *how you wait* is the eight lines above.
+Three days of waiting, and no process is running. This is the mechanism underneath [approval gates](/book/human-in-the-loop/approval-gates), the chapter that spends its length on *when* a human should be asked. The durable answer to *how you wait* is the eight lines above.
 
 <Aside type="caution" title="Two handler traps, both quiet">
 **Handlers can run before the main method starts.** With signal-with-start especially, a message can be delivered to a handler before your `run` body has executed its first line. Do not assume initialization has happened; initialize in the constructor or guard the handler.
@@ -119,7 +119,7 @@ Three days of waiting, and no process is running. This is the mechanism undernea
 
 One call that starts the workflow if it is not running and delivers the message either way. It is the idempotent entry point for *"an event arrived concerning entity X"*, which is most events.
 
-Paired with [the workflow ID acting as a dedup key](/docs/durable-execution/temporal-in-forty-minutes), it collapses a whole category of code: no "does a run exist for this order," no race between two processes both deciding to start one, no lookup table mapping entities to executions. The entity's ID **is** the workflow ID, and every event is a signal-with-start against it.
+Paired with [the workflow ID acting as a dedup key](/book/durable-execution/temporal-in-forty-minutes), it collapses a whole category of code: no "does a run exist for this order," no race between two processes both deciding to start one, no lookup table mapping entities to executions. The entity's ID **is** the workflow ID, and every event is a signal-with-start against it.
 
 ## Children exist to partition history
 
@@ -177,11 +177,11 @@ The refund workflow, now able to hold a conversation:
 
 Part X is done: a workflow that survives crashes, retries correctly, waits for people, and can be cut into pieces. Nothing in it has been about agents.
 
-The catalog turns the last two chapters into recipes: [Signal With Start](/docs/patterns/durability/signal-with-start) for the inbound event that may arrive before the workflow exists, [Request-Response via Update](/docs/patterns/durability/update-request-response) for the console that needs an answer back, [Updatable SLA Timer](/docs/patterns/durability/sla-timer) for the deadline that moves, and [Continue-As-New for Memory](/docs/patterns/durability/continue-as-new-memory) for the history ceiling this chapter named.
+The catalog turns the last two chapters into recipes: [Signal With Start](/book/patterns/durability/signal-with-start) for the inbound event that may arrive before the workflow exists, [Request-Response via Update](/book/patterns/durability/update-request-response) for the console that needs an answer back, [Updatable SLA Timer](/book/patterns/durability/sla-timer) for the deadline that moves, and [Continue-As-New for Memory](/book/patterns/durability/continue-as-new-memory) for the history ceiling this chapter named.
 
 ---
 
-Part X ends here. Next: [Not a Background Job](/docs/durability/not-a-background-job), Part XI, where the model finally shows up, and where putting it in the wrong half of this machinery breaks everything above.
+Part X ends here. Next: [Not a Background Job](/book/durability/not-a-background-job), Part XI, where the model finally shows up, and where putting it in the wrong half of this machinery breaks everything above.
 
 ## Takeaways
 

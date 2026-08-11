@@ -11,7 +11,7 @@ After each superstep, the framework writes the current state and position to a s
 
 Four things fall out, and they're the headline features of every graph framework:
 
-**Multi-turn conversation.** The thread *is* the conversation. Turn two loads turn one's state. This is what "memory" means at the graph level, and it's [thread state](/docs/context/memory), not durable facts, not a knowledge base.
+**Multi-turn conversation.** The thread *is* the conversation. Turn two loads turn one's state. This is what "memory" means at the graph level, and it's [thread state](/book/context/memory), not durable facts, not a knowledge base.
 
 **Crash resumption.** The process dies at superstep six; a new process loads checkpoint six and continues.
 
@@ -55,7 +55,7 @@ For pure nodes this is harmless and even elegant. For nodes that touch the world
 
 **1 · Side effects re-fire.** If a node writes to an external system and then the process dies before the checkpoint lands, resumption re-runs it. The refund happens twice. There is no configuration that prevents this, because the framework has no record that the call occurred. It records state between nodes, not effects within them.
 
-The mitigation is the one [Part VIII will make a chapter of](/docs/tools/idempotency): **idempotency keys on every external call**, derived deterministically from the run so a replay produces the same key and the downstream system deduplicates. That works. Note where the burden sits, though: on you, and on the remote system's willingness to honour it.
+The mitigation is the one [Part VIII will make a chapter of](/book/tools/idempotency): **idempotency keys on every external call**, derived deterministically from the run so a replay produces the same key and the downstream system deduplicates. That works. Note where the burden sits, though: on you, and on the remote system's willingness to honour it.
 
 **2 · Human-in-the-loop has a double-execution problem.** This one is subtle and worth stating precisely, because it's the most common production surprise in graph-based approvals.
 
@@ -90,11 +90,11 @@ Both a graph checkpointer and a durable execution engine will tell you they do "
 
 Read the third row twice. **Checkpointing gives you resumability of the graph; durable execution also guarantees that a replay never re-executes a completed effect.** Those are different products, and a system that needs the second cannot get there by choosing a better checkpointer.
 
-What it still does not give you is *exactly-once against the outside world*. The platform retries an activity that timed out with no response, and that retry can duplicate the effect, because the platform never saw whether the first attempt landed. Closing that gap is [idempotency](/docs/tools/idempotency), which you supply; durable execution removes the crash-replay half of the problem and not the other half.
+What it still does not give you is *exactly-once against the outside world*. The platform retries an activity that timed out with no response, and that retry can duplicate the effect, because the platform never saw whether the first attempt landed. Closing that gap is [idempotency](/book/tools/idempotency), which you supply; durable execution removes the crash-replay half of the problem and not the other half.
 
 The mechanism behind the difference is the separation durable engines force: deterministic orchestration code the engine may replay freely, and effectful work whose results it records so it never replays them. A graph node is both at once, orchestration and effects in the same function, which is exactly why replaying it re-does the effects.
 
-That is [Part X](/docs/durable-execution/why-durable-execution), and this chapter is its motivation.
+That is [Part X](/book/durable-execution/why-durable-execution), and this chapter is its motivation.
 
 ## What to do in the meantime
 
@@ -133,7 +133,7 @@ That is a defensible production system, and every one of those four mitigations 
 
 ---
 
-Next: [Streaming and Control](/docs/langgraph/streaming-and-control), emitting intermediate state and putting hard ceilings on an autonomous loop.
+Next: [Streaming and Control](/book/langgraph/streaming-and-control), emitting intermediate state and putting hard ceilings on an autonomous loop.
 
 ## Takeaways
 

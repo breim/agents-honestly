@@ -7,7 +7,7 @@ description: "Compress old turns into a running summary before the window fills.
 
 A run is at turn nineteen. The transcript holds every model message, every tool call, and every tool result since turn one, and it is re-sent in full on every request. The window is 60% full and the run is not close to finishing.
 
-Two things happen if you do nothing. The window fills and the request fails: a [permanent error](/docs/reliability/error-taxonomy) that retrying will reproduce exactly. And well before that, cost climbs [quadratically in turn count](/docs/production/cost-engineering), because each turn pays for every turn before it.
+Two things happen if you do nothing. The window fills and the request fails: a [permanent error](/book/reliability/error-taxonomy) that retrying will reproduce exactly. And well before that, cost climbs [quadratically in turn count](/book/production/cost-engineering), because each turn pays for every turn before it.
 
 The obvious fix, dropping the oldest messages, silently deletes the decision made at turn three that everything since depends on.
 
@@ -18,7 +18,7 @@ The obvious fix, dropping the oldest messages, silently deletes the decision mad
 - **Some old turns are load-bearing**: the customer's actual request, a policy decision, an amount that was agreed.
 - **Compression is lossy and the loss is unrecoverable.** Once summarized, the detail is gone from the context for the rest of the run.
 - **Summarizing costs a model call**, so doing it every turn is worse than the problem.
-- **Prefix caching punishes rewrites**: rewriting the front of the context [invalidates the cache](/docs/foundations/prompt-caching) for everything after it.
+- **Prefix caching punishes rewrites**: rewriting the front of the context [invalidates the cache](/book/foundations/prompt-caching) for everything after it.
 
 ## Solution
 
@@ -41,9 +41,9 @@ Three rules make it work:
 
 **Trigger on a threshold, not every turn.** Summarize when the transcript crosses a fraction of the window, 60% is a reasonable default, not on a fixed cadence. Most runs never reach it and never pay.
 
-**Summarize into a fixed schema, not free prose.** The summarizer fills named fields: the request, decisions made, values established with their sources, open questions. A prose summary drifts a little on every pass, which is [semantic drift](/docs/context/context-poisoning) and it compounds. A schema bounds what can be lost.
+**Summarize into a fixed schema, not free prose.** The summarizer fills named fields: the request, decisions made, values established with their sources, open questions. A prose summary drifts a little on every pass, which is [semantic drift](/book/context/context-poisoning) and it compounds. A schema bounds what can be lost.
 
-**Never summarize what the scratchpad already holds.** Values that must survive, such as the order ID, the amount, the cited chunk, live in [typed state](/docs/context/context-poisoning), not in the summary. The summary is for *narrative*: what was tried, what was decided, why. If the summary is the only home for a number, the design is wrong.
+**Never summarize what the scratchpad already holds.** Values that must survive, such as the order ID, the amount, the cited chunk, live in [typed state](/book/context/context-poisoning), not in the summary. The summary is for *narrative*: what was tried, what was decided, why. If the summary is the only home for a number, the design is wrong.
 
 ## Code
 
@@ -121,9 +121,9 @@ async def maybe_compress(state: AgentState, window: int) -> AgentState:
 
 ## Trade-offs
 
-**Cost.** One extra model call per compression, against unbounded growth otherwise. On a run that triggers twice, this is strongly positive; on a run that never triggers, it is free. Use a [mid-tier model](/docs/production/cost-engineering): summarization needs faithfulness, not judgment.
+**Cost.** One extra model call per compression, against unbounded growth otherwise. On a run that triggers twice, this is strongly positive; on a run that never triggers, it is free. Use a [mid-tier model](/book/production/cost-engineering): summarization needs faithfulness, not judgment.
 
-**Cache.** Rewriting the summary invalidates the prefix cache from that point down. This is why the summary sits *below* the system prompt and tool catalogue rather than being woven into them: the [stable prefix](/docs/patterns/context/stable-prefix) survives, and only the part that changed is re-read.
+**Cache.** Rewriting the summary invalidates the prefix cache from that point down. This is why the summary sits *below* the system prompt and tool catalogue rather than being woven into them: the [stable prefix](/book/patterns/context/stable-prefix) survives, and only the part that changed is re-read.
 
 **Fidelity.** Each pass is model output about model output. Constraining to a schema and always passing the *previous* summary rather than re-summarizing from scratch bounds the drift, but does not eliminate it. Runs that compress five times have measurably lower fidelity than runs that compress once, which is an argument for a higher trigger threshold, not a lower one.
 
@@ -133,25 +133,25 @@ async def maybe_compress(state: AgentState, window: int) -> AgentState:
 
 **When the run is short.** If p99 turn count keeps you under half the window, this is machinery for a problem you do not have. Measure before adding it.
 
-**When you can drop instead of compress.** If the old turns are genuinely disposable, a chatty read-only assistant with no accumulated decisions, [selective history](/docs/patterns/context/selective-history) or plain truncation is cheaper and lossless in the ways that matter.
+**When you can drop instead of compress.** If the old turns are genuinely disposable, a chatty read-only assistant with no accumulated decisions, [selective history](/book/patterns/context/selective-history) or plain truncation is cheaper and lossless in the ways that matter.
 
-**When the detail is the point.** Legal review, incident forensics, anything where "what exactly was said at turn four" is the deliverable. Compression is the wrong shape; [sub-agent isolation](/docs/patterns/context/subagent-isolation) with full transcripts per subtask keeps the detail somewhere.
+**When the detail is the point.** Legal review, incident forensics, anything where "what exactly was said at turn four" is the deliverable. Compression is the wrong shape; [sub-agent isolation](/book/patterns/context/subagent-isolation) with full transcripts per subtask keeps the detail somewhere.
 
-**When state should have been typed.** If the summary is carrying identifiers, amounts, or anything a tool returned, the fix is a [structured scratchpad](/docs/patterns/context/structured-scratchpad), not a better summarizer. A rolling summary that holds facts is a poisoning vector with extra steps.
+**When state should have been typed.** If the summary is carrying identifiers, amounts, or anything a tool returned, the fix is a [structured scratchpad](/book/patterns/context/structured-scratchpad), not a better summarizer. A rolling summary that holds facts is a poisoning vector with extra steps.
 
-**When a full rewrite is better.** At a natural checkpoint, such as a subtask completing or an approval returning, [context compaction](/docs/patterns/context/context-compaction) rebuilds the whole context from verified state rather than folding the old one forward. It loses less, and it is available whenever a clean boundary exists.
+**When a full rewrite is better.** At a natural checkpoint, such as a subtask completing or an approval returning, [context compaction](/book/patterns/context/context-compaction) rebuilds the whole context from verified state rather than folding the old one forward. It loses less, and it is available whenever a clean boundary exists.
 
 <Aside type="caution" title="The summary is not a restore point">
-A rolling summary is derived from the transcript, so if the transcript was [poisoned](/docs/context/context-poisoning), the summary inherits the poison and now looks like established fact with no provenance.
+A rolling summary is derived from the transcript, so if the transcript was [poisoned](/book/context/context-poisoning), the summary inherits the poison and now looks like established fact with no provenance.
 
-Whatever you rebuild a compromised run from has to be something the model never wrote: the typed scratchpad, the tool results in the trace, or the [workflow history](/docs/durability/agent-as-workflow). The summary is a convenience for the model, never the system of record.
+Whatever you rebuild a compromised run from has to be something the model never wrote: the typed scratchpad, the tool results in the trace, or the [workflow history](/book/durability/agent-as-workflow). The summary is a convenience for the model, never the system of record.
 </Aside>
 
 ## Related
 
-- [Structured Scratchpad](/docs/patterns/context/structured-scratchpad): where the values go, so the summary only carries narrative
-- [Context Compaction](/docs/patterns/context/context-compaction): full rewrite at a checkpoint, when a clean boundary exists
-- [Selective History](/docs/patterns/context/selective-history): retrieve the relevant past turns instead of compressing all of them
-- [Stable Prefix](/docs/patterns/context/stable-prefix): why the summary sits below the cacheable region
-- [Sub-Agent Isolation](/docs/patterns/context/subagent-isolation): keep a noisy subtask out of the main transcript entirely
-- [Compaction](/docs/context/compaction): the chapter this pattern comes from
+- [Structured Scratchpad](/book/patterns/context/structured-scratchpad): where the values go, so the summary only carries narrative
+- [Context Compaction](/book/patterns/context/context-compaction): full rewrite at a checkpoint, when a clean boundary exists
+- [Selective History](/book/patterns/context/selective-history): retrieve the relevant past turns instead of compressing all of them
+- [Stable Prefix](/book/patterns/context/stable-prefix): why the summary sits below the cacheable region
+- [Sub-Agent Isolation](/book/patterns/context/subagent-isolation): keep a noisy subtask out of the main transcript entirely
+- [Compaction](/book/context/compaction): the chapter this pattern comes from

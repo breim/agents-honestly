@@ -15,9 +15,9 @@ And then the second question, which is harder because the system is probabilisti
 
 The answer to the first question is short and it is the load-bearing rule of this chapter.
 
-A run resolves its [configuration bundle](/docs/production/versioning) once, when it starts, and uses that bundle until it terminates. Not per turn, not per node, per run.
+A run resolves its [configuration bundle](/book/production/versioning) once, when it starts, and uses that bundle until it terminates. Not per turn, not per node, per run.
 
-The reason is the one [the fallback chapter](/docs/reliability/fallbacks-and-breakers) gave for not swapping models mid-conversation, and it applies to every field in the bundle. A run whose first twelve steps were decided under one prompt and whose last eight are decided under another is not on version A or version B. It is a splice, its outcome is attributable to neither, and it pollutes whatever comparison you were trying to run.
+The reason is the one [the fallback chapter](/book/reliability/fallbacks-and-breakers) gave for not swapping models mid-conversation, and it applies to every field in the bundle. A run whose first twelve steps were decided under one prompt and whose last eight are decided under another is not on version A or version B. It is a splice, its outcome is attributable to neither, and it pollutes whatever comparison you were trying to run.
 
 <Figure caption="A run is the unit. Mixing configurations inside one produces an outcome attributable to nothing." frame={false}>
 
@@ -40,11 +40,11 @@ The reason is the one [the fallback chapter](/docs/reliability/fallbacks-and-bre
 
 </Figure>
 
-For the graph and worker code, the mechanism is [worker versioning versus patching](/docs/durable-execution/determinism-and-retries). Old executions finish on old code by default, and patching exists for the cases where they must not. The bundle follows the same principle for the parts that are data rather than code: pinned at start, carried in the run's state, honored on resume.
+For the graph and worker code, the mechanism is [worker versioning versus patching](/book/durable-execution/determinism-and-retries). Old executions finish on old code by default, and patching exists for the cases where they must not. The bundle follows the same principle for the parts that are data rather than code: pinned at start, carried in the run's state, honored on resume.
 
 ## The paused run is the interesting case
 
-Run D is where the rule needs a policy rather than a default. A run that paused Tuesday for [human approval](/docs/human-in-the-loop/approval-gates) and resumes Thursday will resume into a world with a new prompt, possibly a new model, and possibly a new policy.
+Run D is where the rule needs a policy rather than a default. A run that paused Tuesday for [human approval](/book/human-in-the-loop/approval-gates) and resumes Thursday will resume into a world with a new prompt, possibly a new model, and possibly a new policy.
 
 Three cases, three answers:
 
@@ -54,7 +54,7 @@ Three cases, three answers:
 | A **bug fix** | **New bundle**, migrated | The run is currently producing the bug |
 | A **policy or safety change** | **New bundle**, always | Old rules must not apply to actions taken today |
 
-The third row is not negotiable and it is the one that gets missed. If a [risk tier](/docs/human-in-the-loop/risk-tiers) threshold was lowered on Wednesday because a credit limit was too generous, a run resuming Thursday must not issue Tuesday's credit under Tuesday's rules. This is the same argument [identity](/docs/security/identity) made about re-deriving authorization at the moment of action rather than restoring it from a checkpoint: **authorization and policy are re-evaluated at the point of effect; everything else can be pinned.**
+The third row is not negotiable and it is the one that gets missed. If a [risk tier](/book/human-in-the-loop/risk-tiers) threshold was lowered on Wednesday because a credit limit was too generous, a run resuming Thursday must not issue Tuesday's credit under Tuesday's rules. This is the same argument [identity](/book/security/identity) made about re-deriving authorization at the moment of action rather than restoring it from a checkpoint: **authorization and policy are re-evaluated at the point of effect; everything else can be pinned.**
 
 So the bundle is not one atom for resumption purposes. Split it: prompt, model, and sampling pin at run start; policy, authorization, and limits resolve at the moment of the action. That split is the whole design.
 
@@ -66,9 +66,9 @@ For a normal feature, you can often measure the same user under both variants, o
 
 So the rollout ladder is ordered by how much signal each rung gives for how much risk:
 
-**1 · Offline eval.** The [CI suite](/docs/evals/ci-for-agents) on fixtures. Cheap, fast, no user exposure, and limited by the fact that your fixtures are not your traffic.
+**1 · Offline eval.** The [CI suite](/book/evals/ci-for-agents) on fixtures. Cheap, fast, no user exposure, and limited by the fact that your fixtures are not your traffic.
 
-**2 · Shadow replay.** [Replay](/docs/observability/replay-debugging) a thousand recent production runs against both bundles and diff the decisions. Free, no user impact, real traffic distribution. Valid only while the prompt, the model, and its sampling parameters are unchanged, which means it covers dispatcher, policy, and post-retrieval changes, and that a bundle differing in any of those three needs step 3, not this step.
+**2 · Shadow replay.** [Replay](/book/observability/replay-debugging) a thousand recent production runs against both bundles and diff the decisions. Free, no user impact, real traffic distribution. Valid only while the prompt, the model, and its sampling parameters are unchanged, which means it covers dispatcher, policy, and post-retrieval changes, and that a bundle differing in any of those three needs step 3, not this step.
 
 **3 · Shadow execution.** Run the new bundle alongside the old on live traffic, serve the old, score both. Real inputs, real model calls, no user exposure, and it costs double tokens, which is why it is used on a sample rather than everything.
 
@@ -89,10 +89,10 @@ So canaries are gated on **fast proxies**, with the slow metric confirming after
 | Format compliance / parse rate | Minutes | The change broke output shape |
 | Tool-call distribution | Minutes | The agent is now choosing differently |
 | Turn count, p50 and p99 | Minutes | Looping, or a lost shortcut |
-| [Input tokens per turn](/docs/observability/cost-accounting) | Minutes | The prompt got expensive |
+| [Input tokens per turn](/book/observability/cost-accounting) | Minutes | The prompt got expensive |
 | Escalation rate | ~an hour | The agent lost confidence or authority |
 | Error and refusal rate | ~an hour | — |
-| [Sampled quality score](/docs/evals/online-evals) | Hours to days | The thing you actually care about |
+| [Sampled quality score](/book/evals/online-evals) | Hours to days | The thing you actually care about |
 | Resolution rate | Days | Confirmation |
 
 Two rules make this work.
@@ -151,15 +151,15 @@ async def start_run(input, rollout):
 </Tab>
 </Tabs>
 
-The **holdout** is worth the extra line. A small set of tenants that never receives canaries gives you a stable baseline to compare against when a metric moves. Otherwise a slow global shift and a bad canary look identical, which is [the drift diagnosis problem](/docs/observability/drift) arriving during a rollout.
+The **holdout** is worth the extra line. A small set of tenants that never receives canaries gives you a stable baseline to compare against when a metric moves. Otherwise a slow global shift and a bad canary look identical, which is [the drift diagnosis problem](/book/observability/drift) arriving during a rollout.
 
 ## Blast radius, not percentage
 
 The last idea, and it is the one that separates agent rollouts from feature flags.
 
-A 1% canary on a read-only feature exposes 1% of users to a worse experience. A 1% canary on an agent that issues credits and sends email exposes 1% of users to **irreversible actions taken by an unvalidated configuration**, and [rollback does not un-send](/docs/production/versioning).
+A 1% canary on a read-only feature exposes 1% of users to a worse experience. A 1% canary on an agent that issues credits and sends email exposes 1% of users to **irreversible actions taken by an unvalidated configuration**, and [rollback does not un-send](/book/production/versioning).
 
-So gate the rollout on the same axis [risk tiers](/docs/human-in-the-loop/risk-tiers) already gave you:
+So gate the rollout on the same axis [risk tiers](/book/human-in-the-loop/risk-tiers) already gave you:
 
 | Stage | Tier 0 (reversible, small) | Tier 1+ (money, external, wide) |
 | --- | --- | --- |
@@ -171,7 +171,7 @@ So gate the rollout on the same axis [risk tiers](/docs/human-in-the-loop/risk-t
 A new bundle can serve tier-0 traffic freely while any tier-1 action it proposes goes to a human for the duration of the canary. The reviewers see the new version's decisions before those decisions become effects, which is a genuinely cheap safety property, because the escalation machinery already exists and the canary is small.
 
 <Aside type="caution" title="Change one thing">
-Never move the prompt and the model in the same rollout. When the metric shifts you will not know which caused it, and, because you [cannot roll back a model](/docs/production/versioning), you may not be able to unwind half of it.
+Never move the prompt and the model in the same rollout. When the metric shifts you will not know which caused it, and, because you [cannot roll back a model](/book/production/versioning), you may not be able to unwind half of it.
 
 The same applies to shipping a prompt change together with a corpus re-index. Two variables, one measurement, no conclusion. Sequence them, even though it doubles the calendar time, because the alternative is a result you cannot act on.
 </Aside>
@@ -198,7 +198,7 @@ Which is worth knowing before you need to say it out loud during an incident.
 
 ---
 
-Next: [Cost Engineering](/docs/production/cost-engineering), model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
+Next: [Cost Engineering](/book/production/cost-engineering), model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
 
 ## Takeaways
 

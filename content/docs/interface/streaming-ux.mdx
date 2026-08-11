@@ -3,7 +3,7 @@ title: "Streaming UX"
 description: "Token streaming, tool-call streaming, cancellation, and streams that survive a page refresh."
 ---
 
-[Part VII covered what to emit](/docs/langgraph/streaming-and-control) and when to stop. This chapter is the other end of the wire: what the browser does with it, and the two properties that only exist at the client edge. Surviving a refresh, and knowing what a closed tab means.
+[Part VII covered what to emit](/book/langgraph/streaming-and-control) and when to stop. This chapter is the other end of the wire: what the browser does with it, and the two properties that only exist at the client edge. Surviving a refresh, and knowing what a closed tab means.
 
 ## Streaming does not make anything faster
 
@@ -25,17 +25,17 @@ Which produces a result that decides where to spend effort:
 
 > **0.4s to first token at 100 tokens/sec feels faster than 1.2s at 200 tokens/sec**, even though the second one finishes sooner.
 
-Which makes one implementation detail decide the whole budget on a reasoning model. Thinking streams as its own delta type, and **thinking always arrives before text**. So the first token off the wire is a reasoning token, not an answer token. A client that renders it hits the budget above. A client that filters for the answer and drops the rest has silently redefined time-to-first-token as *time-to-first-token-after-the-model-finishes-thinking*, which at [the default effort level](/docs/production/cost-engineering) is seconds rather than milliseconds. The stream was fast; the renderer threw the fast part away.
+Which makes one implementation detail decide the whole budget on a reasoning model. Thinking streams as its own delta type, and **thinking always arrives before text**. So the first token off the wire is a reasoning token, not an answer token. A client that renders it hits the budget above. A client that filters for the answer and drops the rest has silently redefined time-to-first-token as *time-to-first-token-after-the-model-finishes-thinking*, which at [the default effort level](/book/production/cost-engineering) is seconds rather than milliseconds. The stream was fast; the renderer threw the fast part away.
 
 That is a choice worth making deliberately rather than by omission, and it is the same choice as everywhere else in this chapter: showing the work is what buys the perception. If you would rather not show reasoning to a customer, the honest fix is a lower effort setting or a rendered placeholder, not a spinner in front of a stream that was already arriving.
 
-TTFT dominates the impression; throughput barely registers. That is why [the previous part](/docs/durability/latency) said the entry path is the only place milliseconds are worth engineering, and it is why optimising tokens-per-second is usually the wrong project.
+TTFT dominates the impression; throughput barely registers. That is why [the previous part](/book/durability/latency) said the entry path is the only place milliseconds are worth engineering, and it is why optimising tokens-per-second is usually the wrong project.
 
 ## What the first token has to be
 
 Here is the complication for agents. A support agent's first genuine token might be twenty seconds away, because it is going to call three tools before it has anything to say.
 
-So the first thing on the wire is not prose. [Part VII's rule](/docs/langgraph/streaming-and-control), *progress beats prose*, is what fills the perceptual budget:
+So the first thing on the wire is not prose. [Part VII's rule](/book/langgraph/streaming-and-control), *progress beats prose*, is what fills the perceptual budget:
 
 ```
    0.2s   Reading ticket #8823                    ← the "first token"
@@ -88,7 +88,7 @@ The common implementation is the one to copy: the server mints a `streamId` when
 <Aside type="caution" title="The stream is not the run">
 The architectural point that this whole chapter depends on, and the one that goes wrong quietly.
 
-[Part XI established](/docs/durability/not-a-background-job) that the run is a durable workflow with a business identity. The stream is a **projection** of that run: a view, buffered separately, reconnectable independently.
+[Part XI established](/book/durability/not-a-background-job) that the run is a durable workflow with a business identity. The stream is a **projection** of that run: a view, buffered separately, reconnectable independently.
 
 If you conflate the two, a page refresh does not resume a view; it starts a second agent. The user now has two runs against one ticket, both spending money, and the one they are watching is not necessarily the one that will write the answer.
 
@@ -104,12 +104,12 @@ A dropped connection is ambiguous between *refreshing*, *switched tabs*, *went t
 | Event | What it means | What to do |
 | --- | --- | --- |
 | Connection drops | Nothing knowable | Keep running. Keep buffering. |
-| User clicks Stop | An explicit decision | [Signal the workflow](/docs/durable-execution/signals-and-children) |
+| User clicks Stop | An explicit decision | [Signal the workflow](/book/durable-execution/signals-and-children) |
 | Nobody returns for N minutes | Possibly abandoned | A timeout policy, decided in advance |
 
-**Never infer intent from a disconnect.** The failure in the other direction is worse than it sounds: an agent that cancels on disconnect will abandon a refund halfway through because someone's laptop slept, and the [compensation](/docs/durability/compensation) it needs was never written for a cancellation nobody made.
+**Never infer intent from a disconnect.** The failure in the other direction is worse than it sounds: an agent that cancels on disconnect will abandon a refund halfway through because someone's laptop slept, and the [compensation](/book/durability/compensation) it needs was never written for a cancellation nobody made.
 
-Real cancellation, when it does arrive, goes all the way down: [the heartbeating model activity receives it](/docs/durability/agent-as-workflow) and aborts the in-flight call rather than generating tokens nobody will read.
+Real cancellation, when it does arrive, goes all the way down: [the heartbeating model activity receives it](/book/durability/agent-as-workflow) and aborts the in-flight call rather than generating tokens nobody will read.
 
 ## Rendering, briefly
 
@@ -119,9 +119,9 @@ Four things that are all learned the same expensive way:
 
 **Do not re-parse markdown on every chunk.** Incremental parsing of half-finished syntax produces flicker: a heading that is briefly a bullet, a code fence that opens and closes. Parse on boundaries, or render text until the block completes.
 
-**Tool calls are structured elements, not text.** *"Looking up order 4921"* should be a component with a state, not a string the model wrote. That is [the next chapter's subject](/docs/interface/generative-ui-and-approvals).
+**Tool calls are structured elements, not text.** *"Looking up order 4921"* should be a component with a state, not a string the model wrote. That is [the next chapter's subject](/book/interface/generative-ui-and-approvals).
 
-**Anything you show, you have said.** [Part VII's commitment rule](/docs/langgraph/streaming-and-control) lands hardest here, because a streamed intermediate that later turns out wrong is not an internal detail. The user read it. Streaming a draft answer that a policy check subsequently overturns is a worse experience than five silent seconds.
+**Anything you show, you have said.** [Part VII's commitment rule](/book/langgraph/streaming-and-control) lands hardest here, because a streamed intermediate that later turns out wrong is not an internal detail. The user read it. Streaming a draft answer that a policy check subsequently overturns is a worse experience than five silent seconds.
 
 ## Atlas, concretely
 
@@ -141,7 +141,7 @@ The last two rows are the same decision seen twice. Atlas streams what it is *do
 
 ---
 
-Next: [Generative UI and Tool Approvals](/docs/interface/generative-ui-and-approvals), rendering tool calls as interface, and putting the approval gate where the user actually is.
+Next: [Generative UI and Tool Approvals](/book/interface/generative-ui-and-approvals), rendering tool calls as interface, and putting the approval gate where the user actually is.
 
 ## Takeaways
 

@@ -3,7 +3,7 @@ title: "Wiring the UI to a Durable Backend"
 description: "Start, signal, query, reconnect: a React front end over agents that outlive the browser tab."
 ---
 
-The pieces are specified, and they come from two different parts, which is the reason this chapter exists. Part XI supplied [a run with a business identity](/docs/durability/not-a-background-job) and [a validated acknowledgement in one round trip](/docs/durability/latency); Part XIII has supplied [a buffered stream that survives a refresh](/docs/interface/streaming-ux) and [rendered tool calls](/docs/interface/generative-ui-and-approvals). This chapter connects them, and the connecting layer turns out to carry the security of the whole design.
+The pieces are specified, and they come from two different parts, which is the reason this chapter exists. Part XI supplied [a run with a business identity](/book/durability/not-a-background-job) and [a validated acknowledgement in one round trip](/book/durability/latency); Part XIII has supplied [a buffered stream that survives a refresh](/book/interface/streaming-ux) and [rendered tool calls](/book/interface/generative-ui-and-approvals). This chapter connects them, and the connecting layer turns out to carry the security of the whole design.
 
 ## The browser never talks to the cluster
 
@@ -29,7 +29,7 @@ There is no browser client for a workflow engine, and you would not want one. It
 
 | The user… | Verb | Mechanism | Returns |
 | --- | --- | --- | --- |
-| Opens a ticket that has no run | **Start** | [Update-with-start](/docs/durability/latency) | A validated acknowledgement, in one trip |
+| Opens a ticket that has no run | **Start** | [Update-with-start](/book/durability/latency) | A validated acknowledgement, in one trip |
 | Sends a message to a live run | **Signal** | Signal, or update if the outcome matters | Accepted / the handler's answer |
 | Loads a page mid-run | **Query** | A query against the live execution | Current state, once |
 | Comes back after a refresh | **Reconnect** | The stream buffer, by `Last-Event-ID` | Everything missed, then live |
@@ -62,7 +62,7 @@ app.post('/tickets/:id/reply', async (req, res) => {
 
 Note `404` rather than `403` on the authorization failure. Telling an attacker that ticket 8824 exists is most of the work of enumerating it.
 
-This is the same rule as [the requester rule from Part VIII](/docs/tools/tools-are-apis-for-models), one layer out: **the caller proposes the subject, your code supplies the authority.** The pattern has now appeared at the tool boundary, the policy layer, and the HTTP layer, which is a reasonable sign that it is the actual invariant of the whole system.
+This is the same rule as [the requester rule from Part VIII](/book/tools/tools-are-apis-for-models), one layer out: **the caller proposes the subject, your code supplies the authority.** The pattern has now appeared at the tool boundary, the policy layer, and the HTTP layer, which is a reasonable sign that it is the actual invariant of the whole system.
 
 ## Do not poll queries
 
@@ -84,7 +84,7 @@ The honest cost is that a projection is eventually consistent and can briefly di
 
 A page opens and the run is at step seven. The obvious sequence is: query for state, render, attach the stream. That sequence drops events. Anything emitted between the query returning and the stream attaching is gone, and nothing reports it.
 
-The fix is the same [stream-first ordering](/docs/interface/streaming-ux) this book has now needed three times:
+The fix is the same [stream-first ordering](/book/interface/streaming-ux) this book has now needed three times:
 
 ```
    ① open the stream          (it begins buffering immediately)
@@ -97,7 +97,7 @@ The fix is the same [stream-first ordering](/docs/interface/streaming-ux) this b
 Open first, snapshot second, reconcile by ID. The stream is already buffered, so nothing is lost while the snapshot is in flight.
 
 <Aside type="caution" title="Four things the API layer must not do">
-**Do not hold the request open for the run.** [Eight minutes against a sixty-second proxy timeout](/docs/durability/not-a-background-job). The whole of Part XIII exists because of this.
+**Do not hold the request open for the run.** [Eight minutes against a sixty-second proxy timeout](/book/durability/not-a-background-job). The whole of Part XIII exists because of this.
 
 **Do not start work on `GET`.** A page load, a prefetch, or a link preview will then start an agent. Starting is a `POST`, and it is idempotent because the workflow ID deduplicates it.
 
@@ -110,7 +110,7 @@ Open first, snapshot second, reconcile by ID. The stream is already buffered, so
 
 If the stream is a projection with a buffer, then two tabs, a phone, and a colleague watching the same ticket are all just additional readers of one buffer. Nothing about the run changes, nothing coordinates, nothing races.
 
-The failure this avoids is the one where each surface starts its own run, and it is [the same failure a refresh causes](/docs/interface/streaming-ux) when the stream and the run are the same object. If opening a second tab can double your token spend, the architecture is wrong in a way no amount of front-end work will fix.
+The failure this avoids is the one where each surface starts its own run, and it is [the same failure a refresh causes](/book/interface/streaming-ux) when the stream and the run are the same object. If opening a second tab can double your token spend, the architecture is wrong in a way no amount of front-end work will fix.
 
 ## Atlas, concretely
 
@@ -127,7 +127,7 @@ Six endpoints, and the only one that touches a database directly is the list. Ev
 
 ---
 
-Next: [Interface Patterns for Trust](/docs/interface/trust-patterns). Provenance, progress, undo, confidence, failure states: the vocabulary that makes an agent usable by sceptics.
+Next: [Interface Patterns for Trust](/book/interface/trust-patterns). Provenance, progress, undo, confidence, failure states: the vocabulary that makes an agent usable by sceptics.
 
 ## Takeaways
 

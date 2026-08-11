@@ -9,7 +9,7 @@ The primary model endpoint degrades. Without a ladder, every run fails and every
 
 With a naive ladder, something worse happens: availability holds at 100%, nobody is paged, and six days later a support lead mentions the replies have been "a bit off all week." The secondary model formats tool arguments differently, one parser has been silently dropping a field, and every request returned `200 OK`.
 
-The naive ladder traded a loud failure for a quiet one. For a system whose [worst failure mode is plausible output](/docs/reliability/error-taxonomy), that is usually a bad trade, and it is the default outcome unless the ladder is designed against it.
+The naive ladder traded a loud failure for a quiet one. For a system whose [worst failure mode is plausible output](/book/reliability/error-taxonomy), that is usually a bad trade, and it is the default outcome unless the ladder is designed against it.
 
 ## Forces
 
@@ -52,9 +52,9 @@ Four rules:
 
 **Prefer reducing scope to swapping models.** Rung 3 degrades a model you have already evaluated, in a way you can predict and measure. Rungs 4 and 5 change the one component whose behaviour you cannot fully specify, in production, on a path nobody tested.
 
-**Only transient failures descend.** Falling back on [a content refusal](/docs/patterns/failure/non-retryable-model-errors) is shopping for a provider that will comply; falling back on a malformed request just fails again elsewhere. The eligibility check is the class, not the status code.
+**Only transient failures descend.** Falling back on [a content refusal](/book/patterns/failure/non-retryable-model-errors) is shopping for a provider that will comply; falling back on a malformed request just fails again elsewhere. The eligibility check is the class, not the status code.
 
-**High-stakes work does not degrade: it escalates.** A [tier-2 decision](/docs/human-in-the-loop/risk-tiers) served by the cheapest model still answering is a bad answer at a discount. Above tier 0 the correct rung is the human one.
+**High-stakes work does not degrade: it escalates.** A [tier-2 decision](/book/human-in-the-loop/risk-tiers) served by the cheapest model still answering is a bad answer at a discount. Above tier 0 the correct rung is the human one.
 
 **Record `served_by` on every response and every span.** Without it, silent degradation is undetectable *in principle*, and the alert is on the **rate of fallback**, because a rung serving 30% of traffic is a quality story that error monitoring will never tell you.
 
@@ -134,13 +134,13 @@ Three lines carry the design: the class check that decides *whether* to descend,
 
 ## Trade-offs
 
-**The fallback path is never exercised.** It runs 0.1% of the time and debuts during an incident. Two disciplines fix it: **evaluate the fallback configuration as its own variant** in [CI](/docs/evals/ci-for-agents) against the same suite with its own quality bar, and **route a small continuous share**, 1% of tier-0 traffic, through it permanently, so it is warm and monitored rather than theoretical.
+**The fallback path is never exercised.** It runs 0.1% of the time and debuts during an incident. Two disciplines fix it: **evaluate the fallback configuration as its own variant** in [CI](/book/evals/ci-for-agents) against the same suite with its own quality bar, and **route a small continuous share**, 1% of tier-0 traffic, through it permanently, so it is warm and monitored rather than theoretical.
 
 **Everyone's secondary is the same secondary.** Provider outages correlate, and failing over converts your outage into a thundering herd against a provider now receiving everyone else's traffic too. Which means the rungs guaranteed to be available are the ones that need no external capacity: reduced scope, queue-and-retry, and humans.
 
-**Mid-run swaps produce spliced runs.** Switching models at step twelve means the second half is decided by a model that did not make the first half's decisions, reading a transcript in another model's voice. Prefer failing over at run boundaries and [resuming from the checkpoint](/docs/langgraph/persistence); where mid-run is unavoidable, do it at a node boundary and record the switch.
+**Mid-run swaps produce spliced runs.** Switching models at step twelve means the second half is decided by a model that did not make the first half's decisions, reading a transcript in another model's voice. Prefer failing over at run boundaries and [resuming from the checkpoint](/book/langgraph/persistence); where mid-run is unavoidable, do it at a node boundary and record the switch.
 
-**Compliance surface changes.** A secondary provider is a different data processor, possibly in a different jurisdiction, with different retention and training terms. Pin the region and settle the terms for every rung, or [remove it from the ladder](/docs/security/pii-and-compliance). A failover that ships customer data somewhere your subprocessor list does not cover is a compliance incident produced by a reliability mechanism.
+**Compliance surface changes.** A secondary provider is a different data processor, possibly in a different jurisdiction, with different retention and training terms. Pin the region and settle the terms for every rung, or [remove it from the ladder](/book/security/pii-and-compliance). A failover that ships customer data somewhere your subprocessor list does not cover is a compliance incident produced by a reliability mechanism.
 
 ## When not to use it
 
@@ -162,8 +162,8 @@ So the honest summary of this pattern is that it converts an availability proble
 
 ## Related
 
-- [Fallbacks and Circuit Breakers](/docs/reliability/fallbacks-and-breakers): the chapter, with the six rungs and the four ways fallbacks fail
-- [Tool Circuit Breaker](/docs/patterns/failure/tool-circuit-breaker): the per-rung breaker that decides when to skip
-- [Non-Retryable Model Errors](/docs/patterns/failure/non-retryable-model-errors): the class check that gates descent
-- [Escalation Ladder](/docs/patterns/control/escalation-ladder): rung 6, and why it is a first-class outcome
-- [Detecting Drift](/docs/observability/drift): quality segmented by served model, as an ongoing measurement
+- [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers): the chapter, with the six rungs and the four ways fallbacks fail
+- [Tool Circuit Breaker](/book/patterns/failure/tool-circuit-breaker): the per-rung breaker that decides when to skip
+- [Non-Retryable Model Errors](/book/patterns/failure/non-retryable-model-errors): the class check that gates descent
+- [Escalation Ladder](/book/patterns/control/escalation-ladder): rung 6, and why it is a first-class outcome
+- [Detecting Drift](/book/observability/drift): quality segmented by served model, as an ongoing measurement

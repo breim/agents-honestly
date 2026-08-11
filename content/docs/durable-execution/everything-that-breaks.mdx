@@ -57,14 +57,14 @@ The distinction people get wrong: **a 429 should not count as a circuit-breaker 
 
 A **529 is** a failure. The provider is saturated, and continuing to hammer it helps nobody.
 
-And the third case is the one no error handler catches: **latency degrading under load with no error returned at all.** Nothing throws. Requests just take four times longer, timeouts start firing somewhere downstream, and your dashboards show a healthy error rate. Timeouts are the only instrument that sees this, which is [why the previous chapters spend so long on them](/docs/durable-execution/determinism-and-retries).
+And the third case is the one no error handler catches: **latency degrading under load with no error returned at all.** Nothing throws. Requests just take four times longer, timeouts start firing somewhere downstream, and your dashboards show a healthy error rate. Timeouts are the only instrument that sees this, which is [why the previous chapters spend so long on them](/book/durable-execution/determinism-and-retries).
 </Aside>
 
-**The tool call ends in "unknown."** The third state from [idempotency](/docs/tools/idempotency): the connection died and most timeouts happen on the *response*, so the operation probably succeeded. Without a paired read, no amount of infrastructure resolves it.
+**The tool call ends in "unknown."** The third state from [idempotency](/book/tools/idempotency): the connection died and most timeouts happen on the *response*, so the operation probably succeeded. Without a paired read, no amount of infrastructure resolves it.
 
-**A poison input never terminates.** A ticket that makes the model loop: call a tool, read the result, call the same tool. Bounds catch it, which is what [bounds are for](/docs/first-agent/the-loop-by-hand), and the run still costs a full step budget to learn nothing.
+**A poison input never terminates.** A ticket that makes the model loop: call a tool, read the result, call the same tool. Bounds catch it, which is what [bounds are for](/book/first-agent/the-loop-by-hand), and the run still costs a full step budget to learn nothing.
 
-**Time itself fails.** The approval that waits three days outlives the token that authenticated it and the [idempotency key window](/docs/tools/idempotency) that would have deduplicated the retry. Long waits are not just long. They cross the expiry boundary of everything around them.
+**Time itself fails.** The approval that waits three days outlives the token that authenticated it and the [idempotency key window](/book/tools/idempotency) that would have deduplicated the retry. Long waits are not just long. They cross the expiry boundary of everything around them.
 
 ## The failure that matters most is the one you cannot see
 
@@ -76,12 +76,12 @@ Its taxonomy of mechanisms reads like an index of this book: environment and pla
 
 This book keeps meeting that pattern under different names, and it is worth seeing them in one place:
 
-- A [tool result truncated](/docs/tools/result-design) mid-payload and reported as complete.
-- A [selector that dropped the right document](/docs/context/dynamic-selection), so the model answered from the second-best source.
-- A [run that halted on a bound](/docs/first-agent/the-loop-by-hand) and returned whatever text was lying around, marked handled.
-- A [workflow task retrying forever](/docs/durable-execution/determinism-and-retries) while the execution's status says `RUNNING`.
-- A [tool that found nothing](/docs/tools/errors-as-instructions) and reported it as an error, or found something and reported nothing.
-- A [crashed run](/docs/langgraph/persistence) whose checkpoint sits in a table with nothing scheduled to notice it. Durable, and permanently stopped.
+- A [tool result truncated](/book/tools/result-design) mid-payload and reported as complete.
+- A [selector that dropped the right document](/book/context/dynamic-selection), so the model answered from the second-best source.
+- A [run that halted on a bound](/book/first-agent/the-loop-by-hand) and returned whatever text was lying around, marked handled.
+- A [workflow task retrying forever](/book/durable-execution/determinism-and-retries) while the execution's status says `RUNNING`.
+- A [tool that found nothing](/book/tools/errors-as-instructions) and reported it as an error, or found something and reported nothing.
+- A [crashed run](/book/langgraph/persistence) whose checkpoint sits in a table with nothing scheduled to notice it. Durable, and permanently stopped.
 
 Loud failures get fixed in week one. **The failures that survive to month six are the ones that look like success**. Durable execution matters more than its feature list suggests because its mechanism produces, as a by-product, a complete and queryable record of what actually happened.
 
@@ -101,9 +101,9 @@ Being precise, because this part is about to spend four chapters on machinery:
 | The model picks the wrong tool | **Not addressed.** That is Part VIII. |
 | Quality decaying as context grows | **Not addressed.** That is Part III. |
 | Your evaluation measures the wrong thing | **Not addressed.** That is Part XIV. |
-| A plan that violates a rule, or never converges | **Not addressed.** That is [Part VI](/docs/workflows/the-determinism-test), and the bounds in Part XXI. |
-| Agents overwriting each other | **Not addressed.** That is [Part XIX](/docs/multi-agent/when-not-to), which mostly argues against having them. |
-| Injection, exfiltration, unauthorized action | **Not addressed at all.** That is [Part XVII](/docs/security/threat-model). A replayable journal of a breach is still a breach. |
+| A plan that violates a rule, or never converges | **Not addressed.** That is [Part VI](/book/workflows/the-determinism-test), and the bounds in Part XXI. |
+| Agents overwriting each other | **Not addressed.** That is [Part XIX](/book/multi-agent/when-not-to), which mostly argues against having them. |
+| Injection, exfiltration, unauthorized action | **Not addressed at all.** That is [Part XVII](/book/security/threat-model). A replayable journal of a breach is still a breach. |
 
 The bottom three matter as much as the top seven. Durable execution makes an unreliable *machine* reliable; it has nothing to say about an unreliable *decision*. A system with perfect durability and a badly designed tool catalogue will fail every ticket identically, forever, with an immaculate audit trail.
 
@@ -125,7 +125,7 @@ That distribution is typical, and it is the honest case for this part: **most of
 
 ---
 
-Next: [Why Durable Execution](/docs/durable-execution/why-durable-execution). Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
+Next: [Why Durable Execution](/book/durable-execution/why-durable-execution). Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
 
 ## Takeaways
 

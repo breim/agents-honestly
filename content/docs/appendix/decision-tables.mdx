@@ -9,7 +9,7 @@ Read it as a checklist when starting something, or as a differential when someth
 
 ## Architecture
 
-**Should this process become an agent?** [Process discovery and value](/docs/foundations/process-discovery-and-value)
+**Should this process become an agent?** [Process discovery and value](/book/foundations/process-discovery-and-value)
 
 | What you found | Decision |
 | --- | --- |
@@ -23,33 +23,33 @@ Read it as a checklist when starting something, or as a differential when someth
 
 | If | Build |
 | --- | --- |
-| The steps are known in advance | A [workflow](/docs/workflows/the-determinism-test). Model calls at the judgment steps only |
+| The steps are known in advance | A [workflow](/book/workflows/the-determinism-test). Model calls at the judgment steps only |
 | The next action requires having seen what the last one returned | An agent loop. Varied *content* is not this test |
-| You can enumerate the operations | Enumerate them. [Do not add `run_python`](/docs/security/sandboxing) |
-| It is a single classification or extraction | [One structured call](/docs/foundations/structured-output), no loop |
+| You can enumerate the operations | Enumerate them. [Do not add `run_python`](/book/security/sandboxing) |
+| It is a single classification or extraction | [One structured call](/book/foundations/structured-output), no loop |
 
-**What tier of architecture?** [Reference architecture](/docs/production/reference-architecture)
+**What tier of architecture?** [Reference architecture](/book/production/reference-architecture)
 
 | Run outlives a request? | Visible side effects? | Build |
 | --- | --- | --- |
 | No | No | Tier 1, web app plus a model client |
 | No | Yes | Tier 2, plus a dispatcher and idempotency |
 | Yes | No | Tier 2, queue plus a state table |
-| Yes | Yes | Tier 3, [durable execution](/docs/durable-execution/why-durable-execution) |
+| Yes | Yes | Tier 3, [durable execution](/book/durable-execution/why-durable-execution) |
 
-**One agent or several?** [When not to](/docs/multi-agent/when-not-to)
+**One agent or several?** [When not to](/book/multi-agent/when-not-to)
 
 | Reason given | Verdict |
 | --- | --- |
 | Context genuinely exceeds a window after compaction and selective retrieval | **Split**, isolation |
-| A component must be denied tools or data another holds | **Split**, [trust boundary](/docs/security/prompt-injection) |
+| A component must be denied tools or data another holds | **Split**, [trust boundary](/book/security/prompt-injection) |
 | Two teams deploy and are paged independently | **Split**, ownership |
 | "Specialist agents perform better" | A system prompt. Don't split |
 | "It mirrors our org" | Conway's law. Don't split |
-| "It parallelizes" | True only for disjoint items, that is [map-reduce](/docs/patterns/scale/mapreduce-tree), not conversation |
+| "It parallelizes" | True only for disjoint items, that is [map-reduce](/book/patterns/scale/mapreduce-tree), not conversation |
 | You cannot yet state the handoff contract and termination condition | **Not yet** |
 
-**Supervisor or handoff?** [Supervisor and handoff](/docs/multi-agent/supervisor-and-handoff)
+**Supervisor or handoff?** [Supervisor and handoff](/book/multi-agent/supervisor-and-handoff)
 
 | | Supervisor | Handoff |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ Read it as a checklist when starting something, or as a differential when someth
 | Fails by | Its context is the ceiling; the plan is fixed at maximum ignorance | Nobody owns termination; context evaporates per hop |
 | Default | **Yes** | Only with a coordinator of last resort |
 
-**Function, MCP, A2A, or durable workflow?** [MCP Is Not A2A](/docs/mcp/remote-agents-and-a2a)
+**Function, MCP, A2A, or durable workflow?** [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a)
 
 | Boundary | Use |
 | --- | --- |
@@ -69,48 +69,48 @@ Read it as a checklist when starting something, or as a differential when someth
 
 ## Context and retrieval
 
-**Where does the answer live?** [Part IV](/docs/retrieval/where-does-the-answer-live)
+**Where does the answer live?** [Part IV](/book/retrieval/where-does-the-answer-live)
 
 | The question is | Route to |
 | --- | --- |
 | "What does the policy say about X" | Semantic search over documents |
 | "How much / how many / total by" | **SQL.** Not a vector index |
-| "Why is this account at risk" | [Graph traversal](/docs/graphs/when-relationships-are-the-query) |
+| "Why is this account at risk" | [Graph traversal](/book/graphs/when-relationships-are-the-query) |
 | "Where is order 4921 right now" | Live API |
 | "What did the customer say last Tuesday" | The conversation store |
 
-**Which context technique?** [Part III](/docs/context/context-as-budget)
+**Which context technique?** [Part III](/book/context/context-as-budget)
 
 | Problem | Technique |
 | --- | --- |
-| Window fills over a long run | [Compaction](/docs/context/compaction) at a checkpoint, not edge-trimming |
-| The same payload is re-sent every turn | Summarize to the fields used; [pointers over payloads](/docs/context/dynamic-selection) |
-| Cache keeps missing | [Stable prefix](/docs/patterns/context/stable-prefix), nothing before the breakpoint moves |
-| A subtask is noisy | [Sub-agent isolation](/docs/patterns/context/subagent-isolation) |
-| The model reasons from its own wrong number | [Typed scratchpad](/docs/context/context-poisoning), only tool-returned values |
+| Window fills over a long run | [Compaction](/book/context/compaction) at a checkpoint, not edge-trimming |
+| The same payload is re-sent every turn | Summarize to the fields used; [pointers over payloads](/book/context/dynamic-selection) |
+| Cache keeps missing | [Stable prefix](/book/patterns/context/stable-prefix), nothing before the breakpoint moves |
+| A subtask is noisy | [Sub-agent isolation](/book/patterns/context/subagent-isolation) |
+| The model reasons from its own wrong number | [Typed scratchpad](/book/context/context-poisoning), only tool-returned values |
 | You need it to survive compaction | The scratchpad, not the transcript |
 
 **Which retrieval refinement?**
 
 | Symptom | Fix |
 | --- | --- |
-| Right document, wrong chunk | [Parent–child chunks](/docs/patterns/retrieval/parent-child-chunks) |
-| Exact IDs and codes never match | [Lexical search](/docs/retrieval/lexical-search) alongside semantic |
-| Top-5 is noisy but top-50 contains it | [Two-stage rerank](/docs/patterns/retrieval/two-stage-rerank) |
-| Conversational phrasing retrieves poorly | [Query rewriting](/docs/patterns/retrieval/query-rewriting) |
-| Stale answers on time-sensitive questions | [Freshness routing](/docs/patterns/retrieval/freshness-routing) |
-| Cross-account leakage | [Filtered retrieval](/docs/patterns/retrieval/filtered-retrieval), and prefer separate indexes |
+| Right document, wrong chunk | [Parent–child chunks](/book/patterns/retrieval/parent-child-chunks) |
+| Exact IDs and codes never match | [Lexical search](/book/retrieval/lexical-search) alongside semantic |
+| Top-5 is noisy but top-50 contains it | [Two-stage rerank](/book/patterns/retrieval/two-stage-rerank) |
+| Conversational phrasing retrieves poorly | [Query rewriting](/book/patterns/retrieval/query-rewriting) |
+| Stale answers on time-sensitive questions | [Freshness routing](/book/patterns/retrieval/freshness-routing) |
+| Cross-account leakage | [Filtered retrieval](/book/patterns/retrieval/filtered-retrieval), and prefer separate indexes |
 
 ## Tools
 
-**Tool class, and what it obliges** [Part VIII](/docs/tools/read-and-write-tools)
+**Tool class, and what it obliges** [Part VIII](/book/tools/read-and-write-tools)
 
 | Class | Example | Obligations |
 | --- | --- | --- |
 | ① Pure read | `get_order` | None. Retry and parallelize freely |
 | ② Observed read | `query_warehouse` | Do not repeat unboundedly: it burns quota, starts clocks |
 | ③ Reversible write | `escalate_to_human` | You own the undo |
-| ④ Irreversible write | `issue_credit` | [Idempotency key](/docs/tools/idempotency) + paired read + compensation |
+| ④ Irreversible write | `issue_credit` | [Idempotency key](/book/tools/idempotency) + paired read + compensation |
 | ⑤ External write | `send_reply` | Key checked before sending; alone in its unit of work; paired read |
 
 **Where does this value come from?**
@@ -119,38 +119,38 @@ Read it as a checklist when starting something, or as a differential when someth
 | --- | --- |
 | Tool arguments | The model |
 | Authority, identity, tenant | **Your code** |
-| Idempotency key | **Your code**, [never the model](/docs/tools/idempotency) |
+| Idempotency key | **Your code**, [never the model](/book/tools/idempotency) |
 | Amount on an irreversible write | Re-derived server-side from an ID |
 | Recipient of an external send | The record, not an argument |
 | Taint | The fetcher, never the content |
 
-**API, browser automation, or visual computer use?** [Computer-Using Agents](/docs/tools/computer-using-agents)
+**API, browser automation, or visual computer use?** [Computer-Using Agents](/book/tools/computer-using-agents)
 
 | Available boundary | Prefer |
 | --- | --- |
 | Stable, authorized API | API tool |
 | Web UI with semantic roles, labels, and a stable DOM | Browser automation with role or label locators |
 | Remote desktop, canvas, legacy UI, or no programmatic surface | Visual computer use in an isolated session |
-| Source repository that must be inspected and changed | [Coding workspace](/docs/tools/coding-agents-and-workspaces) with a pinned revision, path and command policy, external checks, and patch handoff |
+| Source repository that must be inspected and changed | [Coding workspace](/book/tools/coding-agents-and-workspaces) with a pinned revision, path and command policy, external checks, and patch handoff |
 | High-value irreversible action | A purpose-built API and approval gate, even if discovery happened through a UI |
 | Any UI action | Assert the postcondition from authoritative state; a click is not proof of success |
 
 ## Reliability
 
-**Retry this?** [Error taxonomy](/docs/reliability/error-taxonomy)
+**Retry this?** [Error taxonomy](/book/reliability/error-taxonomy)
 
 | Failure | Retry | Where |
 | --- | --- | --- |
 | Connection reset, 5xx, overloaded | Yes, backoff + full jitter | SDK only |
-| 429 | Yes, obey `Retry-After` | SDK, with [admission control](/docs/reliability/backpressure) behind it |
+| 429 | Yes, obey `Retry-After` | SDK, with [admission control](/book/reliability/backpressure) behind it |
 | Context length exceeded | **No**, deterministic | Compact and re-enter |
-| Malformed tool arguments | **No transport retry** | [Return it to the model](/docs/tools/errors-as-instructions) |
+| Malformed tool arguments | **No transport retry** | [Return it to the model](/book/tools/errors-as-instructions) |
 | Content refusal | **No** | Escalate |
 | Authorization denied | **No** | Escalate |
 | Timeout on a write | **No** | Paired read first |
-| Wrong answer | Meaningless | [Evals](/docs/evals/eval-discipline) |
+| Wrong answer | Meaningless | [Evals](/book/evals/eval-discipline) |
 
-**Which timeout?** [Timeouts and retries](/docs/reliability/timeouts-and-retries)
+**Which timeout?** [Timeouts and retries](/book/reliability/timeouts-and-retries)
 
 | Guard | Timeout |
 | --- | --- |
@@ -159,7 +159,7 @@ Read it as a checklist when starting something, or as a differential when someth
 | Stream died mid-flight | **Inactivity**, not total |
 | The run as a whole | One deadline, set at start, propagated |
 
-**Which fallback rung?** [Fallbacks and breakers](/docs/reliability/fallbacks-and-breakers)
+**Which fallback rung?** [Fallbacks and breakers](/book/reliability/fallbacks-and-breakers)
 
 | Rung | Allowed for |
 | --- | --- |
@@ -170,7 +170,7 @@ Read it as a checklist when starting something, or as a differential when someth
 
 ## Durability
 
-**Workflow or activity?** [Part XI](/docs/durability/agent-as-workflow)
+**Workflow or activity?** [Part XI](/book/durability/agent-as-workflow)
 
 | The code | Goes in |
 | --- | --- |
@@ -181,7 +181,7 @@ Read it as a checklist when starting something, or as a differential when someth
 | Reads the clock, generates an ID | The SDK's replay-safe version |
 | Waits days for a human | Workflow timer + signal |
 
-**Which durable runtime?** [Two Durable Runtimes](/docs/interface/two-durable-runtimes)
+**Which durable runtime?** [Two Durable Runtimes](/book/interface/two-durable-runtimes)
 
 | If | Choose |
 | --- | --- |
@@ -191,7 +191,7 @@ Read it as a checklist when starting something, or as a differential when someth
 | **Your company already runs one of them** | That one. It is not a per-project decision |
 | Both are already in the building | One owns durability; the other is a library. Do not use `WorkflowAgent` |
 
-**In-flight runs during a change** [Rollout](/docs/production/rollout)
+**In-flight runs during a change** [Rollout](/book/production/rollout)
 
 | The change is | Running executions |
 | --- | --- |
@@ -201,7 +201,7 @@ Read it as a checklist when starting something, or as a differential when someth
 
 ## Human in the loop
 
-**What tier is this call?** [Risk tiers](/docs/human-in-the-loop/risk-tiers)
+**What tier is this call?** [Risk tiers](/book/human-in-the-loop/risk-tiers)
 
 | Reversibility ↓ / Blast radius → | One entity, small | Many, moderate | Wide, large |
 | --- | --- | --- | --- |
@@ -213,14 +213,14 @@ Blast radius is computed from the **arguments**, at call time, not from the tool
 
 ## Security
 
-**Which control for which threat?** [Part XVII](/docs/security/threat-model)
+**Which control for which threat?** [Part XVII](/book/security/threat-model)
 
 | Threat | Control | Not a control |
 | --- | --- | --- |
 | Indirect prompt injection | Capability ceiling on tainted runs | Input classifiers, delimiters |
 | Corpus poisoning | Provenance column + trust-split indexes | Outlier detection |
 | Over-scoped tools | Argument scoping; remove the parameter | Tool-level allowlists alone |
-| Agent as superuser | [Delegation](/docs/security/identity): `sub` = user, `act` = agent | Filtering results after a privileged read |
+| Agent as superuser | [Delegation](/book/security/identity): `sub` = user, `act` = agent | Filtering results after a privileged read |
 | Cross-tenant leakage | Row-level security; separate indexes | `WHERE` in the query builder |
 | Code execution | MicroVM + broker + egress deny | A container |
 | Data exfiltration | Remove the egress vector | Monitoring for it |
@@ -230,7 +230,7 @@ Blast radius is computed from the **arguments**, at call time, not from the tool
 
 ## Governance
 
-**What evidence must exist at each lifecycle stage?** [AI Governance](/docs/production/ai-governance)
+**What evidence must exist at each lifecycle stage?** [AI Governance](/book/production/ai-governance)
 
 | Stage | Minimum evidence |
 | --- | --- |
@@ -245,18 +245,18 @@ Use the [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-cor
 
 ## Evals and operations
 
-**Which eval, for which question?** [Part XIV](/docs/evals/eval-discipline)
+**Which eval, for which question?** [Part XIV](/book/evals/eval-discipline)
 
 | Question | Instrument |
 | --- | --- |
-| Did my change break something? | [CI suite](/docs/evals/ci-for-agents) on fixtures |
-| Did my *code* change break something? | [Replay](/docs/observability/replay-debugging), deterministic |
-| Did the model change under me? | [Frozen canary](/docs/observability/drift), on a schedule |
-| Is it good on real traffic? | [Online scoring](/docs/evals/online-evals) on a sample |
+| Did my change break something? | [CI suite](/book/evals/ci-for-agents) on fixtures |
+| Did my *code* change break something? | [Replay](/book/observability/replay-debugging), deterministic |
+| Did the model change under me? | [Frozen canary](/book/observability/drift), on a schedule |
+| Is it good on real traffic? | [Online scoring](/book/evals/online-evals) on a sample |
 | Would this new policy fire wrongly? | Shadow replay against recorded runs |
 | Is a candidate prompt better? | Shadow execution, then canary |
 
-**Diagnosing a quality drop** [Drift](/docs/observability/drift)
+**Diagnosing a quality drop** [Drift](/book/observability/drift)
 
 | Canary | Inputs | Diagnosis |
 | --- | --- | --- |
@@ -266,7 +266,7 @@ Use the [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-cor
 | Stable | Stable, **retrieval hit rate down** | The corpus moved without touching the inputs. Check the last ingestion diff |
 | Stable | Stable, and still down | Audit the memory store and the tool contracts |
 
-**Which cost lever?** [Cost engineering](/docs/production/cost-engineering)
+**Which cost lever?** [Cost engineering](/book/production/cost-engineering)
 
 | Lever | Leverage | Quality risk |
 | --- | --- | --- |
@@ -280,7 +280,7 @@ Use the [NIST AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-cor
 <Aside type="note" title="The meta-table">
 Four questions recur across every table above, and if you only remember four things, remember these.
 
-**Who owns this state?** Model, graph, workflow, or database. Most architectural mistakes are [state at the wrong altitude](/docs/the-map).
+**Who owns this state?** Model, graph, workflow, or database. Most architectural mistakes are [state at the wrong altitude](/book/the-map).
 
 **Where does this value come from?** If it grants authority, it comes from your code.
 
@@ -291,4 +291,4 @@ Four questions recur across every table above, and if you only remember four thi
 
 ---
 
-Next: [Glossary](/docs/appendix/glossary), terms this field uses inconsistently, defined once.
+Next: [Glossary](/book/appendix/glossary), terms this field uses inconsistently, defined once.

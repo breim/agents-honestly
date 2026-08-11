@@ -16,7 +16,7 @@ One sentence explains all the strategies below:
 
 A short chunk is mostly signal, so its embedding is sharp and it matches a specific question precisely. But handed to the model in isolation, it often lacks what's needed to actually answer: the conditions, the exceptions, the sentence that said which product line this applies to.
 
-A long chunk contains the answer *and* five other topics, so its embedding is a blurry average that matches nothing precisely, and it burns [budget](/docs/context/context-as-budget) on material that isn't relevant.
+A long chunk contains the answer *and* five other topics, so its embedding is a blurry average that matches nothing precisely, and it burns [budget](/book/context/context-as-budget) on material that isn't relevant.
 
 Every strategy in this chapter is an attempt to get the retrieval behaviour of small chunks with the answering behaviour of large ones.
 
@@ -35,7 +35,7 @@ Two recommendations worth stating plainly, because they save most teams a month.
 
 **Start with recursive splitting at around 512 tokens.** It benchmarks as the best general-purpose default, it's cheap, and it handles mixed document types without special-casing. Do not start with semantic chunking because it sounds more sophisticated. It is also around fourteen times slower to build.
 
-The benchmark result underneath that recommendation is worth stating on its own, because it cuts against the metric the rest of this part teaches you to optimize. Semantic chunking *retrieves* better and *answers* worse: it edges out recursive splitting on recall and loses end-to-end by roughly eleven points, because recursive chunks are more coherent and the model can actually use what it is handed. **Recall and end-to-end accuracy are different quantities, and a chunking strategy can buy one by spending the other.** A recall number is a claim about what reached the window, not about what the model could do with it. [The evaluation chapter](/docs/retrieval/retrieval-evals) closes Part IV on exactly this point, that retrieval metrics are proxies and the end-to-end number is the one you ship, and chunking is where the two come apart most visibly, which is the real argument for the recommendation below.
+The benchmark result underneath that recommendation is worth stating on its own, because it cuts against the metric the rest of this part teaches you to optimize. Semantic chunking *retrieves* better and *answers* worse: it edges out recursive splitting on recall and loses end-to-end by roughly eleven points, because recursive chunks are more coherent and the model can actually use what it is handed. **Recall and end-to-end accuracy are different quantities, and a chunking strategy can buy one by spending the other.** A recall number is a claim about what reached the window, not about what the model could do with it. [The evaluation chapter](/book/retrieval/retrieval-evals) closes Part IV on exactly this point, that retrieval metrics are proxies and the end-to-end number is the one you ship, and chunking is where the two come apart most visibly, which is the real argument for the recommendation below.
 
 **Then adopt parent/child**, which has become the standard production pattern precisely because it stops you from having to choose. Embed and index small chunks, a paragraph or a few sentences, so retrieval is precise. But when a child matches, **return its parent**: the full section it came from. You search on precision and generate on sufficiency.
 
@@ -97,7 +97,7 @@ Two mechanisms, and you want both.
 
 **A heading trail, prepended.** Store the chunk with its ancestry: `Returns Policy › Electrical Components › Contract-Tier Accounts › Approval`. This costs a few dozen tokens and makes the chunk self-describing, both to the model and to the retriever.
 
-**Structured metadata, alongside.** Document ID, version, tier, region, effective date: the fields from [the schema](/docs/retrieval/vector-search) two chapters ago. These aren't for the model; they're for the `WHERE` clause, and for the citation the [acceptance spec](/docs/first-agent/the-problem) requires. Atlas must cite document and version, so every chunk must carry document and version. Chunking is where that becomes possible or impossible.
+**Structured metadata, alongside.** Document ID, version, tier, region, effective date: the fields from [the schema](/book/retrieval/vector-search) two chapters ago. These aren't for the model; they're for the `WHERE` clause, and for the citation the [acceptance spec](/book/first-agent/the-problem) requires. Atlas must cite document and version, so every chunk must carry document and version. Chunking is where that becomes possible or impossible.
 
 <Aside type="tip" title="Two modern answers to context loss">
 When boundary context loss is your measured bottleneck, two current techniques attack it directly rather than by moving the cut:
@@ -111,7 +111,7 @@ Both cost more at ingestion. Reach for them when you've proven the bottleneck, n
 
 ## The hard cases
 
-**Tables.** A table split across chunks is worse than useless: you get orphaned rows with no headers and headers with no rows. Extract tables during ingestion and treat each as an atomic unit, or serialize each row with its headers inline. If a table is too large to be one chunk, it is probably data that belongs in [SQL](/docs/retrieval/sql-is-still-the-answer) rather than a corpus.
+**Tables.** A table split across chunks is worse than useless: you get orphaned rows with no headers and headers with no rows. Extract tables during ingestion and treat each as an atomic unit, or serialize each row with its headers inline. If a table is too large to be one chunk, it is probably data that belongs in [SQL](/book/retrieval/sql-is-still-the-answer) rather than a corpus.
 
 **Long lists.** Splitting a numbered list mid-way produces a chunk starting at "7." with no indication of what the list enumerates. Keep the list intro with the list, and prefer to keep lists whole.
 
@@ -123,7 +123,7 @@ Both cost more at ingestion. Reach for them when you've proven the bottleneck, n
 
 **The boundary test.** For your twenty ticket questions, find the chunk that should contain the answer and check whether the *complete* answer is inside it: rule and exceptions, number and unit. This is the test that would have caught the returns clause.
 
-And then the constraint that should shape your appetite for iteration: **re-chunking means re-embedding everything.** From [the embeddings chapter](/docs/retrieval/embeddings), that's a full corpus pass with a real bill, and it invalidates every recall measurement you've taken. Chunking is not a runtime parameter you tune in production; it is a schema decision with a migration cost.
+And then the constraint that should shape your appetite for iteration: **re-chunking means re-embedding everything.** From [the embeddings chapter](/book/retrieval/embeddings), that's a full corpus pass with a real bill, and it invalidates every recall measurement you've taken. Chunking is not a runtime parameter you tune in production; it is a schema decision with a migration cost.
 
 Which is a reason to spend real time on it up front, and a reason to version it. `pipeline_ver: 'e5-large/chunk-v3/1536'` exists precisely so that "which chunking produced this vector" is answerable a year from now.
 
@@ -135,7 +135,7 @@ Roughly 40,000 chunks from 1,200 documents, an average of a bit over thirty per 
 
 ---
 
-Next: [Metadata Is Authorization](/docs/retrieval/metadata-and-authorization), on tenant, department, access level, and why filtering is a security control rather than an optimization.
+Next: [Metadata Is Authorization](/book/retrieval/metadata-and-authorization), on tenant, department, access level, and why filtering is a security control rather than an optimization.
 
 ## Takeaways
 

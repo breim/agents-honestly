@@ -23,10 +23,10 @@ Everything Part IX has already established, collected:
 
 | Cost | What it actually is |
 | --- | --- |
-| A new "unknown" outcome | [The third state](/docs/tools/idempotency): succeeded, failed, *unknown*. Now reachable through one more network |
+| A new "unknown" outcome | [The third state](/book/tools/idempotency): succeeded, failed, *unknown*. Now reachable through one more network |
 | A dependency that moves without your deploy | A server can add tools, reword descriptions, change behaviour on its own schedule |
-| Version skew | Revisions differ meaningfully, and mismatches [surface as behaviour rather than errors](/docs/mcp/servers-clients-transports) |
-| Descriptions you do not own | [Selection accuracy](/docs/tools/tool-discovery) driven by prose you did not write and cannot review |
+| Version skew | Revisions differ meaningfully, and mismatches [surface as behaviour rather than errors](/book/mcp/servers-clients-transports) |
+| Descriptions you do not own | [Selection accuracy](/book/tools/tool-discovery) driven by prose you did not write and cannot review |
 | An operational surface, per server | Auth to configure, a deploy to run, monitoring to wire, credentials to rotate, someone to page |
 
 None of those is large. All of them are **per server**, and servers are one line of configuration to add. That asymmetry is the actual shape of the problem: cheap to adopt, priced monthly forever. It is why the default matters more than any individual decision.
@@ -46,7 +46,7 @@ If both sides live in the same repository, ship in the same deploy, and are owne
 | Different teams, **open or unknown** consumer set | **MCP.** This is M×N inside one company |
 | Different companies | **MCP** |
 
-[The test from the first chapter of this part](/docs/mcp/what-mcp-is) still resolves it fastest: *what breaks if you delete the protocol and paste the tool definitions into your own catalogue?* If the answer is "I would be maintaining an integration someone else currently maintains," keep it. If the answer is "nothing," you have found the boundary that should not exist.
+[The test from the first chapter of this part](/book/mcp/what-mcp-is) still resolves it fastest: *what breaks if you delete the protocol and paste the tool definitions into your own catalogue?* If the answer is "I would be maintaining an integration someone else currently maintains," keep it. If the answer is "nothing," you have found the boundary that should not exist.
 
 <FrameworkCheck decision="Keep domain logic in a plain function. Publish an MCP adapter only when an organizational boundary or an open consumer set appears.">
 <FrameworkOption name="plain">
@@ -69,13 +69,13 @@ If both sides live in the same repository, ship in the same deploy, and are owne
 
 **Hot-path tools called on every run.** The per-call cost is genuinely small. So is the benefit, when the consumer set is exactly one and always will be.
 
-**Anything you would immediately wrap anyway.** [Part VIII's advice for third-party servers](/docs/tools/tools-are-apis-for-models) is to rename, re-describe, and reshape their tools into something your agent can select well. If you own the source and were going to do that work regardless, the protocol contributed nothing but a round trip in the middle of your own wrapper.
+**Anything you would immediately wrap anyway.** [Part VIII's advice for third-party servers](/book/tools/tools-are-apis-for-models) is to rename, re-describe, and reshape their tools into something your agent can select well. If you own the source and were going to do that work regardless, the protocol contributed nothing but a round trip in the middle of your own wrapper.
 
 ## Three places the protocol wins
 
 Being fair requires the other list, and it is not short by accident. These are real:
 
-**You are publishing to consumers you will never meet.** The framing [the core path](/docs/core-path) gave this part. Once you cannot enumerate the callers, you cannot coordinate a change with them, and a versioned protocol is exactly the tool for that.
+**You are publishing to consumers you will never meet.** The framing [the core path](/book/core-path) gave this part. Once you cannot enumerate the callers, you cannot coordinate a change with them, and a versioned protocol is exactly the tool for that.
 
 **You are consuming someone else's domain.** The freight carrier's tracking server. Their schema, their release cadence, their edge cases. Writing that integration yourself means maintaining a model of a business you are not in.
 
@@ -174,7 +174,7 @@ Seven functions, two of which are *also* servers. The ratio is the chapter: the 
 
 ---
 
-Next: [MCP Is Not A2A](/docs/mcp/remote-agents-and-a2a), where the remote system accepts a delegated task instead of exposing a tool.
+Next: [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a), where the remote system accepts a delegated task instead of exposing a tool.
 
 ## Takeaways
 

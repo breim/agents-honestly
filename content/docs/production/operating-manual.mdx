@@ -56,15 +56,15 @@ Fewer alerts than you think, and the third one is the one people do not have.
 | Provider `429` | Any | 1 |
 | Fallback rate | Above 2% for 10 min | 1 |
 | Interactive queue age | p95 above 60 s | 2 |
-| [Canary](/docs/observability/drift) score | Any sustained drop | 3 |
+| [Canary](/book/observability/drift) score | Any sustained drop | 3 |
 
 The bolded row is the one worth copying precisely. Reported practice converges on **a sustained drop of a few points over fifteen to sixty minutes, scored per route and per bundle version**, and each qualifier is doing work:
 
 - **Sustained** filters sampling noise, which on a small window is enormous.
 - **Per route** stops a regression in one workflow from being averaged into invisibility by nine healthy ones.
-- **Per bundle version** makes the [rollout](/docs/production/rollout) attribution automatic: the alert arrives already saying which configuration is responsible.
+- **Per bundle version** makes the [rollout](/book/production/rollout) attribution automatic: the alert arrives already saying which configuration is responsible.
 
-Two things deliberately absent: **no alert on a single bad output**, because in a probabilistic system one bad output is the expected tail and paging on it trains people to ignore the pager. And **no alert on total spend**, which is a lagging monthly artifact. [Tokens per minute is the leading indicator](/docs/observability/cost-accounting).
+Two things deliberately absent: **no alert on a single bad output**, because in a probabilistic system one bad output is the expected tail and paging on it trains people to ignore the pager. And **no alert on total spend**, which is a lagging monthly artifact. [Tokens per minute is the leading indicator](/book/observability/cost-accounting).
 
 ## Incident patterns
 
@@ -72,54 +72,54 @@ Most agent incidents are one of about eight things. Recognizing which, quickly, 
 
 | Pattern | Signature | First move |
 | --- | --- | --- |
-| **Provider degradation** | Latency and 5xx up, [breaker](/docs/reliability/fallbacks-and-breakers) tripping, canary also affected | Confirm breaker opened; check fallback rate; status page |
+| **Provider degradation** | Latency and 5xx up, [breaker](/book/reliability/fallbacks-and-breakers) tripping, canary also affected | Confirm breaker opened; check fallback rate; status page |
 | **Retry amplification** | Provider recovered, your load did not | Check retry budget is enforcing; shed load |
 | **Silent fallback** | Availability perfect, quality down, `served_by` skewed | Compare quality by served model |
 | **Bad deploy** | Change at the deploy timestamp, one bundle only | Repoint the manifest. Ask questions after |
-| **Corpus regression** | Retrieval hit rate down, [cited-chunk turnover](/docs/observability/drift) up | Check the last ingestion diff; repoint the index build |
+| **Corpus regression** | Retrieval hit rate down, [cited-chunk turnover](/book/observability/drift) up | Check the last ingestion diff; repoint the index build |
 | **Model drift** | Canary down, inputs stable, nothing deployed | File the canary fixture with the vendor; consider the ladder |
 | **Traffic shift** | Input distribution moved, canary stable | Product question: read the new traffic |
 | **Runaway loops** | Top-1% spend share up, turn-count p99 up | Cap turns; find the tool returning a result that never satisfies |
 
-The single highest-value habit is that **the first question in every one of these is "what changed"**, and it should be answerable in one query across code deploys, config repoints, index builds, and provider incidents. A timeline that only shows code deploys will send you looking for a bug that was a re-index, which is why [config changes have to be deploy events](/docs/production/versioning).
+The single highest-value habit is that **the first question in every one of these is "what changed"**, and it should be answerable in one query across code deploys, config repoints, index builds, and provider incidents. A timeline that only shows code deploys will send you looking for a bug that was a re-index, which is why [config changes have to be deploy events](/book/production/versioning).
 
 ## On-call for a probabilistic system
 
 Four things are genuinely different, and each surprises someone coming from ordinary SRE.
 
-**You often cannot reproduce it.** Running the failing input again gives a different answer. The substitute for reproduction is [replay](/docs/observability/replay-debugging): the recorded run is deterministic even though the system is not, and "replay it" should be the first line of every runbook rather than "run it again."
+**You often cannot reproduce it.** Running the failing input again gives a different answer. The substitute for reproduction is [replay](/book/observability/replay-debugging): the recorded run is deterministic even though the system is not, and "replay it" should be the first line of every runbook rather than "run it again."
 
-**The fix is usually not a deploy.** A repointed manifest, a lowered `k`, a disabled fallback rung, a raised cap. This is good, it makes mitigation fast, and it means the config-change path needs to be safe at 3am, which is the [reviewed-and-eval-gated](/docs/production/versioning) discipline paying off precisely when someone wants to skip it.
+**The fix is usually not a deploy.** A repointed manifest, a lowered `k`, a disabled fallback rung, a raised cap. This is good, it makes mitigation fast, and it means the config-change path needs to be safe at 3am, which is the [reviewed-and-eval-gated](/book/production/versioning) discipline paying off precisely when someone wants to skip it.
 
 **Distinguishing a regression from noise is the core skill, and it needs a baseline distribution.** Not a number, a distribution. "p50 quality is 4 points down" means nothing without knowing that the historical 45-minute-window standard deviation is 1.2 points. Publish the baseline variance next to the metric on the dashboard, or every responder re-derives it under pressure and half of them get it wrong.
 
-**Degradation is a legitimate mitigation.** Unlike most systems, you can turn quality down to keep working: narrow the scope, drop to a cheaper rung, or [route more to humans](/docs/human-in-the-loop/escalation-and-audit). Deciding *in advance* which lever to pull, and pre-approving it, is what keeps an incident from becoming a debate at 03:20.
+**Degradation is a legitimate mitigation.** Unlike most systems, you can turn quality down to keep working: narrow the scope, drop to a cheaper rung, or [route more to humans](/book/human-in-the-loop/escalation-and-audit). Deciding *in advance* which lever to pull, and pre-approving it, is what keeps an incident from becoming a debate at 03:20.
 
 <Aside type="note" title="A runbook that an agent could follow is a runbook a tired human can follow">
 The useful shape for these runbooks is a typed graph: each step names what it consumes and what it produces, with an explicit decision at each branch. `check_deploy_timeline(window) → changes[]` then `if changes: rollback_candidate(changes)`, rather than a paragraph saying "investigate recent changes."
 
-Teams that write runbooks this way report substantial reductions in resolution time for incidents matching known patterns, and the reason is not automation: it is that a typed graph has no ambiguous steps at 3am. Whether you eventually let an agent execute it is a separate decision, and one where [risk tiers](/docs/human-in-the-loop/risk-tiers) apply exactly as they do anywhere else.
+Teams that write runbooks this way report substantial reductions in resolution time for incidents matching known patterns, and the reason is not automation: it is that a typed graph has no ambiguous steps at 3am. Whether you eventually let an agent execute it is a separate decision, and one where [risk tiers](/book/human-in-the-loop/risk-tiers) apply exactly as they do anywhere else.
 </Aside>
 
 ## The first ninety days
 
 The order matters more than the contents, because each stage makes the next one measurable.
 
-**Days 1–14 · See it.** [Tracing](/docs/observability/what-a-trace-must-answer) with the eight questions answerable, `config_hash` on every run, [cost attribution](/docs/observability/cost-accounting) at the gateway, and a `runs` table with terminal states. Ship nothing else until a single run can be reconstructed.
+**Days 1–14 · See it.** [Tracing](/book/observability/what-a-trace-must-answer) with the eight questions answerable, `config_hash` on every run, [cost attribution](/book/observability/cost-accounting) at the gateway, and a `runs` table with terminal states. Ship nothing else until a single run can be reconstructed.
 
-**Days 15–30 · Bound it.** Run budget with a degrade rung, turn cap, [risk tiers](/docs/human-in-the-loop/risk-tiers) with tier 1+ gated, [argument scoping](/docs/security/least-privilege) on every write, and the [dispatcher choke point](/docs/production/reference-architecture) if it is not already there. This is where the blast radius stops being unbounded.
+**Days 15–30 · Bound it.** Run budget with a degrade rung, turn cap, [risk tiers](/book/human-in-the-loop/risk-tiers) with tier 1+ gated, [argument scoping](/book/security/least-privilege) on every write, and the [dispatcher choke point](/book/production/reference-architecture) if it is not already there. This is where the blast radius stops being unbounded.
 
-**Days 31–60 · Measure it.** A [CI eval suite](/docs/evals/ci-for-agents) with a real dataset, a [frozen canary](/docs/observability/drift) on a schedule, [online scoring](/docs/evals/online-evals) on a sample, and the tier-2 proxy metrics on a dashboard with their baseline variance. Now a change has a number.
+**Days 31–60 · Measure it.** A [CI eval suite](/book/evals/ci-for-agents) with a real dataset, a [frozen canary](/book/observability/drift) on a schedule, [online scoring](/book/evals/online-evals) on a sample, and the tier-2 proxy metrics on a dashboard with their baseline variance. Now a change has a number.
 
-**Days 61–90 · Break it.** [Failure injection](/docs/reliability/failure-injection) in CI, the [fallback path evaluated as its own variant](/docs/reliability/fallbacks-and-breakers), a first game day, and the incident-pattern runbook written from what you actually saw in the first two months.
+**Days 61–90 · Break it.** [Failure injection](/book/reliability/failure-injection) in CI, the [fallback path evaluated as its own variant](/book/reliability/fallbacks-and-breakers), a first game day, and the incident-pattern runbook written from what you actually saw in the first two months.
 
-The sequence is deliberately the opposite of how these systems usually get built: capability first, legibility later. [The reference architecture chapter](/docs/production/reference-architecture) named the reason: capability demos well and legibility does not, so capability gets funded first. Ninety days spent the other way round produces a system that is less impressive in month two and still operable in month twelve.
+The sequence is deliberately the opposite of how these systems usually get built: capability first, legibility later. [The reference architecture chapter](/book/production/reference-architecture) named the reason: capability demos well and legibility does not, so capability gets funded first. Ninety days spent the other way round produces a system that is less impressive in month two and still operable in month twelve.
 
 ## Where Part XVIII leaves you
 
 Five chapters on everything that has to be true before you point users at it.
 
-An [architecture sized by two questions](/docs/production/reference-architecture) rather than by ambition. [Versioning](/docs/production/versioning) of the resolved bundle, because the git SHA does not identify what the model saw. [Rollout](/docs/production/rollout) that pins configuration per run and gates on blast radius rather than percentage. [Cost engineering](/docs/production/cost-engineering) that starts with turn count rather than model choice. And an operating posture that watches the tier nothing else watches.
+An [architecture sized by two questions](/book/production/reference-architecture) rather than by ambition. [Versioning](/book/production/versioning) of the resolved bundle, because the git SHA does not identify what the model saw. [Rollout](/book/production/rollout) that pins configuration per run and gates on blast radius rather than percentage. [Cost engineering](/book/production/cost-engineering) that starts with turn count rather than model choice. And an operating posture that watches the tier nothing else watches.
 
 The through-line of the part: **production readiness for an agent is mostly the ability to answer questions about it.** What version, which tenant, how much, which chunk, whose authority, what changed. Every chapter here is a mechanism for making one of those answerable, and the systems that operate badly are almost never the ones with the worst models.
 
@@ -127,7 +127,7 @@ Part XIX asks whether you should have built one agent or several, and, having sp
 
 ---
 
-Next: [The Go-Live Readiness Review](/docs/production/go-live-readiness-review), the evidence-backed gate for authority, recovery, quality, cost, security, ownership, and rollback.
+Next: [The Go-Live Readiness Review](/book/production/go-live-readiness-review), the evidence-backed gate for authority, recovery, quality, cost, security, ownership, and rollback.
 
 ## Takeaways
 

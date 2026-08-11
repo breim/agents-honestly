@@ -20,7 +20,7 @@ In every case the retriever is working correctly. The query is the problem.
 - **Users write conversationally**; corpora are written formally. The two vocabularies differ systematically.
 - **Meaning is distributed across turns**, and the retriever sees one string.
 - **Rewriting costs a model call** before every search, on the critical path.
-- **A rewrite can destroy information**, particularly exact identifiers, which are the tokens [lexical search](/docs/retrieval/lexical-search) most depends on.
+- **A rewrite can destroy information**, particularly exact identifiers, which are the tokens [lexical search](/book/retrieval/lexical-search) most depends on.
 - **The user's intent is authoritative** and a rewrite is a guess about it.
 - **More queries retrieve more**, but multiply cost and can drown the good result in near-misses.
 
@@ -59,7 +59,7 @@ Four rules:
 
 **Preserve identifiers verbatim.** This is the guard on normalization. Mapping user vocabulary onto corpus vocabulary is the second operation's whole job, and it is also the one that can destroy a query, because it cannot tell a phrase worth translating from a token that must not move. Extract `RB-400`, order numbers, SKUs, and invoice IDs *before* rewriting and carry them through untouched. A rewrite that paraphrases `RB-400` into "the relay product" has destroyed the exact token that would have matched, which is the most common way this pattern makes retrieval worse instead of better.
 
-**Search the original too.** Keep the user's literal string as one of the candidate queries and [fuse the result lists](/docs/patterns/retrieval/hybrid-fusion). The rewrite is a hypothesis, and a bad rewrite should not be able to lose a result the original would have found.
+**Search the original too.** Keep the user's literal string as one of the candidate queries and [fuse the result lists](/book/patterns/retrieval/hybrid-fusion). The rewrite is a hypothesis, and a bad rewrite should not be able to lose a result the original would have found.
 
 **Decompose only when genuinely multi-part.** Splitting a single question into three produces three mediocre retrievals and a fused list dominated by near-misses. The test is whether the parts have *different answers in different documents*.
 
@@ -143,13 +143,13 @@ Use a small, fast model with low temperature. Rewriting needs faithfulness rathe
 
 ## Trade-offs
 
-**Latency on every retrieval.** A model call before the search, before the answer. On an [on-demand retrieval](/docs/patterns/context/retrieval-on-demand) path this stacks with the search turn itself. A small model keeps it to a few hundred milliseconds; skipping it on the first turn of a conversation, where there is no context to resolve, is a cheap optimization.
+**Latency on every retrieval.** A model call before the search, before the answer. On an [on-demand retrieval](/book/patterns/context/retrieval-on-demand) path this stacks with the search turn itself. A small model keeps it to a few hundred milliseconds; skipping it on the first turn of a conversation, where there is no context to resolve, is a cheap optimization.
 
 **The rewrite can be wrong.** It resolves "the opened ones" to the wrong antecedent and retrieves confidently about something else. Keeping the original query in the candidate set bounds this: the fused list still contains whatever the literal string found.
 
-**Multi-query multiplies cost.** Three queries mean three retrievals and a fusion step. The recall gain is real and the precision cost is also real. [Measure it](/docs/retrieval/retrieval-evals) rather than assuming more queries is better.
+**Multi-query multiplies cost.** Three queries mean three retrievals and a fusion step. The recall gain is real and the precision cost is also real. [Measure it](/book/retrieval/retrieval-evals) rather than assuming more queries is better.
 
-**It is another place personal data flows.** The rewritten query is sent to a model and logged in your traces. If the question contains customer information, so does the rewrite, [handles, not values](/docs/security/pii-and-compliance), applies here too.
+**It is another place personal data flows.** The rewritten query is sent to a model and logged in your traces. If the question contains customer information, so does the rewrite, [handles, not values](/book/security/pii-and-compliance), applies here too.
 
 ## When not to use it
 
@@ -164,13 +164,13 @@ Use a small, fast model with low temperature. Rewriting needs faithfulness rathe
 <Aside type="caution" title="A rewrite is not a search-quality substitute">
 When retrieval is bad, rewriting is the tempting fix because it is a prompt change rather than an infrastructure change. It is frequently the wrong fix.
 
-If the right chunk is not in the index, is chunked so the answer spans a boundary, or is outranked by a superseded version, no query phrasing recovers it. Check [recall@k with the ideal query](/docs/retrieval/retrieval-evals) first: if a hand-written perfect query still misses, the problem is [chunking](/docs/retrieval/chunking), [filtering](/docs/retrieval/metadata-and-authorization), or the corpus, and rewriting will just make the failure harder to diagnose.
+If the right chunk is not in the index, is chunked so the answer spans a boundary, or is outranked by a superseded version, no query phrasing recovers it. Check [recall@k with the ideal query](/book/retrieval/retrieval-evals) first: if a hand-written perfect query still misses, the problem is [chunking](/book/retrieval/chunking), [filtering](/book/retrieval/metadata-and-authorization), or the corpus, and rewriting will just make the failure harder to diagnose.
 </Aside>
 
 ## Related
 
-- [Hybrid Fusion](/docs/patterns/retrieval/hybrid-fusion): how the original and rewritten queries' result lists get merged
-- [Retrieval on Demand](/docs/patterns/context/retrieval-on-demand): where the rewrite runs when the agent drives the search
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): fixing precision after retrieval instead of before
-- [Lexical Search](/docs/retrieval/lexical-search): why preserving identifiers verbatim matters
-- [Retrieval Evals](/docs/retrieval/retrieval-evals): how to tell whether the rewrite helped
+- [Hybrid Fusion](/book/patterns/retrieval/hybrid-fusion): how the original and rewritten queries' result lists get merged
+- [Retrieval on Demand](/book/patterns/context/retrieval-on-demand): where the rewrite runs when the agent drives the search
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): fixing precision after retrieval instead of before
+- [Lexical Search](/book/retrieval/lexical-search): why preserving identifiers verbatim matters
+- [Retrieval Evals](/book/retrieval/retrieval-evals): how to tell whether the rewrite helped

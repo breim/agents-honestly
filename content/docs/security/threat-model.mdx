@@ -23,7 +23,7 @@ An attacker is not interested in your agent. They are interested in what it is a
 
 The third row is the one that gets left off the diagram. An agent is not only a thing that leaks and a thing that acts. It is a **long-lived identity inside your perimeter with an API key**, which is exactly the asset an attacker would otherwise spend weeks phishing for. And unlike a stolen employee session, it is expected to make hundreds of unusual-looking requests an hour. It has an alibi built in.
 
-Note also what is *not* on the list: the model weights, the system prompt, the vendor's guardrails. Prompt extraction gets disproportionate attention because it produces a good screenshot. Treat your system prompt as public. [It should not contain secrets in the first place](/docs/context/system-prompt). Spend the review on the three rows above.
+Note also what is *not* on the list: the model weights, the system prompt, the vendor's guardrails. Prompt extraction gets disproportionate attention because it produces a good screenshot. Treat your system prompt as public. [It should not contain secrets in the first place](/book/context/system-prompt). Spend the review on the three rows above.
 
 ## The trust boundary moved somewhere you cannot put a check
 
@@ -71,7 +71,7 @@ What makes the agentic case worse than the classical one is not the model. It is
 
 **Nondeterminism defeats signatures.** The same attack produces a different trace every time and the same benign request does too. There is no request pattern to blocklist, and your anomaly baseline is a system whose normal behavior is "does something slightly different each run."
 
-**Nothing raises.** This is [the recurring theme of the whole book](/docs/context/context-poisoning) arriving in a security context. A successful attack produces a clean trace, valid arguments, and a well-formed result. The failure mode of a compromised agent is *plausible work*.
+**Nothing raises.** This is [the recurring theme of the whole book](/book/context/context-poisoning) arriving in a security context. A successful attack produces a clean trace, valid arguments, and a well-formed result. The failure mode of a compromised agent is *plausible work*.
 
 ## Who is attacking, and what they already have
 
@@ -80,31 +80,31 @@ Threat modeling goes wrong when everyone pictures the same adversary. These are 
 | Adversary | Already has | Wants | Primary vector |
 | --- | --- | --- | --- |
 | **Anonymous outsider** | Nothing. Cannot log in | Anything at all | Text placed where the agent will read it: a ticket, a form, an email, a public page you crawl |
-| **Legitimate customer** | Their own account | Someone else's data, a refund they aren't owed | Direct injection, argument manipulation, [tenant boundary probing](/docs/security/tenant-isolation) |
+| **Legitimate customer** | Their own account | Someone else's data, a refund they aren't owed | Direct injection, argument manipulation, [tenant boundary probing](/book/security/tenant-isolation) |
 | **Insider** | Real credentials | Scale and deniability | Asking the agent to do at volume what they could do slowly by hand |
-| **Supply chain** | A tool, an MCP server, a package, a model endpoint you call | Everything the agent has | [A tool definition that is itself a prompt](/docs/mcp/servers-clients-transports) |
+| **Supply chain** | A tool, an MCP server, a package, a model endpoint you call | Everything the agent has | [A tool definition that is itself a prompt](/book/mcp/servers-clients-transports) |
 | **The agent** | All of the above | Nothing. It isn't adversarial | Ordinary error at machine speed, indistinguishable in impact |
 
 The first row deserves the emphasis. **The most dangerous adversary against an agent is the one with no account**, because they are the one your existing controls have nothing to say about. Authentication, RBAC, session management, and rate limiting all assume the attacker is a principal in your system. Someone who writes a support ticket is not a principal. They are a *string*, and the string reaches a component with credentials.
 
-The last row is not a joke. Most of this part's controls are indifferent to intent: an agent that mistakenly refunds four hundred customers and an agent that was manipulated into it produce the same incident, the same postmortem, and the same fix. Reliability and security converge here, which is why [failure injection](/docs/reliability/failure-injection) and red-teaming end up being the same exercise run with different motives.
+The last row is not a joke. Most of this part's controls are indifferent to intent: an agent that mistakenly refunds four hundred customers and an agent that was manipulated into it produce the same incident, the same postmortem, and the same fix. Reliability and security converge here, which is why [failure injection](/book/reliability/failure-injection) and red-teaming end up being the same exercise run with different motives.
 
 ## The surface, component by component
 
-This table is the map of Part XVII. Every component from the [reference architecture](/docs/production/reference-architecture) is something an attacker can reach, and each has a chapter.
+This table is the map of Part XVII. Every component from the [reference architecture](/book/production/reference-architecture) is something an attacker can reach, and each has a chapter.
 
 | Component | What an attacker does with it | Where it's handled |
 | --- | --- | --- |
-| Anything that ingests third-party text | Places instructions where the agent will read them | [Prompt Injection](/docs/security/prompt-injection) |
-| The retrieval corpus | Writes a document today that fires months from now | [Untrusted Retrieval](/docs/security/untrusted-retrieval) |
-| The tool catalogue | Uses the one over-scoped tool nobody audited | [Least Privilege](/docs/security/least-privilege) |
-| The service credential | Reads as the agent what the user could not | [The Agent Is Not a Superuser](/docs/security/identity) |
-| The retrieval filter | Crosses a tenant boundary via a missing `WHERE` | [Multi-Tenant Isolation](/docs/security/tenant-isolation) |
-| Code execution and secrets | Reads the environment the sandbox was supposed to hide | [Sandboxing](/docs/security/sandboxing) |
-| Memory and the fact store | Writes a durable false belief that survives the run | [Memory](/docs/context/memory) · [Poisoning](/docs/context/context-poisoning) |
-| The approval queue | Floods it until the reviewer rubber-stamps | [Risk Tiers](/docs/human-in-the-loop/risk-tiers) |
-| The trace and audit log | Relies on your not being able to reconstruct what happened | [What a Trace Must Answer](/docs/observability/what-a-trace-must-answer) |
-| Another agent | Uses the trusted inter-agent channel nobody authenticates | [Multi-Agent](/docs/multi-agent/when-not-to) |
+| Anything that ingests third-party text | Places instructions where the agent will read them | [Prompt Injection](/book/security/prompt-injection) |
+| The retrieval corpus | Writes a document today that fires months from now | [Untrusted Retrieval](/book/security/untrusted-retrieval) |
+| The tool catalogue | Uses the one over-scoped tool nobody audited | [Least Privilege](/book/security/least-privilege) |
+| The service credential | Reads as the agent what the user could not | [The Agent Is Not a Superuser](/book/security/identity) |
+| The retrieval filter | Crosses a tenant boundary via a missing `WHERE` | [Multi-Tenant Isolation](/book/security/tenant-isolation) |
+| Code execution and secrets | Reads the environment the sandbox was supposed to hide | [Sandboxing](/book/security/sandboxing) |
+| Memory and the fact store | Writes a durable false belief that survives the run | [Memory](/book/context/memory) · [Poisoning](/book/context/context-poisoning) |
+| The approval queue | Floods it until the reviewer rubber-stamps | [Risk Tiers](/book/human-in-the-loop/risk-tiers) |
+| The trace and audit log | Relies on your not being able to reconstruct what happened | [What a Trace Must Answer](/book/observability/what-a-trace-must-answer) |
+| Another agent | Uses the trusted inter-agent channel nobody authenticates | [Multi-Agent](/book/multi-agent/when-not-to) |
 
 Two rows are easy to skip and shouldn't be. **The approval queue is an attack surface.** Flooding a reviewer with benign requests until approval becomes reflex is a documented technique, not a UX complaint. And **the audit log is an attack surface** in the sense that its absence is: an attacker's best outcome is not detection followed by cleanup, it is an incident nobody can scope.
 
@@ -135,8 +135,8 @@ The product of those two is the priority order, and it produces a different list
 | Ticket body → `get_order` | Yes, anyone can file a ticket | Read one order on the ticket's account | Acceptable |
 | Ticket body → `issue_credit` | **Yes** | A credit of any amount to any account | **The path this part exists for** |
 | Ticket body → `send_reply` | **Yes** | Arbitrary text, arbitrary recipient, out of the perimeter | Exfiltration primitive |
-| Help-center corpus → any tool | Yes, the corpus contains contributed content | Whatever the retrieved chunk asks for | [Next chapter but one](/docs/security/untrusted-retrieval) |
-| Agent → warehouse database | Via any of the above | Whatever the service credential permits | Scoped in [Least Privilege](/docs/security/least-privilege) |
+| Help-center corpus → any tool | Yes, the corpus contains contributed content | Whatever the retrieved chunk asks for | [Next chapter but one](/book/security/untrusted-retrieval) |
+| Agent → warehouse database | Via any of the above | Whatever the service credential permits | Scoped in [Least Privilege](/book/security/least-privilege) |
 | Operator console → anything | Only authenticated staff | Everything | Ordinary appsec; not this part's problem |
 
 The shape of the table is the point. Five of six rows begin with text that someone outside your company wrote, and exactly one is the classical security problem your existing controls were built for.
@@ -147,7 +147,7 @@ The shape of the table is the point. Five of six rows begin with text that someo
 
 ---
 
-Next: [Prompt Injection](/docs/security/prompt-injection), direct and indirect, why input filtering is not a defense, and what an actual defense looks like.
+Next: [Prompt Injection](/book/security/prompt-injection), direct and indirect, why input filtering is not a defense, and what an actual defense looks like.
 
 ## Takeaways
 

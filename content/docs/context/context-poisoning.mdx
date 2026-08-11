@@ -12,7 +12,7 @@ By step seven there is no disagreement anywhere in the conversation. Every turn 
 
 ## Why it compounds instead of degrading
 
-[Part I](/docs/foundations/context-window) put poisoning alongside overflow and dilution: a wall, a slope, and a feedback loop. Here is the mechanism behind the third.
+[Part I](/book/foundations/context-window) put poisoning alongside overflow and dilution: a wall, a slope, and a feedback loop. Here is the mechanism behind the third.
 
 The transcript has **no provenance**. A sentence the model generated at step four and a fact a tool returned at step four occupy the same conversation, in the same format, with nothing marking which is which. By step seven, "the credit is $540" is simply something in the context, indistinguishable from the order total, the policy text, and the customer's own words.
 
@@ -28,11 +28,11 @@ Studies of long-running agents with evolving memory separate three distinct drif
 
 | Drift | What happens | Where it comes from |
 | --- | --- | --- |
-| **Semantic** | Meaning shifts a little on each pass | Repeated summarization ([compaction](/docs/context/compaction)) |
+| **Semantic** | Meaning shifts a little on each pass | Repeated summarization ([compaction](/book/context/compaction)) |
 | **Procedural** | A suboptimal workflow gets reinforced as "how we do this" | The agent's own successful-looking runs |
 | **Internalization** | Hallucinated content is treated as validated knowledge | A claim survives long enough to be cited by later claims |
 
-The third is the terminal state, and it is the one that escapes a single run. Once an unverified claim gets written to a [fact store](/docs/context/memory), it stops being a poisoned turn and becomes poisoned data, which is why the previous chapter insisted you never write the model's inferences.
+The third is the terminal state, and it is the one that escapes a single run. Once an unverified claim gets written to a [fact store](/book/context/memory), it stops being a poisoned turn and becomes poisoned data, which is why the previous chapter insisted you never write the model's inferences.
 
 ## Where the poison enters
 
@@ -44,14 +44,14 @@ Five entry points, and only the first is what people picture.
 | **Tool result** | The tool returned stale or wrong data, and it's now authoritative in the transcript |
 | **Retrieved content** | A superseded policy document that contradicts the current one |
 | **Compaction** | The summary introduced an error: model output *about* model output |
-| **Injection** | Text in a retrieved document written to be read as instruction ([Part XVII](/docs/security/prompt-injection)) |
+| **Injection** | Text in a retrieved document written to be read as instruction ([Part XVII](/book/security/prompt-injection)) |
 
 Note that three of the five are not the model's fault at all. Poisoning is usually described as a hallucination problem; it is more accurately an **input-integrity** problem, and hallucination is one of several ways bad input arrives.
 
 <Aside type="caution" title="In multi-agent systems, errors cascade rather than cancel">
 The intuition that a second agent will catch the first one's mistake is backwards in practice. When one agent's output becomes another's context, an early false claim gets preserved, softened, amplified, or transformed as it moves down the chain, and each agent that repeats it adds apparent corroboration.
 
-Independent verifiers help only if they are genuinely independent: given the *source data*, not the previous agent's summary of it. A reviewer that reads the poisoned conclusion is not a check, it's a second vote. [Part XIX](/docs/multi-agent/when-not-to) has more on why this makes multi-agent architectures riskier than they look.
+Independent verifiers help only if they are genuinely independent: given the *source data*, not the previous agent's summary of it. A reviewer that reads the poisoned conclusion is not a check, it's a second vote. [Part XIX](/book/multi-agent/when-not-to) has more on why this makes multi-agent architectures riskier than they look.
 </Aside>
 
 ## Prompting cannot fix this
@@ -60,7 +60,7 @@ The reflex is to add a line to the system prompt: *be careful not to state thing
 
 It doesn't work, and the reason is worth being precise about. That instruction targets **generation**, the moment of inventing $540. But at steps five, six, and seven the model is not inventing anything. It is *reading* $540 from its context and using it correctly. The error has moved from the output side to the input side, and no instruction about carefulness applies to a number that is simply present in the prompt.
 
-You cannot prompt your way out of a corrupted input. This is the same lesson as the [invariant-versus-request](/docs/context/system-prompt) distinction, arriving from a different direction: if it must not happen, it has to be structural.
+You cannot prompt your way out of a corrupted input. This is the same lesson as the [invariant-versus-request](/book/context/system-prompt) distinction, arriving from a different direction: if it must not happen, it has to be structural.
 
 ## Structural defenses
 
@@ -72,7 +72,7 @@ Five, in rough order of strength.
 
 **3 · Verify at the boundary, not from history.** The credit tool takes `order_id` and computes the amount itself, rather than accepting an `amount` the model derived. Where a value must be passed in, the tool re-derives and rejects on mismatch. Poison that never reaches an action is a bad sentence rather than a bad refund.
 
-**4 · Isolate noisy work.** Give a messy sub-investigation its own throwaway context and return only its conclusion. Whatever confusion happened inside doesn't enter the main transcript. [Sub-agent isolation](/docs/patterns/context/subagent-isolation) is a context-integrity mechanism at least as much as a budget one.
+**4 · Isolate noisy work.** Give a messy sub-investigation its own throwaway context and return only its conclusion. Whatever confusion happened inside doesn't enter the main transcript. [Sub-agent isolation](/book/patterns/context/subagent-isolation) is a context-integrity mechanism at least as much as a budget one.
 
 **5 · Mark provenance.** Where you can, label content by origin: verified tool output, retrieved document with a citation, model conclusion. It doesn't make the model infallible, but it gives the model, and your graders, the distinction the raw transcript lacks.
 
@@ -108,7 +108,7 @@ Part IV takes on the biggest claimant of all, which we have been referring to an
 
 ---
 
-Next: [Where Does the Answer Live?](/docs/retrieval/where-does-the-answer-live), the routing decision that precedes every retrieval choice.
+Next: [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live), the routing decision that precedes every retrieval choice.
 
 ## Takeaways
 

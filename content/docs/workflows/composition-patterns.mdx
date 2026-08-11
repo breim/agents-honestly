@@ -3,7 +3,7 @@ title: "Sequential, Parallel, Fan-Out"
 description: "The composition shapes that cover most of what people reach for an agent to do."
 ---
 
-The [last chapter](/docs/workflows/the-determinism-test) placed each step in a column. This one connects them, and the claim of Part VI is that a handful of composition shapes cover most of what teams reach for an agent to do.
+The [last chapter](/book/workflows/the-determinism-test) placed each step in a column. This one connects them, and the claim of Part VI is that a handful of composition shapes cover most of what teams reach for an agent to do.
 
 None of what follows hands control flow to a model. You write the composition; the model fills specific slots in it.
 
@@ -54,7 +54,7 @@ The shape people skip, and the one that most often turns an unacceptable latency
 
 **Fan-out** applies the same operation to many *items*. Ordinary map, with the ordinary concerns: concurrency limits, rate limits, and a retry policy per item rather than for the batch.
 
-**Voting** runs the same task repeatedly and aggregates. This is the shape that turns [nondeterminism](/docs/foundations/nondeterminism) from a liability into a mechanism: if the same input gives a different answer sometimes, sample it three times and take the majority. It's expensive, since you pay 3×, and worth it exactly where a wrong answer costs more than three calls. For "does this reply contain a policy claim we can't support," that's an easy trade.
+**Voting** runs the same task repeatedly and aggregates. This is the shape that turns [nondeterminism](/book/foundations/nondeterminism) from a liability into a mechanism: if the same input gives a different answer sometimes, sample it three times and take the majority. It's expensive, since you pay 3×, and worth it exactly where a wrong answer costs more than three calls. For "does this reply contain a policy claim we can't support," that's an easy trade.
 
 ## The arithmetic
 
@@ -65,7 +65,7 @@ The shape people skip, and the one that most often turns an unacceptable latency
 | Fan-out ×40 | slowest item + merge (subject to concurrency cap) | 40 calls |
 | Voting ×3 | slowest of three + aggregate | 3 calls |
 
-One line to internalize: **parallelism buys latency, never cost.** Three parallel calls cost exactly what three sequential calls cost. If your problem is the bill, parallelism won't help. [Fewer or smaller calls](/docs/foundations/tokens) will.
+One line to internalize: **parallelism buys latency, never cost.** Three parallel calls cost exactly what three sequential calls cost. If your problem is the bill, parallelism won't help. [Fewer or smaller calls](/book/foundations/tokens) will.
 
 And the second-order effect people forget: latency is the slowest branch *plus the merge*. A merge implemented as another model call adds a full round trip, which can erase the parallel gain on short branches.
 
@@ -75,14 +75,14 @@ Most treatments cover the fan-out and stop. The interesting decision is what you
 
 | Join | How | Watch out |
 | --- | --- | --- |
-| **Concatenate** | Put all N results in one context | [Context explosion](/docs/context/context-as-budget); 40 summaries is a new budget problem |
+| **Concatenate** | Put all N results in one context | [Context explosion](/book/context/context-as-budget); 40 summaries is a new budget problem |
 | **Aggregate structurally** | Count, group, min/max in code | Best when results are typed. Cheap, exact, no extra call. |
 | **Rank and select** | Score the N, keep the best k | Needs a scoring function or a reranker |
 | **Synthesize** | A model call that reads all N and writes one answer | Adds latency and a place to lose information |
 
-The default should be **aggregate structurally**, and it's available far more often than people assume. If each branch returned [structured output](/docs/foundations/structured-output), the join is `filter`, `groupBy`, and `count` rather than another model call. Forty ticket classifications don't need a model to combine them; they need a `GROUP BY`.
+The default should be **aggregate structurally**, and it's available far more often than people assume. If each branch returned [structured output](/book/foundations/structured-output), the join is `filter`, `groupBy`, and `count` rather than another model call. Forty ticket classifications don't need a model to combine them; they need a `GROUP BY`.
 
-Reach for synthesis when the branches produced prose that genuinely has to become one piece of prose. And when you do, remember it is a model call reading model output, [a place where errors get laundered into confident summary](/docs/context/context-poisoning), so pass the underlying facts through rather than only the branch conclusions.
+Reach for synthesis when the branches produced prose that genuinely has to become one piece of prose. And when you do, remember it is a model call reading model output, [a place where errors get laundered into confident summary](/book/context/context-poisoning), so pass the underlying facts through rather than only the branch conclusions.
 
 ## Partial failure is a design decision
 
@@ -90,21 +90,21 @@ With one call, failure is simple. With forty, you have to decide something:
 
 **All-or-nothing.** One branch fails, the whole operation fails. Correct when the result is only meaningful complete, as in "summarize all forty tickets" where a missing one changes the conclusion.
 
-**Best-effort with disclosure.** Return what succeeded, and say what didn't. Correct for most analysis. The critical part is the disclosure: `{ results: [...37], failed: 3, reason: "timeout" }` is honest; returning 37 results as though the set were complete is the [silent truncation](/docs/graphs/graph-retrieval) failure that this book keeps finding in new places.
+**Best-effort with disclosure.** Return what succeeded, and say what didn't. Correct for most analysis. The critical part is the disclosure: `{ results: [...37], failed: 3, reason: "timeout" }` is honest; returning 37 results as though the set were complete is the [silent truncation](/book/graphs/graph-retrieval) failure that this book keeps finding in new places.
 
 **Retry the stragglers.** Fan-out with a per-item retry and a deadline, then fall back to best-effort. Usually the right production shape, and it needs a concurrency cap so retries don't stampede.
 
 Pick one deliberately. Most codebases default to `Promise.all`, which fails everything if anything fails. That is a choice nobody made.
 
 <Aside type="caution" title="Parallel calls with the same prefix all miss the cache">
-A detail from [prompt caching](/docs/foundations/prompt-caching) that bites exactly here. A cache entry becomes readable only once the first response *begins streaming*. So firing forty identical-prefix calls simultaneously means all forty pay full price. None can read what the others are still writing.
+A detail from [prompt caching](/book/foundations/prompt-caching) that bites exactly here. A cache entry becomes readable only once the first response *begins streaming*. So firing forty identical-prefix calls simultaneously means all forty pay full price. None can read what the others are still writing.
 
 The fix is one line of orchestration: send one call, await its first token, then release the remaining thirty-nine. On a large shared prefix this is a substantial saving for a trivial change, and it is invisible unless you look at `cache_read_input_tokens`.
 </Aside>
 
 ## When each shape is wrong
 
-**Chaining is wrong** when one call already does the job, or when a later step needs information only obtainable after seeing an earlier *result you didn't anticipate*. That's [an agent](/docs/workflows/the-determinism-test), not a chain.
+**Chaining is wrong** when one call already does the job, or when a later step needs information only obtainable after seeing an earlier *result you didn't anticipate*. That's [an agent](/book/workflows/the-determinism-test), not a chain.
 
 **Sectioning is wrong** when the aspects aren't actually independent. If the tone check needs to know what the policy check concluded, you have a chain wearing a fan-out costume, and running them in parallel just means one of them is working with less information.
 
@@ -120,7 +120,7 @@ That last point deserves emphasis. Voting works because the errors are independe
 
 **Fan-out** in the nightly account-health job: the same health computation across ten thousand accounts, concurrency-capped, best-effort with disclosure, per-item retries.
 
-**Voting** on exactly one step: the escalate-or-answer decision, sampled three times. It's a binary with asymmetric costs, since [the acceptance spec](/docs/first-agent/the-problem) holds escalation recall higher than answer accuracy. Three calls to reduce missed escalations is the cheapest insurance in the system.
+**Voting** on exactly one step: the escalate-or-answer decision, sampled three times. It's a binary with asymmetric costs, since [the acceptance spec](/book/first-agent/the-problem) holds escalation recall higher than answer accuracy. Three calls to reduce missed escalations is the cheapest insurance in the system.
 
 **Chaining** everywhere else, with gates between steps.
 
@@ -128,7 +128,7 @@ Note that the agent loop is still exactly one step in the middle of all this. Ev
 
 ---
 
-Next: [Routing and Orchestration](/docs/workflows/routing-and-orchestration), classify first then dispatch. Orchestrator/worker without handing control flow to a model.
+Next: [Routing and Orchestration](/book/workflows/routing-and-orchestration), classify first then dispatch. Orchestrator/worker without handing control flow to a model.
 
 ## Takeaways
 

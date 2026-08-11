@@ -9,7 +9,7 @@ Every model call in the run uses the large model, because the hardest step needs
 
 Most steps do not. Classifying a ticket into one of six labels, extracting three fields from a tool result, and deciding whether a reply mentions an order number are all tasks a much cheaper model does essentially as well, and they are the majority of calls in a twenty-turn run.
 
-The obvious fix is to route each node to a model chosen at design time, and [that is the right first move](/docs/production/cost-engineering). It runs out where the difficulty varies *within* a node: most damage assessments are straightforward and some are genuinely ambiguous, and the node cannot know which it has until it looks.
+The obvious fix is to route each node to a model chosen at design time, and [that is the right first move](/book/production/cost-engineering). It runs out where the difficulty varies *within* a node: most damage assessments are straightforward and some are genuinely ambiguous, and the node cannot know which it has until it looks.
 
 Downgrading that node uniformly trades quality on the hard cases to save money on the easy ones. Keeping it large pays frontier prices for the easy ones. Neither is what you want.
 
@@ -65,11 +65,11 @@ Four rules:
 
 **Prefer a deterministic gate.** A failed schema validation, an unresolvable citation, or a label outside the closed set is a *fact* about the cheap model's output. Self-reported confidence is another guess from the model whose guess is in question: usable, and the weakest signal on the list.
 
-**Never let the cheap model handle a consequential call.** Route by [risk tier](/docs/human-in-the-loop/risk-tiers) before routing by difficulty: anything above tier 0 goes to the large model regardless of how confident the cheap one was. A discount on the decision to move $2,500 is not a saving.
+**Never let the cheap model handle a consequential call.** Route by [risk tier](/book/human-in-the-loop/risk-tiers) before routing by difficulty: anything above tier 0 goes to the large model regardless of how confident the cheap one was. A discount on the decision to move $2,500 is not a saving.
 
 **Watch the escalation rate, and know where break-even actually is.** Every request pays the small model and an escalated fraction `p` pays both, so a cascade costs `1 + Rp` against a flat `R` for never cascading, where `R` is the price ratio. Break-even is `(R − 1) / R`. At `R = 10` that is an escalation rate of **90%**, and at the ~10% this pattern targets the cascade costs about a fifth of the baseline. The margin is deliberately wide, which is why a rising escalation rate is an early warning about *routing quality* long before it is a cost problem.
 
-**Escalate with the original input, not the cheap model's output.** The large model should answer the question, not review a draft. Passing the first attempt biases it toward agreeing, which is [the correlated-reviewer failure](/docs/patterns/control/critic-reviser) in a new place.
+**Escalate with the original input, not the cheap model's output.** The large model should answer the question, not review a draft. Passing the first attempt biases it toward agreeing, which is [the correlated-reviewer failure](/book/patterns/control/critic-reviser) in a new place.
 
 ## Code
 
@@ -152,7 +152,7 @@ def escalation_gate(first, req, ctx) -> tuple[bool, str | None]:
 </Tab>
 </Tabs>
 
-`cascade.served_by` on the trace is the same field [the fallback ladder](/docs/patterns/failure/fallback-model-ladder) requires, for the same reason: without it you cannot segment quality by which model actually answered, and a cascade whose cheap rung has quietly degraded looks exactly like a cascade that is working.
+`cascade.served_by` on the trace is the same field [the fallback ladder](/book/patterns/failure/fallback-model-ladder) requires, for the same reason: without it you cannot segment quality by which model actually answered, and a cascade whose cheap rung has quietly degraded looks exactly like a cascade that is working.
 
 ## Trade-offs
 
@@ -160,13 +160,13 @@ def escalation_gate(first, req, ctx) -> tuple[bool, str | None]:
 
 **Latency increases on escalated requests.** Two sequential calls. At a 10% escalation rate the p99 is the sum, which matters on interactive paths and not on background ones. Running both in parallel and discarding one removes the latency and removes the saving.
 
-**Two models to operate.** Two versions to pin, two eval runs, two [drift surfaces](/docs/observability/drift), two sets of formatting quirks. A cheap model that silently changes behaviour raises the escalation rate, which reads as a cost regression until someone checks the canary.
+**Two models to operate.** Two versions to pin, two eval runs, two [drift surfaces](/book/observability/drift), two sets of formatting quirks. A cheap model that silently changes behaviour raises the escalation rate, which reads as a cost regression until someone checks the canary.
 
 **The threshold drifts with traffic.** A gate tuned on last quarter's mix mis-escalates on this quarter's. Watch the escalation rate as a first-class metric, and treat a shift as a signal about the traffic, not just about the gate.
 
 ## When not to use it
 
-**When per-node routing already covers it.** If the node's difficulty does not vary, [assign the model at design time](/docs/production/cost-engineering): testable, reviewable, rollback-able, and with no runtime gate to be wrong.
+**When per-node routing already covers it.** If the node's difficulty does not vary, [assign the model at design time](/book/production/cost-engineering): testable, reviewable, rollback-able, and with no runtime gate to be wrong.
 
 **When there is no trustworthy gate.** Without a validator, a closed label set, or a citation check, you are left with self-reported confidence alone. That can work and it needs calibration data; shipping it uncalibrated produces confident cheap answers on exactly the cases that needed the large model.
 
@@ -175,7 +175,7 @@ def escalation_gate(first, req, ctx) -> tuple[bool, str | None]:
 **On consequential calls.** Anything above tier 0. The gate should route these before the cheap model is ever invoked.
 
 <Aside type="note" title="The same shape as retrieval, and the same reason it works">
-[Two-stage rerank](/docs/patterns/retrieval/two-stage-rerank) retrieves cheap and wide, then rescores narrow and expensive. A cascade answers cheap and often, then re-answers narrow and expensive. [Fallback ladders](/docs/patterns/failure/fallback-model-ladder) descend the same axis under a different trigger.
+[Two-stage rerank](/book/patterns/retrieval/two-stage-rerank) retrieves cheap and wide, then rescores narrow and expensive. A cascade answers cheap and often, then re-answers narrow and expensive. [Fallback ladders](/book/patterns/failure/fallback-model-ladder) descend the same axis under a different trigger.
 
 The recurring structure is: **one knob cannot satisfy two objectives, so split the stage and let each stage optimize one.** Recall versus precision in retrieval; cost versus quality here.
 
@@ -184,8 +184,8 @@ And the recurring failure is the same too: the gate between the stages is where 
 
 ## Related
 
-- [Cost Engineering](/docs/production/cost-engineering): the lever ordering, and why per-node routing comes first
-- [Two-Stage Rerank](/docs/patterns/retrieval/two-stage-rerank): the same cheap-then-expensive structure in retrieval
-- [Fallback Model Ladder](/docs/patterns/failure/fallback-model-ladder): descending models for availability rather than cost
-- [Token Budget Enforcement](/docs/patterns/cost/token-budget-enforcement): the ceiling a cascade helps you stay under
-- [Risk Tiers](/docs/human-in-the-loop/risk-tiers): the gate that runs before the cheap model is considered
+- [Cost Engineering](/book/production/cost-engineering): the lever ordering, and why per-node routing comes first
+- [Two-Stage Rerank](/book/patterns/retrieval/two-stage-rerank): the same cheap-then-expensive structure in retrieval
+- [Fallback Model Ladder](/book/patterns/failure/fallback-model-ladder): descending models for availability rather than cost
+- [Token Budget Enforcement](/book/patterns/cost/token-budget-enforcement): the ceiling a cascade helps you stay under
+- [Risk Tiers](/book/human-in-the-loop/risk-tiers): the gate that runs before the cheap model is considered

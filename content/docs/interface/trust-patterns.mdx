@@ -11,7 +11,7 @@ The framing that makes the rest of this chapter coherent, and it is the opposite
 
 > **The goal is calibrated trust, not maximum trust. An interface that makes people trust the agent more than it deserves is a failure with good metrics.**
 
-There are two ways to be wrong. **Under-trust** produces disuse: the agent is correct and ignored, and the investment returns nothing. **Over-trust** produces misuse: the agent is wrong and believed, which is [the confident-wrong-answer failure](/docs/retrieval/sql-is-still-the-answer) this book has been circling since Part IV, now arriving through the interface.
+There are two ways to be wrong. **Under-trust** produces disuse: the agent is correct and ignored, and the investment returns nothing. **Over-trust** produces misuse: the agent is wrong and believed, which is [the confident-wrong-answer failure](/book/retrieval/sql-is-still-the-answer) this book has been circling since Part IV, now arriving through the interface.
 
 Almost all design effort goes into the first. The research literature notes that explainability work has largely emphasised preventing disuse while neglecting the mitigation of overtrust. One finding should be enough to make anyone cautious:
 
@@ -19,7 +19,7 @@ Almost all design effort goes into the first. The research literature notes that
 
 The lever those studies were actually testing has a name: **cognitive forcing**, designs that interrupt automatic acceptance rather than explaining after the fact. Making the recommendation something the user *requests* instead of something that appears; surfacing the model's uncertainty as part of the decision rather than as a footnote. Against ordinary explain-the-answer interfaces these significantly reduced over-reliance, and the trade-off came out as a clean inverse: **the designs that reduced over-reliance most were the ones people rated worst.**
 
-Two things follow, and the second is the uncomfortable one. Friction is not a side effect here, it is the mechanism. So an interface review that optimises for "felt smooth" is selecting against the thing that worked. And the benefit was concentrated in people already inclined to think things through, which means the intervention does least for the population most at risk: the reviewer on their ninetieth approval of the morning, who is exactly [who this fails](/docs/human-in-the-loop/risk-tiers).
+Two things follow, and the second is the uncomfortable one. Friction is not a side effect here, it is the mechanism. So an interface review that optimises for "felt smooth" is selecting against the thing that worked. And the benefit was concentrated in people already inclined to think things through, which means the intervention does least for the population most at risk: the reviewer on their ninetieth approval of the morning, who is exactly [who this fails](/book/human-in-the-loop/risk-tiers).
 
 ## Provenance, honestly
 
@@ -29,19 +29,19 @@ Start with the pattern this book has advocated hardest, and the finding that com
 
 And the thing going unchecked does not hold up well. An audit of generative search engines found only about **half of generated sentences fully supported by their citations**, and roughly three-quarters of citations actually supporting the sentence they were attached to. Put the two findings together and the picture is worse than either: trust rises on the presence of a citation, checking does not happen, and the underlying support rate is close to a coin flip. Notably, the trust gain held **even when the citations were flawed**. The marker is doing the work, not the evidence.
 
-That is not an argument against citations, but it does change the argument *for* them. It is the measured case for [the verification the retrieval part builds](/docs/patterns/retrieval/grounded-citations) rather than trusting the marker. Three reasons survive:
+That is not an argument against citations, but it does change the argument *for* them. It is the measured case for [the verification the retrieval part builds](/book/patterns/retrieval/grounded-citations) rather than trusting the marker. Three reasons survive:
 
-**They are checkable by the people who matter.** Not the user in the flow: [the reviewer at an approval gate](/docs/human-in-the-loop/approval-gates), the auditor eleven months later, the engineer during an incident. Those readers do check, and for them the link is the whole artifact.
+**They are checkable by the people who matter.** Not the user in the flow: [the reviewer at an approval gate](/book/human-in-the-loop/approval-gates), the auditor eleven months later, the engineer during an incident. Those readers do check, and for them the link is the whole artifact.
 
-**They impose discipline on the system.** A pipeline that must produce a citation cannot answer from nothing. Much of the value is extracted before the interface exists, in [the retrieval layer that now has to return provenance](/docs/tools/result-design).
+**They impose discipline on the system.** A pipeline that must produce a citation cannot answer from nothing. Much of the value is extracted before the interface exists, in [the retrieval layer that now has to return provenance](/book/tools/result-design).
 
-**They are the difference between a claim and an assertion in the record.** [The audit trail](/docs/human-in-the-loop/escalation-and-audit) needs the source; the UI is just where it also happens to be visible.
+**They are the difference between a claim and an assertion in the record.** [The audit trail](/book/human-in-the-loop/escalation-and-audit) needs the source; the UI is just where it also happens to be visible.
 
 The design consequence of "nobody clicks" is specific: **put the signal inline, not behind the link.** *"Policy RET-14 §3, revised March 2026"* tells a sceptic more at a glance than a superscript numeral does after a click nobody makes.
 
 ## Progress
 
-[Streaming UX](/docs/interface/streaming-ux) covered the mechanics. The reason it belongs in a chapter about trust is a distinct failure mode with a good name: **the black-box launch**, a clean interface showing inputs and outputs and nothing in between.
+[Streaming UX](/book/interface/streaming-ux) covered the mechanics. The reason it belongs in a chapter about trust is a distinct failure mode with a good name: **the black-box launch**, a clean interface showing inputs and outputs and nothing in between.
 
 The problem is not that it feels slow. It is that when the agent chooses wrong, the user cannot see *which* alternatives it considered or *why* it picked this one, and therefore cannot correct it efficiently. They can only reject the whole answer and start again, which is the expensive kind of disagreement.
 
@@ -51,7 +51,7 @@ The problem is not that it feels slow. It is that when the agent chooses wrong, 
 
 Every consequential action should produce a receipt: what changed, where, the references, the timestamp, which agent did it, and what can be done about it.
 
-But an interface built over [Part XI](/docs/durability/compensation) has to be honest about a distinction most UIs collapse:
+But an interface built over [Part XI](/book/durability/compensation) has to be honest about a distinction most UIs collapse:
 
 | Reality | What the UI may say | What it must not say |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ But an interface built over [Part XI](/docs/durability/compensation) has to be h
 | Offset by a second action | **Reverse this**, and show the new entry | "Undo" |
 | Already in someone else's hands | **Send a correction** | "Undo" |
 
-Showing an Undo button on an email that has been delivered is a lie the interface tells on behalf of the system. The button must inherit its label from [the tool's reversibility class](/docs/tools/read-and-write-tools), which means the catalogue's classification reaches all the way to the front end. If it does not, someone will add a hopeful Undo to a class ⑤ write.
+Showing an Undo button on an email that has been delivered is a lie the interface tells on behalf of the system. The button must inherit its label from [the tool's reversibility class](/book/tools/read-and-write-tools), which means the catalogue's classification reaches all the way to the front end. If it does not, someone will add a hopeful Undo to a class ⑤ write.
 
 ## Confidence, which is the contested one
 
@@ -79,13 +79,13 @@ The defensible version is to express uncertainty as **behaviour rather than as a
       be correct, or the region filter may be wrong. Not sending.
 ```
 
-That is the same principle as [preferring an architecture whose failure mode is a refusal](/docs/retrieval/sql-is-still-the-answer), surfaced. A stated reason for hesitating is checkable; a percentage is not.
+That is the same principle as [preferring an architecture whose failure mode is a refusal](/book/retrieval/sql-is-still-the-answer), surfaced. A stated reason for hesitating is checkable; a percentage is not.
 
 ## Failure states, the most under-designed surface
 
 Three requirements, and most agent interfaces satisfy none of them:
 
-**Say what failed, in the user's terms.** Not "something went wrong," and not a stack trace. [The error taxonomy from Part VIII](/docs/tools/errors-as-instructions) has already produced text written for a consumer; the UI's job is not to discard it.
+**Say what failed, in the user's terms.** Not "something went wrong," and not a stack trace. [The error taxonomy from Part VIII](/book/tools/errors-as-instructions) has already produced text written for a consumer; the UI's job is not to discard it.
 
 **Say what is still true.** A partial result is not nothing. *"Found the order and the contract; the warehouse is unavailable, so the volume figure is missing"* preserves most of the work. Collapsing to a generic failure throws away three successful lookups the user has already paid for.
 
@@ -126,7 +126,7 @@ Part XIII ends here. The agent survives crashes, waits for people, streams what 
 
 ---
 
-Next: [Eval Discipline](/docs/evals/eval-discipline), Part XIV, and the question this part cannot answer: whether any of it is actually working.
+Next: [Eval Discipline](/book/evals/eval-discipline), Part XIV, and the question this part cannot answer: whether any of it is actually working.
 
 ## Takeaways
 

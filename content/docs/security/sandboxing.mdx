@@ -21,7 +21,7 @@ The word "sandbox" gets applied to two different problems that need different me
 | --- | --- | --- |
 | Threat | Code the agent wrote does something | A tool the agent called does something |
 | Question | What can this *process* reach? | What can this *call* do? |
-| Mechanism | Kernel, VM, or WASM isolation | Dispatcher checks, scoped tokens, [argument scoping](/docs/security/least-privilege) |
+| Mechanism | Kernel, VM, or WASM isolation | Dispatcher checks, scoped tokens, [argument scoping](/book/security/least-privilege) |
 | Fails as | Container escape, credential theft, egress | An in-policy action for a hostile reason |
 | Needed when | The agent generates and runs code | **Always** |
 
@@ -71,7 +71,7 @@ What you still own, whichever you choose, is the next two sections. No vendor ca
 
 ## The sandbox holds no credentials. None.
 
-This is the part that matters even if you never run generated code, because the same rule governs tool handlers, [MCP servers](/docs/mcp/servers-clients-transports), and anything else in the agent's process.
+This is the part that matters even if you never run generated code, because the same rule governs tool handlers, [MCP servers](/book/mcp/servers-clients-transports), and anything else in the agent's process.
 
 The instinct is to give the sandbox a scoped token. Better than the admin key, and still wrong: a token in the sandbox is a token the code can read, log, or send somewhere, and the entire point of the boundary is that you assume the code is hostile.
 
@@ -149,7 +149,7 @@ Three properties fall out, and the third is the one that makes this worth the pl
 
 **Nothing to steal.** An escape yields an execution environment with no credentials in it. That is a bad day rather than a breach.
 
-**One authorization path.** The broker calls the same `authorize` the dispatcher does, so generated code cannot do anything the model could not have done directly. Without this you have built a second, unreviewed tool interface. A `run_python` tool with database access is a tool that can do anything, which quietly voids [everything the least-privilege chapter bought you](/docs/security/least-privilege).
+**One authorization path.** The broker calls the same `authorize` the dispatcher does, so generated code cannot do anything the model could not have done directly. Without this you have built a second, unreviewed tool interface. A `run_python` tool with database access is a tool that can do anything, which quietly voids [everything the least-privilege chapter bought you](/book/security/least-privilege).
 
 **One audit story.** Every backend call carries the user, the agent, and the run, whether it came from a tool call or from generated code.
 
@@ -159,7 +159,7 @@ The same argument disposes of the ambient-environment habit generally: `os.envir
 
 If you build one thing from this chapter and you are not running generated code, build this.
 
-Recall the [lethal trifecta](/docs/security/prompt-injection): private data, untrusted content, and a way for bytes to leave. Network egress *is* element ③, and it is the element you can most often remove without losing the product. An agent that can read your database and process hostile tickets is contained if there is nowhere for the data to go.
+Recall the [lethal trifecta](/book/security/prompt-injection): private data, untrusted content, and a way for bytes to leave. Network egress *is* element ③, and it is the element you can most often remove without losing the product. An agent that can read your database and process hostile tickets is contained if there is nowhere for the data to go.
 
 Default deny, with an allowlist:
 
@@ -172,7 +172,7 @@ Default deny, with an allowlist:
 
 Two entries do most of the work. **Deny the package registry at runtime**, because `pip install` inside a live sandbox is arbitrary code execution from a third party in the middle of your run, and it is how a dependency-confusion attack reaches a system that never deploys unreviewed code. And **alert on denials rather than silently dropping them**, because a denied connection to an unexpected host is one of the highest-signal detections available in this entire part. It is what a successful injection looks like from the outside.
 
-Egress control also has to cover the paths that don't look like network calls: a rendered markdown image, a citation URL, a webhook argument, a DNS lookup that encodes data in the hostname. The [egress allowlist pattern](/docs/patterns/security/egress-allowlist) covers the mechanics; the principle is that anything reaching a resolver is an exfiltration channel.
+Egress control also has to cover the paths that don't look like network calls: a rendered markdown image, a citation URL, a webhook argument, a DNS lookup that encodes data in the hostname. The [egress allowlist pattern](/book/patterns/security/egress-allowlist) covers the mechanics; the principle is that anything reaching a resolver is an exfiltration channel.
 
 ## Everything else the sandbox has to bound
 
@@ -186,9 +186,9 @@ Shorter, because these are ordinary operational limits and their absence is a re
 
 **Filesystem visibility.** No mounted source tree, no credential files, no socket other than the broker's. The sandbox sees its own working directory and the standard library.
 
-**Output size.** Sandbox output becomes tool results, which become prompt text, which is a [context budget](/docs/context/context-as-budget) claimant and, at the extreme, a way to blow the window on purpose. Truncate at the boundary with a marker.
+**Output size.** Sandbox output becomes tool results, which become prompt text, which is a [context budget](/book/context/context-as-budget) claimant and, at the extreme, a way to blow the window on purpose. Truncate at the boundary with a marker.
 
-**One sandbox per run, destroyed after.** Reuse is a cross-run leak with the same shape as the [tenancy problems](/docs/security/tenant-isolation) in the previous chapter: state left in `/tmp` by one customer's run, read by the next. Warm pools are fine; warm *state* is not.
+**One sandbox per run, destroyed after.** Reuse is a cross-run leak with the same shape as the [tenancy problems](/book/security/tenant-isolation) in the previous chapter: state left in `/tmp` by one customer's run, read by the next. Warm pools are fine; warm *state* is not.
 
 ## What sandboxing does not buy
 
@@ -196,7 +196,7 @@ The honest limit, in the pattern of this part.
 
 **It contains code, not decisions.** A perfectly sandboxed agent that calls `issue_credit` for a hostile reason has issued a credit. The isolation boundary has nothing to say about it, because nothing was compromised. The agent used an approved tool with valid arguments. Sandboxing raises the floor and the capability controls set the ceiling, and only one of those two is optional depending on your architecture.
 
-**It does not make generated code a safe default.** `run_python` is the single largest capability you can add to an agent, and the honest question before adding it is whether the task genuinely requires arbitrary computation or whether three narrow tools would do. The [determinism test](/docs/workflows/the-determinism-test) applies here with unusual force: if you can enumerate the operations, enumerate them.
+**It does not make generated code a safe default.** `run_python` is the single largest capability you can add to an agent, and the honest question before adding it is whether the task genuinely requires arbitrary computation or whether three narrow tools would do. The [determinism test](/book/workflows/the-determinism-test) applies here with unusual force: if you can enumerate the operations, enumerate them.
 
 ## Atlas, concretely
 
@@ -219,7 +219,7 @@ The last row applies to the whole deployment rather than the sandbox, and it is 
 
 ---
 
-Next: [The Agentic Supply Chain](/docs/security/agentic-supply-chain), the models, datasets, tools, servers, agents, images, registries, and update channels that can change Atlas without a code deploy.
+Next: [The Agentic Supply Chain](/book/security/agentic-supply-chain), the models, datasets, tools, servers, agents, images, registries, and update channels that can change Atlas without a code deploy.
 
 ## Takeaways
 

@@ -19,7 +19,7 @@ The quota was never the problem. **Nothing decided who gets it.**
 - **Batch work has no deadline** and will happily consume everything available.
 - **First-in-first-out is the wrong default** when the queue mixes classes.
 - **Strict priority starves the bottom class**: a batch job that never runs is not a working system.
-- **The unit is not requests.** Agent work is metered in [tokens](/docs/reliability/backpressure), and a "small" batch item can cost more than a live one.
+- **The unit is not requests.** Agent work is metered in [tokens](/book/reliability/backpressure), and a "small" batch item can cost more than a live one.
 - **Classification must be structural**, not a guess made per request.
 
 ## Solution
@@ -53,7 +53,7 @@ Four rules:
 
 **Reserve shares; do not use strict priority.** A floor per class means interactive always has capacity and batch always makes progress. Strict priority starves the bottom, and a starved class is one someone will route around, usually by running the job on an unmetered path.
 
-**Let idle capacity be borrowed, and yield by admission.** Batch may exceed its share when interactive is quiet, and must fall back within one scheduling window when it is not. Yielding means *stop admitting new work*, never killing runs in flight: [a half-finished run has spent money and produced nothing](/docs/reliability/backpressure).
+**Let idle capacity be borrowed, and yield by admission.** Batch may exceed its share when interactive is quiet, and must fall back within one scheduling window when it is not. Yielding means *stop admitting new work*, never killing runs in flight: [a half-finished run has spent money and produced nothing](/book/reliability/backpressure).
 
 **Classify at the source, structurally.** The class comes from where the work entered, a live API call, a scheduler, an eval harness, not from a heuristic about size or a field the caller sets. A caller who can choose their own priority will choose the highest one.
 
@@ -153,14 +153,14 @@ The `reservedAbove` term is what makes borrowing safe. Batch can use spare capac
 
 **When there is one workload.** No mix, no contention, no reason.
 
-**When batch can be moved off the shared quota entirely.** This is the better fix when available: put evals and backfills on the [batch endpoint](/docs/patterns/cost/batch-api-offload), which is separately metered and cheaper. Scheduling contention is worse than not having it.
+**When batch can be moved off the shared quota entirely.** This is the better fix when available: put evals and backfills on the [batch endpoint](/book/patterns/cost/batch-api-offload), which is separately metered and cheaper. Scheduling contention is worse than not having it.
 
 **When capacity is genuinely elastic.** If you can provision more quota on demand and the cost is acceptable, buying capacity beats rationing it.
 
 **When the classes cannot be distinguished at entry.** If every request arrives through one endpoint with no reliable signal, you cannot classify structurally, and classifying by a caller-supplied field is not classification.
 
 <Aside type="note" title="This is admission control, and admission control has to happen at the door">
-The instinct when capacity is short is to queue everything and let a scheduler sort it out. For agents that is subtly wrong, and the reason is [the property no ordinary request has](/docs/reliability/backpressure): **a run that starts and does not finish has spent real money and produced nothing.**
+The instinct when capacity is short is to queue everything and let a scheduler sort it out. For agents that is subtly wrong, and the reason is [the property no ordinary request has](/book/reliability/backpressure): **a run that starts and does not finish has spent real money and produced nothing.**
 
 So the priority decision belongs at admission, before the first token, where rejecting is free and the answer *not now, retry in ninety seconds* is honest and actionable. Once a batch run has spent fourteen steps, every option is bad: killing it wastes the spend, and letting it continue means it is still competing.
 
@@ -169,8 +169,8 @@ Which gives the rule that makes the whole pattern work: **estimate the whole run
 
 ## Related
 
-- [Concurrency, Rate Limits, Backpressure](/docs/reliability/backpressure): the chapter, including why admission beats queueing
-- [Tenant Fairness](/docs/patterns/scale/tenant-fairness): the same problem within a class, across customers
-- [Downstream Rate Limiting](/docs/patterns/scale/downstream-rate-limiting): the same shares applied to a quota you do not own
-- [Batch API Offload](/docs/patterns/cost/batch-api-offload): removing the contention instead of scheduling it
-- [Worker-Specific Queues](/docs/patterns/scale/worker-specific-queues): routing by capability rather than by urgency
+- [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure): the chapter, including why admission beats queueing
+- [Tenant Fairness](/book/patterns/scale/tenant-fairness): the same problem within a class, across customers
+- [Downstream Rate Limiting](/book/patterns/scale/downstream-rate-limiting): the same shares applied to a quota you do not own
+- [Batch API Offload](/book/patterns/cost/batch-api-offload): removing the contention instead of scheduling it
+- [Worker-Specific Queues](/book/patterns/scale/worker-specific-queues): routing by capability rather than by urgency

@@ -5,11 +5,11 @@ description: "Roll a change to a slice and score it before it reaches everyone."
 
 ## Problem
 
-The change passed the [golden set](/docs/patterns/evaluation/golden-set) and the [shadow run](/docs/patterns/evaluation/shadow-run) showed nineteen decision differences that all looked like improvements.
+The change passed the [golden set](/book/patterns/evaluation/golden-set) and the [shadow run](/book/patterns/evaluation/shadow-run) showed nineteen decision differences that all looked like improvements.
 
 Now it has to serve real customers, and the metric you actually care about, resolution rate, is the one you cannot use to decide. It moves slowly, it is noisy, and detecting a three-point change at meaningful confidence needs more runs than a small canary sees in a day. Waiting for it means either a canary that runs for a week or a promotion decided on a number that has not converged.
 
-The ordinary web answer, an A/B test, does not transfer cleanly either. You cannot serve the same ticket under both versions, so there is no paired comparison, only two populations, and [one tenant's burst](/docs/patterns/scale/tenant-fairness) can swamp a 5% slice.
+The ordinary web answer, an A/B test, does not transfer cleanly either. You cannot serve the same ticket under both versions, so there is no paired comparison, only two populations, and [one tenant's burst](/book/patterns/scale/tenant-fairness) can swamp a 5% slice.
 
 ## Forces
 
@@ -52,7 +52,7 @@ Four rules:
 
 **Assign stickily, by tenant.** A customer whose first ticket is handled by version A and second by version B gets inconsistent behaviour, and a tenant split across arms cannot be analyzed as a unit. Tenant is also one of the largest sources of outcome variance, so holding it constant per arm makes the comparison cleaner.
 
-**Keep a permanent holdout.** Without a slice that never receives canaries, a slow global drift and a bad canary look identical, [which is the drift-diagnosis problem](/docs/observability/drift) arriving in the middle of a rollout, at the worst time to have to untangle it.
+**Keep a permanent holdout.** Without a slice that never receives canaries, a slow global drift and a bad canary look identical, [which is the drift-diagnosis problem](/book/observability/drift) arriving in the middle of a rollout, at the worst time to have to untangle it.
 
 **Gate on proxies that move in minutes.** Format compliance, tool-call mix, turn count, input tokens per turn. These are cheap, low-variance, and they break before the quality score has enough samples to notice. The slow metric confirms; it does not gate.
 
@@ -149,13 +149,13 @@ Comparing against the **holdout** rather than against a historical baseline is t
 
 ## Trade-offs
 
-**Real customers are exposed.** That is the point and the cost. [Gate by blast radius, not by percentage](/docs/production/rollout): a candidate can serve tier-0 traffic freely while any tier-1 action it proposes goes to a human for the canary's duration. The escalation machinery already exists and the volume is small.
+**Real customers are exposed.** That is the point and the cost. [Gate by blast radius, not by percentage](/book/production/rollout): a candidate can serve tier-0 traffic freely while any tier-1 action it proposes goes to a human for the canary's duration. The escalation machinery already exists and the volume is small.
 
 **Sample size is the binding constraint.** A 5% slice of moderate traffic may take days to make the quality metric significant. Widening the slice speeds it up and increases exposure; there is no way around the trade except accepting a longer canary.
 
 **Sticky-by-tenant reduces effective sample size.** Eleven tenants means eleven units, not nine hundred tickets, and one large tenant landing in the canary arm can dominate it. Stratify the assignment when the tenant population is small and uneven.
 
-**Rolling back does not abort in-flight runs.** New runs pick up the stable bundle immediately; runs already executing finish on the candidate. "We rolled back at 14:40" and "it stopped affecting customers at 14:40" differ by [your longest in-flight run](/docs/production/rollout).
+**Rolling back does not abort in-flight runs.** New runs pick up the stable bundle immediately; runs already executing finish on the candidate. "We rolled back at 14:40" and "it stopped affecting customers at 14:40" differ by [your longest in-flight run](/book/production/rollout).
 
 ## When not to use it
 
@@ -163,12 +163,12 @@ Comparing against the **holdout** rather than against a historical baseline is t
 
 **When traffic is too low.** Below the volume where a slice produces a significant number, a canary is exposure with no measurement. Use a longer shadow phase instead.
 
-**For irreversible-action changes without gating.** A change affecting how credits are issued should canary with every tier-1 action approval-gated, or not at all: [rollback does not un-send](/docs/production/versioning).
+**For irreversible-action changes without gating.** A change affecting how credits are issued should canary with every tier-1 action approval-gated, or not at all: [rollback does not un-send](/book/production/versioning).
 
 **When you have no holdout and cannot make one.** Without a stable comparison arm, a moved metric is uninterpretable, and you will spend the rollout arguing about whether the world changed or the version did.
 
 <Aside type="caution" title="Never change two things at once, and this is where it costs the most">
-Moving the prompt and the model in one canary means a shifted metric cannot be attributed. That is annoying in a fixture run and genuinely expensive here, because you [cannot roll back a model](/docs/production/versioning), so half the change may not be unwindable.
+Moving the prompt and the model in one canary means a shifted metric cannot be attributed. That is annoying in a fixture run and genuinely expensive here, because you [cannot roll back a model](/book/production/versioning), so half the change may not be unwindable.
 
 The same applies to shipping a prompt change alongside a corpus re-index, which is easy to do accidentally when both are on the same release train.
 
@@ -177,8 +177,8 @@ Sequence them. It doubles the calendar time and it is the difference between a r
 
 ## Related
 
-- [Shadow Run](/docs/patterns/evaluation/shadow-run): the rung below, with real traffic and zero exposure
-- [Rollout and In-Flight Migration](/docs/production/rollout): the full ladder, sticky assignment, and blast-radius gating
-- [Golden Set](/docs/patterns/evaluation/golden-set): what should already be green before a canary starts
-- [Online Guardrail](/docs/patterns/evaluation/online-guardrail): the per-response check running underneath the canary
-- [Detecting Drift](/docs/observability/drift): why the holdout is what keeps a moved metric interpretable
+- [Shadow Run](/book/patterns/evaluation/shadow-run): the rung below, with real traffic and zero exposure
+- [Rollout and In-Flight Migration](/book/production/rollout): the full ladder, sticky assignment, and blast-radius gating
+- [Golden Set](/book/patterns/evaluation/golden-set): what should already be green before a canary starts
+- [Online Guardrail](/book/patterns/evaluation/online-guardrail): the per-response check running underneath the canary
+- [Detecting Drift](/book/observability/drift): why the holdout is what keeps a moved metric interpretable

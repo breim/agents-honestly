@@ -3,7 +3,7 @@ title: "Generative UI and Tool Approvals"
 description: "Rendering tool calls as interface, and putting the approval gate where the user actually is."
 ---
 
-[The previous chapter](/docs/interface/streaming-ux) ended with a rule and deferred it: tool calls are structured elements, not text. This chapter is what that means, and then the question [Part XII designed a card for](/docs/human-in-the-loop/approval-gates) without saying where it goes.
+[The previous chapter](/book/interface/streaming-ux) ended with a rule and deferred it: tool calls are structured elements, not text. This chapter is what that means, and then the question [Part XII designed a card for](/book/human-in-the-loop/approval-gates) without saying where it goes.
 
 ## A tool call is a sequence of frames
 
@@ -17,7 +17,7 @@ The mistake is treating a tool call as an event that produces a result. It is a 
 | Output available | The result | A component built for that result |
 | Error | What failed, and whether it is terminal | A state, not a stack trace |
 
-Rendering only the last two rows throws away the frames that matter most. [The perceptual budget](/docs/interface/streaming-ux) is spent in the first three, and that is where the user decides whether the system is working. *"Looking up order 4921"* at 400 milliseconds is the entire benefit of streaming, arriving before any result exists.
+Rendering only the last two rows throws away the frames that matter most. [The perceptual budget](/book/interface/streaming-ux) is spent in the first three, and that is where the user decides whether the system is working. *"Looking up order 4921"* at 400 milliseconds is the entire benefit of streaming, arriving before any result exists.
 
 Note also that the second row is strictly better than the first for the same cost. Once arguments have finished streaming you can say **which** order, and a specific status line is worth several generic ones.
 
@@ -35,7 +35,7 @@ This book's position is the first one, stated as a rule that will look familiar:
 
 > **The model picks the component. You wrote the component.**
 
-That is the same boundary as every other one in this book: [the model chooses the subject, your code supplies the authority](/docs/tools/tools-are-apis-for-models); the model proposes an action, your code enforces the limit. Rendering is not an exception, and the reason is concrete rather than aesthetic: a tool result may contain text from a document a stranger wrote, and an interface generated *from* that text is [an injection surface with a render step attached](/docs/security/prompt-injection).
+That is the same boundary as every other one in this book: [the model chooses the subject, your code supplies the authority](/book/tools/tools-are-apis-for-models); the model proposes an action, your code enforces the limit. Rendering is not an exception, and the reason is concrete rather than aesthetic: a tool result may contain text from a document a stranger wrote, and an interface generated *from* that text is [an injection surface with a render step attached](/book/security/prompt-injection).
 
 Mechanically the registry is unglamorous, which is the point:
 
@@ -65,9 +65,9 @@ Part XII specified what an approval card contains. The placement question is sep
 | --- | --- | --- |
 | The person in the session | **Inline**, as a message from the agent | They are already looking at it. Interrupting is free. |
 | Someone else, now | **A queue**, with the run waiting durably | The driver cannot approve their own action |
-| Someone else, later | **A queue**, and the run has [paused for days](/docs/durable-execution/signals-and-children) | Nobody is watching anything |
+| Someone else, later | **A queue**, and the run has [paused for days](/book/durable-execution/signals-and-children) | Nobody is watching anything |
 
-The failure is picking one and applying it everywhere, and the sharpest way to say why is that **chat is a cockpit, not a conveyor belt.** Inline confirmation works beautifully for an interactive session and fails completely for autonomous operation, where nobody is in the chat, approvals arrive in volume, and the [risk tiers](/docs/human-in-the-loop/risk-tiers) exist precisely to batch them.
+The failure is picking one and applying it everywhere, and the sharpest way to say why is that **chat is a cockpit, not a conveyor belt.** Inline confirmation works beautifully for an interactive session and fails completely for autonomous operation, where nobody is in the chat, approvals arrive in volume, and the [risk tiers](/book/human-in-the-loop/risk-tiers) exist precisely to batch them.
 
 Conversely, routing an interactive user's own action to a queue they will check tomorrow converts a two-second confirmation into a day of latency for no safety gain, since they are the authority and they are right there.
 
@@ -75,7 +75,7 @@ Conversely, routing an interactive user's own action to a queue they will check 
 
 Combining two earlier requirements produces a design conclusion neither reaches alone.
 
-[Escalation and Audit](/docs/human-in-the-loop/escalation-and-audit) argued that the audit record must contain the **rendered** card, because re-rendering it later produces a different card from state that has since moved. [Approval Gates](/docs/human-in-the-loop/approval-gates) argued that approvals expire for the same reason.
+[Escalation and Audit](/book/human-in-the-loop/escalation-and-audit) argued that the audit record must contain the **rendered** card, because re-rendering it later produces a different card from state that has since moved. [Approval Gates](/book/human-in-the-loop/approval-gates) argued that approvals expire for the same reason.
 
 So render the card **once**, at the moment the gate fires, and store it. The queue displays the stored bytes. The inline case displays the stored bytes. The audit record *is* the stored bytes.
 
@@ -96,11 +96,11 @@ Do it the other way, rendering live in each surface, and you have three views th
 
 ## Do not render agent actions optimistically
 
-Ordinary web practice says render the change immediately and reconcile with the server after. For agent actions this is wrong, and the reason is [Part VII's commitment rule](/docs/langgraph/streaming-and-control): anything you show, you have said.
+Ordinary web practice says render the change immediately and reconcile with the server after. For agent actions this is wrong, and the reason is [Part VII's commitment rule](/book/langgraph/streaming-and-control): anything you show, you have said.
 
 An optimistically rendered *"Refund issued"* that then fails is not a stale cache. It is a false statement made to a customer by a system they were told to trust, and no subsequent correction fully retrieves it. Show `issuing…`, then show the outcome. The two hundred milliseconds you would have saved are not worth the class of incident you buy.
 
-The same applies to the approval itself: a card should not disappear the instant Approve is clicked. It should show that the decision was **submitted**, and then that it was **accepted**, because [an update can be rejected by a validator](/docs/human-in-the-loop/approval-gates) for staleness, and a card that vanished has already told the reviewer their decision took effect.
+The same applies to the approval itself: a card should not disappear the instant Approve is clicked. It should show that the decision was **submitted**, and then that it was **accepted**, because [an update can be rejected by a validator](/book/human-in-the-loop/approval-gates) for staleness, and a card that vanished has already told the reviewer their decision took effect.
 
 ## Atlas, concretely
 
@@ -109,18 +109,18 @@ The same applies to the approval itself: a card should not disappear the instant
 | Tool calls | Registry by tool name, with a raw fallback |
 | Frames | Status line at input-available, spinner with elapsed after 2s, component at output-available |
 | `issue_credit` < $1,000 | Inline card in the console. The agent handling the ticket is the approver |
-| `issue_credit` ≥ $1,000 | Queue for the team lead, run paused durably, [48-business-hour expiry](/docs/human-in-the-loop/approval-gates) |
+| `issue_credit` ≥ $1,000 | Queue for the team lead, run paused durably, [48-business-hour expiry](/book/human-in-the-loop/approval-gates) |
 | Card lifecycle | Rendered once at gate time, stored, displayed from storage everywhere |
 | After Approve | `Submitted` → `Accepted`, never an immediate disappearance |
 | Model-generated layout | Not used |
 
-The console on the other end of the approve call is [Request-Response via Update](/docs/patterns/durability/update-request-response) in the catalog, the pattern that explains why Approve returns a validated answer instead of a fire-and-forget acknowledgement.
+The console on the other end of the approve call is [Request-Response via Update](/book/patterns/durability/update-request-response) in the catalog, the pattern that explains why Approve returns a validated answer instead of a fire-and-forget acknowledgement.
 
-That last row is a decision rather than an omission. Meridian's support console shows six known result shapes and one fallback, all written by people, all reviewable. There is no question a support agent asks that requires an interface nobody anticipated. And the one surface where an unanticipated interface would be genuinely useful, ad-hoc warehouse analysis, is [not something Atlas does](/docs/retrieval/sql-is-still-the-answer).
+That last row is a decision rather than an omission. Meridian's support console shows six known result shapes and one fallback, all written by people, all reviewable. There is no question a support agent asks that requires an interface nobody anticipated. And the one surface where an unanticipated interface would be genuinely useful, ad-hoc warehouse analysis, is [not something Atlas does](/book/retrieval/sql-is-still-the-answer).
 
 ---
 
-Next: [Accessible and Global Agent Interfaces](/docs/interface/accessible-and-global-interfaces), making the same streaming and approval states work across assistive technology, languages, locales, money, and time.
+Next: [Accessible and Global Agent Interfaces](/book/interface/accessible-and-global-interfaces), making the same streaming and approval states work across assistive technology, languages, locales, money, and time.
 
 ## Takeaways
 

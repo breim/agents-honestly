@@ -4,7 +4,7 @@ description: "Every claimant competes for the same space. Deciding who gets it i
 ---
 
 
-[Part I](/docs/foundations/context-window) established that the context window is a budget you re-spend on every request. This part is about spending it on purpose.
+[Part I](/book/foundations/context-window) established that the context window is a budget you re-spend on every request. This part is about spending it on purpose.
 
 Because right now you aren't. In Atlas v0, the allocation is whatever falls out of the code: the system prompt is however long someone wrote it, the tool schemas are however long their descriptions ended up, retrieval returns however many chunks the default was, and tool results are however much JSON the warehouse felt like returning. Nobody decided any of that. **The default allocation policy is "whoever appends last wins,"** and it is the reason agents get slower, dumber, and more expensive as they run.
 
@@ -79,7 +79,7 @@ Recent work measuring long-context behaviour across frontier models found accura
 That inverts the naive retrieval instinct. "Retrieve top-20 instead of top-5, the window can take it" is not a 4× cost increase with a safety margin attached. It is specifically adding the fifteen chunks most likely to be confusable with the correct one, because similarity is exactly what ranked them highly. **The extra chunks are drawn from the worst possible distribution.**
 
 <Aside type="note" title="The consequence for retrieval">
-Five well-reranked chunks beat twenty raw ones, not only on cost, but on accuracy. This is why [reranking](/docs/retrieval/hybrid-and-reranking) earns its latency, and why "just increase `k`" is a fix that measures well in a retrieval eval and badly in an end-to-end one.
+Five well-reranked chunks beat twenty raw ones, not only on cost, but on accuracy. This is why [reranking](/book/retrieval/hybrid-and-reranking) earns its latency, and why "just increase `k`" is a fix that measures well in a retrieval eval and badly in an end-to-end one.
 
 Related, and worth holding loosely because it is a strong claim from a young literature: coherent, well-structured input has been observed to degrade long-context attention *more* than shuffled input of the same length. If it holds, it means a tidy wall of related documents is closer to the worst case than the best.
 </Aside>
@@ -130,9 +130,9 @@ One more reason a single static budget isn't enough: the shape of the competitio
 
 </Figure>
 
-At step 1, almost everything you pay for is fixed overhead, which is why [caching](/docs/foundations/prompt-caching) that prefix is the highest-leverage thing available, and why trimming tool descriptions pays off on every single request forever.
+At step 1, almost everything you pay for is fixed overhead, which is why [caching](/book/foundations/prompt-caching) that prefix is the highest-leverage thing available, and why trimming tool descriptions pays off on every single request forever.
 
-By step 12, history dominates, and no amount of schema trimming helps. That is the regime where [compaction](/docs/context/compaction) is the only lever that matters. Applying the late-run fix to an early-run problem, or vice versa, is the most common wasted optimization in this field.
+By step 12, history dominates, and no amount of schema trimming helps. That is the regime where [compaction](/book/context/compaction) is the only lever that matters. Applying the late-run fix to an early-run problem, or vice versa, is the most common wasted optimization in this field.
 
 ## Make it visible
 
@@ -187,7 +187,7 @@ That log line is also the highest-value thing in this chapter operationally. The
 
 ---
 
-Next: [The System Prompt](/docs/context/system-prompt), what belongs in it, what does not, and why the instructions you inherited from an older model now misfire.
+Next: [The System Prompt](/book/context/system-prompt), what belongs in it, what does not, and why the instructions you inherited from an older model now misfire.
 
 ## Takeaways
 

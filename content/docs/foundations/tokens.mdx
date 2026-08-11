@@ -148,7 +148,7 @@ output    300 × $15 / 1,000,000  =  $0.0045
 
 Two and a half cents. Fine. Now notice that this is a *turn*, and agents do not stop at one.
 
-One ticket is rarely one turn. Atlas reads the ticket and calls `get_order`; reads the result and calls `get_shipment_status`; reads that and writes a reply. Three turns for the simplest useful shape of ticket, and [four is the common case](/docs/observability/cost-accounting). Each one resends everything that came before it plus the growing pile of tool results, so they do not cost two and a half cents each. They cost two to four, rising as they go. **Handling one ticket is not one request; it is a small conversation the user never sees.** Four turns at that rate is about **fifteen cents a ticket**, six times the figure above. At ten thousand tickets a month, a mid-size support desk, that is $1,500, before a single retry.
+One ticket is rarely one turn. Atlas reads the ticket and calls `get_order`; reads the result and calls `get_shipment_status`; reads that and writes a reply. Three turns for the simplest useful shape of ticket, and [four is the common case](/book/observability/cost-accounting). Each one resends everything that came before it plus the growing pile of tool results, so they do not cost two and a half cents each. They cost two to four, rising as they go. **Handling one ticket is not one request; it is a small conversation the user never sees.** Four turns at that rate is about **fifteen cents a ticket**, six times the figure above. At ten thousand tickets a month, a mid-size support desk, that is $1,500, before a single retry.
 
 That multiplier is where agent economics actually live, and it is why the next chapter, on how the context grows, is really a chapter about money.
 

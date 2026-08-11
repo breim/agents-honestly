@@ -25,7 +25,7 @@ This is the chain that matters, and each arrow is lossy:
    decides      question    customer
 ```
 
-Vector search gets you the first arrow. [Reranking](/docs/retrieval/hybrid-and-reranking) is an attempt at the second. [Metadata filtering](/docs/retrieval/metadata-and-authorization) is what gets you the third, and it is a filter rather than a ranking, which is why the next chapters treat tier, tenant, and version as structured fields rather than hoping similarity handles them.
+Vector search gets you the first arrow. [Reranking](/book/retrieval/hybrid-and-reranking) is an attempt at the second. [Metadata filtering](/book/retrieval/metadata-and-authorization) is what gets you the third, and it is a filter rather than a ranking, which is why the next chapters treat tier, tenant, and version as structured fields rather than hoping similarity handles them.
 
 ## How similarity is measured, and what the number isn't
 
@@ -36,7 +36,7 @@ The part worth internalizing is what the resulting score is **not**.
 A cosine score of 0.82 is not "82% relevant." It is not a probability, it is not calibrated, and it has no absolute interpretation. Scores are meaningful only *relative to other scores in the same index, from the same model.* Which means:
 
 - **A fixed relevance threshold does not transfer.** The 0.75 cutoff you tuned against one model is meaningless against another, and often meaningless against the same model after the corpus changes shape.
-- **Score gaps matter more than score values.** "Top result 0.71, second 0.44" is a confident retrieval. "0.83, 0.82, 0.81, 0.81" is a coin flip with high numbers, and it is exactly the [distractor situation](/docs/context/context-as-budget) that costs you accuracy.
+- **Score gaps matter more than score values.** "Top result 0.71, second 0.44" is a confident retrieval. "0.83, 0.82, 0.81, 0.81" is a coin flip with high numbers, and it is exactly the [distractor situation](/book/context/context-as-budget) that costs you accuracy.
 - Rank is more portable than score. Build on ordering.
 
 ## Questions and documents are different shapes
@@ -83,7 +83,7 @@ Two migration strategies, and you should pick before you need one:
 
 Meridian launches a product line in 2027 with terminology the embedding model has never seen. Those documents embed poorly, not catastrophically but persistently a bit worse than everything else, and no metric you're watching says so.
 
-This is [drift](/docs/observability/drift), and it argues for the same defense as everything else in this book: a fixed evaluation set that includes new vocabulary, run on a schedule, so degradation shows up as a number rather than as a support complaint.
+This is [drift](/book/observability/drift), and it argues for the same defense as everything else in this book: a fixed evaluation set that includes new vocabulary, run on a schedule, so degradation shows up as a number rather than as a support complaint.
 
 ### Your embedding provider is now in the query path
 
@@ -117,7 +117,7 @@ They will load into the same index without complaint and produce nonsense. Dimen
 
 ## When not to embed at all
 
-Worth restating from [the routing chapter](/docs/retrieval/where-does-the-answer-live), now that the costs are concrete. Do not embed:
+Worth restating from [the routing chapter](/book/retrieval/where-does-the-answer-live), now that the costs are concrete. Do not embed:
 
 - **Identifiers, codes, SKUs.** The tokenizer destroys the signal; lexical search is built for it.
 - **Structured records you can query.** A row is not a document. Embedding order rows to answer questions about orders is building a lossy, expensive, stale copy of a database you already have.
@@ -128,7 +128,7 @@ The corpus that genuinely deserves embedding is usually smaller than the one tea
 
 ---
 
-Next: [Vector Search and the Database Question](/docs/retrieval/vector-search), starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
+Next: [Vector Search and the Database Question](/book/retrieval/vector-search), starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
 
 ## Takeaways
 

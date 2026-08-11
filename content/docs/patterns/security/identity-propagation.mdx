@@ -9,7 +9,7 @@ The agent authenticates the user correctly, and then calls every backend with it
 
 Nothing is broken. The session is valid, the token was checked, the login worked. And every question any user asks is answered by a principal with universal read, because the credential in the deployment config was provisioned during the pilot so the indexer could see everything.
 
-The result is the defect that survives every security review: a marketing employee asks about compensation policy and gets a correct, helpful answer from an HR document they were never entitled to read. No exception, no 403, no access log entry anyone would question. [The leak is laundered by generation](/docs/retrieval/metadata-and-authorization).
+The result is the defect that survives every security review: a marketing employee asks about compensation policy and gets a correct, helpful answer from an HR document they were never entitled to read. No exception, no 403, no access log entry anyone would question. [The leak is laundered by generation](/book/retrieval/metadata-and-authorization).
 
 The second-order version is worse because it looks like a fix. A team that notices this filters the *results* by the user's access before showing them. Authorization now happens, and the restricted content was still read out of storage, still passed through the process, still entered the traces, and still went to the model, where it can end up in a summary, a memory write, or a cached intermediate that the filter does not follow.
 
@@ -51,7 +51,7 @@ Four rules:
 
 **Downscope on the way in, never filter on the way out.** The token narrows the query at the backend, so restricted rows are never read. Filtering afterwards leaves the content in your process, your logs, and the model's context, and makes the backend's own audit log disagree with your policy, which matters because it is the system of record.
 
-**Re-derive at the moment of the action.** Store the *delegation reference*, which user and which grant, in the run's state, never the token. On resume, mint a fresh one and treat a minting failure as a legitimate outcome that [escalates](/docs/human-in-the-loop/escalation-and-audit) rather than an error that retries. A run resuming Thursday with Monday's rights is a revocation that silently did not happen.
+**Re-derive at the moment of the action.** Store the *delegation reference*, which user and which grant, in the run's state, never the token. On resume, mint a fresh one and treat a minting failure as a legitimate outcome that [escalates](/book/human-in-the-loop/escalation-and-audit) rather than an error that retries. A run resuming Thursday with Monday's rights is a revocation that silently did not happen.
 
 **Make it structural.** No client constructor without a delegation. Identity that can be forgotten will be forgotten: by the eval harness, the cache warmer, or the nightly backfill, which are precisely the paths nobody threat-models.
 
@@ -129,7 +129,7 @@ async def resume_delegation(ref: DelegationRef, ctx) -> Delegation:
 </Tab>
 </Tabs>
 
-`resumeDelegation` raising rather than returning a stale token is the line that makes the pause safe. It is also the line most likely to be removed by someone debugging a resumed run at 2am, so it belongs in a [failure-injection test](/docs/reliability/failure-injection): revoke the grant mid-pause and assert the run escalates instead of proceeding.
+`resumeDelegation` raising rather than returning a stale token is the line that makes the pause safe. It is also the line most likely to be removed by someone debugging a resumed run at 2am, so it belongs in a [failure-injection test](/book/reliability/failure-injection): revoke the grant mid-pause and assert the run escalates instead of proceeding.
 
 ## Trade-offs
 
@@ -145,7 +145,7 @@ async def resume_delegation(ref: DelegationRef, ctx) -> Delegation:
 
 **Single-tenant, single-user internal tools.** If everyone who can reach the agent already has identical access to everything behind it, the token adds ceremony without a boundary. Revisit the moment a second access level exists.
 
-**When the backend has no authorization model.** Propagating identity to a service that ignores it produces a false sense of enforcement. Fix the backend or put the enforcement in [the dispatcher](/docs/patterns/security/tool-permission-boundary), and be honest about which you did.
+**When the backend has no authorization model.** Propagating identity to a service that ignores it produces a false sense of enforcement. Fix the backend or put the enforcement in [the dispatcher](/book/patterns/security/tool-permission-boundary), and be honest about which you did.
 
 **For genuinely public data.** A public documentation corpus needs no principal. Keep it in a separate index so nobody has to reason about whether the filter applied.
 
@@ -154,16 +154,16 @@ The intuitive repair for the opening scene is to call backends *as the user*: sa
 
 And accountability is destroyed. The backend's audit log now records **user 8841** performing four hundred queries at 03:00, with nothing indicating an agent was involved. Incident response cannot tell automated activity from human activity, the user cannot dispute actions they did not take, and the compliance conversation has no answer to *which system did this*.
 
-The `act` claim exists precisely to avoid this trade. [RFC 8693](/docs/security/identity) has supported it since 2020. You do not have to choose between authorizing correctly and knowing who acted.
+The `act` claim exists precisely to avoid this trade. [RFC 8693](/book/security/identity) has supported it since 2020. You do not have to choose between authorizing correctly and knowing who acted.
 </Aside>
 
 ## Related
 
-- [The Agent Is Not a Superuser](/docs/security/identity): the chapter, with the three identity models and the resumption cases
-- [Tool Permission Boundary](/docs/patterns/security/tool-permission-boundary): scoping what the token may do, once it says who
-- [Filtered Retrieval](/docs/patterns/retrieval/filtered-retrieval): the same principal, enforced in the query rather than the token
-- [Multi-Tenant Isolation](/docs/security/tenant-isolation): the boundary this must survive across every async hop
-- [Dual Control](/docs/patterns/security/dual-control): when one identity is not enough authority
+- [The Agent Is Not a Superuser](/book/security/identity): the chapter, with the three identity models and the resumption cases
+- [Tool Permission Boundary](/book/patterns/security/tool-permission-boundary): scoping what the token may do, once it says who
+- [Filtered Retrieval](/book/patterns/retrieval/filtered-retrieval): the same principal, enforced in the query rather than the token
+- [Multi-Tenant Isolation](/book/security/tenant-isolation): the boundary this must survive across every async hop
+- [Dual Control](/book/patterns/security/dual-control): when one identity is not enough authority
 
 ## References
 

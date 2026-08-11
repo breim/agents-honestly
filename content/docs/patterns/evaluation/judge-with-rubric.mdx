@@ -5,7 +5,7 @@ description: "An LLM judge that is specific enough to be reproducible."
 
 ## Problem
 
-Some things a [golden set](/docs/patterns/evaluation/golden-set) needs to check have no mechanical answer. Does the reply address what the customer actually asked? Is the tone right for someone on their third follow-up? Is the explanation complete enough to act on?
+Some things a [golden set](/book/patterns/evaluation/golden-set) needs to check have no mechanical answer. Does the reply address what the customer actually asked? Is the tone right for someone on their third follow-up? Is the explanation complete enough to act on?
 
 The available substitute is a model scoring the output. The version everyone builds first is:
 
@@ -167,19 +167,19 @@ Two criteria in that list, `amount_matches_tools` and `no_unsupported_claims`, a
 
 ## Trade-offs
 
-**Cost and latency per judged item.** Six criteria in one structured call is one model pass, which is why they go in one call rather than six. On a [golden set](/docs/patterns/evaluation/golden-set) that runs on every commit this is a real per-build cost.
+**Cost and latency per judged item.** Six criteria in one structured call is one model pass, which is why they go in one call rather than six. On a [golden set](/book/patterns/evaluation/golden-set) that runs on every commit this is a real per-build cost.
 
 **Calibration is required, not optional.** A judge is only useful if it agrees with people on cases where people agree with each other. Score a few dozen items by hand, compare, and keep them as a calibration set. Reported practice puts strong judges above 80% agreement with human annotators, which is roughly the level humans achieve with each other, and is therefore the ceiling to aim at rather than a number to be disappointed by.
 
-**Judges drift.** A pinned model still changes behaviour, so a moving score on a stable system is a judge problem until proven otherwise. The [frozen canary](/docs/observability/drift) should include judge fixtures, not just agent fixtures.
+**Judges drift.** A pinned model still changes behaviour, so a moving score on a stable system is a judge problem until proven otherwise. The [frozen canary](/book/observability/drift) should include judge fixtures, not just agent fixtures.
 
-**Rubric changes invalidate history.** Adding a criterion changes what the score means, so trend lines break. Version the rubric with the [config bundle](/docs/production/versioning) and report per-criterion rates rather than only the total, so one added criterion does not erase the series.
+**Rubric changes invalidate history.** Adding a criterion changes what the score means, so trend lines break. Version the rubric with the [config bundle](/book/production/versioning) and report per-criterion rates rather than only the total, so one added criterion does not erase the series.
 
 ## When not to use it
 
-**When a deterministic check exists.** Citation resolution, amount grounding, schema validity, [forbidden retrievals](/docs/patterns/evaluation/trajectory-assertion). Those are free, total, and cannot be lenient. A judge is for what they cannot express.
+**When a deterministic check exists.** Citation resolution, amount grounding, schema validity, [forbidden retrievals](/book/patterns/evaluation/trajectory-assertion). Those are free, total, and cannot be lenient. A judge is for what they cannot express.
 
-**As a gate on an interactive path.** A judge is an eval, not a [guardrail](/docs/patterns/evaluation/online-guardrail). It samples and reports; it does not sit between the agent and the customer.
+**As a gate on an interactive path.** A judge is an eval, not a [guardrail](/book/patterns/evaluation/online-guardrail). It samples and reports; it does not sit between the agent and the customer.
 
 **Without calibration data.** An uncalibrated judge produces numbers that feel like measurement. If there is no budget to hand-score a calibration set, be honest that the output is a signal rather than a score.
 
@@ -199,11 +199,11 @@ None of these makes the technique unusable. The same work found strong judges ag
 
 ## Related
 
-- [Golden Set](/docs/patterns/evaluation/golden-set): the cases the judge scores
-- [Trajectory Assertion](/docs/patterns/evaluation/trajectory-assertion): the deterministic checks to exhaust first
-- [Scoring](/docs/evals/scoring): the chapter, including rubric design and inter-rater agreement
-- [Critic and Reviser](/docs/patterns/control/critic-reviser): the same independence argument, applied at runtime rather than in evals
-- [Online Guardrail](/docs/patterns/evaluation/online-guardrail): why a judge is not a gate
+- [Golden Set](/book/patterns/evaluation/golden-set): the cases the judge scores
+- [Trajectory Assertion](/book/patterns/evaluation/trajectory-assertion): the deterministic checks to exhaust first
+- [Scoring](/book/evals/scoring): the chapter, including rubric design and inter-rater agreement
+- [Critic and Reviser](/book/patterns/control/critic-reviser): the same independence argument, applied at runtime rather than in evals
+- [Online Guardrail](/book/patterns/evaluation/online-guardrail): why a judge is not a gate
 
 ## References
 

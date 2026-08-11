@@ -3,7 +3,7 @@ title: "Tool Result Design"
 description: "What comes back lands in the context window forever. Shape it, cap it, summarize it."
 ---
 
-[Atlas v0](/docs/first-agent/the-loop-by-hand) truncated every tool result at four thousand characters. [Part III called that a bound, and a bad one](/docs/context/context-as-budget), and deferred the reason to this chapter. Here it is.
+[Atlas v0](/book/first-agent/the-loop-by-hand) truncated every tool result at four thousand characters. [Part III called that a bound, and a bad one](/book/context/context-as-budget), and deferred the reason to this chapter. Here it is.
 
 ## Why the blunt cut is the wrong bound
 
@@ -11,9 +11,9 @@ description: "What comes back lands in the context window forever. Shape it, cap
 
 **It cuts by position, and position has nothing to do with importance.** The field that decides the answer is wherever the serializer happened to put it. A blunt cut keeps the first 4,000 characters, which on a typical payload means metadata, IDs, and timestamps. It drops the one field the ticket was about.
 
-**It produces invalid JSON.** The model receives `{"invoices":[{"id":"88213","amount_cents":42` and has to repair it. It will, plausibly. A repaired value is indistinguishable from a real one in everything downstream. This is [the confident-wrong-answer failure](/docs/retrieval/sql-is-still-the-answer) arriving through a door nobody watches.
+**It produces invalid JSON.** The model receives `{"invoices":[{"id":"88213","amount_cents":42` and has to repair it. It will, plausibly. A repaired value is indistinguishable from a real one in everything downstream. This is [the confident-wrong-answer failure](/book/retrieval/sql-is-still-the-answer) arriving through a door nobody watches.
 
-**It is silent.** Nothing in the truncated text says it was truncated, so the model cannot tell "that is all there is" from "there was more and you were not shown it." That is [silent truncation](/docs/workflows/composition-patterns), which this book keeps finding in new places, and it is dishonest in the specific sense that the agent will report a partial answer as a complete one.
+**It is silent.** Nothing in the truncated text says it was truncated, so the model cannot tell "that is all there is" from "there was more and you were not shown it." That is [silent truncation](/book/workflows/composition-patterns), which this book keeps finding in new places, and it is dishonest in the specific sense that the agent will report a partial answer as a complete one.
 
 **You already paid for everything you threw away.** The query ran, the rows serialized, the bytes crossed the network. Cutting at the tool boundary saves context and nothing else: not latency, not database load, not the thing that was actually expensive.
 
@@ -38,13 +38,13 @@ A tool result is not paid once. It is appended to the transcript and **re-sent o
 
 </Figure>
 
-That arithmetic is the whole chapter. It is why [an earlier chapter claimed](/docs/tools/tools-are-apis-for-models) that returning only the fields the agent needs is the single highest-leverage change in tool design. It is also why the claim is quantitative rather than aesthetic: **the multiplier on every unnecessary field is the number of turns that follow it.** Trimming a result in half on turn 2 saves more than trimming it in half on turn 9.
+That arithmetic is the whole chapter. It is why [an earlier chapter claimed](/book/tools/tools-are-apis-for-models) that returning only the fields the agent needs is the single highest-leverage change in tool design. It is also why the claim is quantitative rather than aesthetic: **the multiplier on every unnecessary field is the number of turns that follow it.** Trimming a result in half on turn 2 saves more than trimming it in half on turn 9.
 
-It also interacts with [caching](/docs/foundations/prompt-caching) in your favour. A result that lands early and never changes sits in the stable prefix, which makes the re-sends cheap, but only if the result is deterministic. A payload carrying a `retrieved_at` timestamp invalidates the prefix on every turn and converts a cache read back into full price.
+It also interacts with [caching](/book/foundations/prompt-caching) in your favour. A result that lands early and never changes sits in the stable prefix, which makes the re-sends cheap, but only if the result is deterministic. A payload carrying a `retrieved_at` timestamp invalidates the prefix on every turn and converts a cache read back into full price.
 
 ## Four moves, in order of preference
 
-[Compaction](/docs/context/compaction) gives the order for history: drop, truncate, summarize, externalize. At the tool boundary the order is different, because you control the source:
+[Compaction](/book/context/compaction) gives the order for history: drop, truncate, summarize, externalize. At the tool boundary the order is different, because you control the source:
 
 **1 · Shape at the source.** Select the fields in the query. Do not fetch, serialize, and then discard. Decide what the tool returns as part of designing the tool, and let the database return that. This is where the entire win is; the remaining three moves are for what survives it.
 
@@ -52,7 +52,7 @@ It also interacts with [caching](/docs/foundations/prompt-caching) in your favou
 
 **3 · Paginate deliberately.** Return a page plus a cursor, and expose a tool that accepts the cursor. This is the one place a protocol is appropriate. Not `limit`/`offset` arithmetic the model has to compute, but an opaque token it hands back.
 
-**4 · Externalize.** Past some size, do not put it in the transcript at all: write it somewhere, return a reference and a short preview, and let the model fetch what it needs. Real harnesses draw this line in the range of roughly 8,000 characters to 20,000 tokens, substituting a path plus a preview of the first few hundred characters or first ten lines. This is the same move as [retrieval on demand](/docs/context/dynamic-selection), applied to output rather than input. The catalog carries all four of these rules as one entry, [Tool Result Truncation](/docs/patterns/context/tool-result-truncation), with the cap, the count, the cursor, and the continuation nudge in code.
+**4 · Externalize.** Past some size, do not put it in the transcript at all: write it somewhere, return a reference and a short preview, and let the model fetch what it needs. Real harnesses draw this line in the range of roughly 8,000 characters to 20,000 tokens, substituting a path plus a preview of the first few hundred characters or first ten lines. This is the same move as [retrieval on demand](/book/context/dynamic-selection), applied to output rather than input. The catalog carries all four of these rules as one entry, [Tool Result Truncation](/book/patterns/context/tool-result-truncation), with the cap, the count, the cursor, and the continuation nudge in code.
 
 <Aside type="tip" title="Truncation, done honestly">
 When you do cut, the continuation nudge is what makes it recoverable. Harnesses that get this right append something like:
@@ -61,7 +61,7 @@ When you do cut, the continuation nudge is what makes it recoverable. Harnesses 
 [Showing lines 1–2000 of 50000. Use offset=2001 to continue.]
 ```
 
-Three things in one line: what you got, what exists, and the exact call that gets more. Compare with a bare `...` and it is obvious which one an agent can act on, and which one produces [an apology instead of a recovery](/docs/tools/errors-as-instructions).
+Three things in one line: what you got, what exists, and the exact call that gets more. Compare with a bare `...` and it is obvious which one an agent can act on, and which one produces [an apology instead of a recovery](/book/tools/errors-as-instructions).
 </Aside>
 
 ## JSON is for your API, not for your prompt
@@ -83,7 +83,7 @@ The rule that follows is narrow and worth applying literally:
 - **Nested or heterogeneous → JSON.** A single account with a contract object and an array of terms is not a table, and forcing it into one costs more in confusion than it saves in tokens.
 - **Never XML for data.** It is strictly worse than the baseline on this axis.
 
-JSON is the right thing at your API boundary, where a parser consumes it. Inside the prompt the consumer is a model, and that is a different consumer, which is [the whole thesis of this part](/docs/tools/tools-are-apis-for-models), showing up one last time as a serialization decision.
+JSON is the right thing at your API boundary, where a parser consumes it. Inside the prompt the consumer is a model, and that is a different consumer, which is [the whole thesis of this part](/book/tools/tools-are-apis-for-models), showing up one last time as a serialization decision.
 
 <Tabs groupId="lang" persist items={['TypeScript', 'Python']}>
 <Tab value="TypeScript">
@@ -169,9 +169,9 @@ Note `as_of` resolving to a date rather than a timestamp. That is the cache poin
 
 ## Every result is a citation
 
-[Part IV established](/docs/retrieval/sql-is-still-the-answer) that a warehouse result should carry the query that produced it. The general form: **a result should contain enough provenance for the reply built on it to be checked.**
+[Part IV established](/book/retrieval/sql-is-still-the-answer) that a warehouse result should carry the query that produced it. The general form: **a result should contain enough provenance for the reply built on it to be checked.**
 
-For Atlas that means the invoice result carries `as_of`, the policy search carries document IDs and versions, and the warehouse query carries its filters. Not because the model needs them to reason, but because [the acceptance spec requires citations](/docs/first-agent/the-problem), and a citation the agent invents after the fact is not a citation. If the provenance is not in the result, the reply cannot honestly contain it.
+For Atlas that means the invoice result carries `as_of`, the policy search carries document IDs and versions, and the warehouse query carries its filters. Not because the model needs them to reason, but because [the acceptance spec requires citations](/book/first-agent/the-problem), and a citation the agent invents after the fact is not a citation. If the provenance is not in the result, the reply cannot honestly contain it.
 
 This is also the field set most worth spending tokens on. It is small, it is stable, and it converts an assertion into something a human can verify in one click.
 
@@ -187,11 +187,11 @@ This is also the field set most worth spending tokens on. It is small, it is sta
 
 `search_policies` is the one worth a second look: it returns an **excerpt**, not the document. A full policy PDF in the transcript is the externalization case from move 4, and the excerpt plus a document ID is what makes the citation checkable without renting the whole document for nine turns.
 
-The number to watch is not the size of any single result. It is **input tokens per resolved ticket**, which is where the multiplier shows up, and it is the one line on the [cost dashboard](/docs/observability/cost-accounting) that responds immediately to work done in this chapter.
+The number to watch is not the size of any single result. It is **input tokens per resolved ticket**, which is where the multiplier shows up, and it is the one line on the [cost dashboard](/book/observability/cost-accounting) that responds immediately to work done in this chapter.
 
 ---
 
-Part VIII ends with one question left: what happens when the catalogue is too large to send at all. Next: [Tool Discovery at Scale](/docs/tools/tool-discovery), what to do when there are two hundred tools and eleven are relevant.
+Part VIII ends with one question left: what happens when the catalogue is too large to send at all. Next: [Tool Discovery at Scale](/book/tools/tool-discovery), what to do when there are two hundred tools and eleven are relevant.
 
 ## Takeaways
 

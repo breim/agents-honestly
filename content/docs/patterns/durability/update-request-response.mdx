@@ -7,7 +7,7 @@ description: "Ask a running agent a question and get a validated answer back syn
 
 A support lead opens ticket 9104 in the console and clicks **Approve**. The UI needs to say, in that request, whether the approval was accepted, and if it was rejected, why.
 
-[A signal](/docs/patterns/durability/signal-with-start) cannot do this. It is fire-and-forget: the client gets an acknowledgement that the signal was *delivered*, not that it was *acted on*. So the console posts the approval, gets a 202, and then has to answer "did it work?" some other way.
+[A signal](/book/patterns/durability/signal-with-start) cannot do this. It is fire-and-forget: the client gets an acknowledgement that the signal was *delivered*, not that it was *acted on*. So the console posts the approval, gets a 202, and then has to answer "did it work?" some other way.
 
 The usual workarounds are all bad in the same direction. Polling a query in a loop turns one interaction into fifteen requests and still cannot distinguish *not yet processed* from *rejected*. Signalling and then polling has a race where the answer arrives before the poll starts. And a signal carrying garbage is written into the event history permanently before anyone can look at it: an approval for an amount that is no longer pending, from a reviewer who no longer has authority.
 
@@ -15,7 +15,7 @@ The usual workarounds are all bad in the same direction. Polling a query in a lo
 
 - **The caller needs a result**, not an acknowledgement.
 - **The workflow is the only thing that knows** whether the request is currently valid.
-- **Invalid requests should not pollute the history**, which is [size-limited](/docs/patterns/durability/continue-as-new-memory) and permanent.
+- **Invalid requests should not pollute the history**, which is [size-limited](/book/patterns/durability/continue-as-new-memory) and permanent.
 - **Handling may take time.** The agent might have to call a tool before it can answer.
 - **The client may disconnect** mid-request, and the work must not be lost or duplicated.
 - **The workflow must not block** on the caller.
@@ -55,9 +55,9 @@ Four rules:
 
 **Do not mutate state in the validator.** It runs before admission and may run more than once. It reads; the handler writes. This is the one rule the API cannot enforce for you.
 
-**Authorization belongs in the handler, not the validator.** [Authority is re-derived at the moment of the action](/docs/security/identity), and that usually needs an activity, which validators cannot call. Validate shape cheaply, then check authority where you can do real work.
+**Authorization belongs in the handler, not the validator.** [Authority is re-derived at the moment of the action](/book/security/identity), and that usually needs an activity, which validators cannot call. Validate shape cheaply, then check authority where you can do real work.
 
-**Keep the handler bounded.** An update whose handler waits on a human is a request that hangs for three days. Use an update to *record* a decision and return quickly; use [the approval gate](/docs/patterns/durability/approval-gate) for the waiting.
+**Keep the handler bounded.** An update whose handler waits on a human is a request that hangs for three days. Use an update to *record* a decision and return quickly; use [the approval gate](/book/patterns/durability/approval-gate) for the waiting.
 
 ## Code
 
@@ -134,17 +134,17 @@ The `requestId` check is what makes a double-click harmless. The second click ca
 
 **Handler duration is caller-visible.** An update that awaits three activities keeps the client waiting for all three. Callers need a timeout, and a slow handler is a slow API endpoint. This is easy to forget because the code reads like workflow logic rather than a request handler.
 
-**Client disconnects do not cancel the work.** The update proceeds and completes; the caller simply does not see the result. Design for that: the caller should be able to re-ask (via a [query](/docs/durable-execution/signals-and-children)) rather than assume failure and retry, which would be a second update.
+**Client disconnects do not cancel the work.** The update proceeds and completes; the caller simply does not see the result. Design for that: the caller should be able to re-ask (via a [query](/book/durable-execution/signals-and-children)) rather than assume failure and retry, which would be a second update.
 
 **Validators run in workflow context and must be deterministic.** No activities, no clock, no randomness. This is a genuine constraint, and it is why anything requiring I/O, including authorization, lands in the handler.
 
 ## When not to use it
 
-**When the caller does not need a result.** A customer reply webhook has nobody waiting. Use [signal-with-start](/docs/patterns/durability/signal-with-start), which is cheaper and can create the workflow.
+**When the caller does not need a result.** A customer reply webhook has nobody waiting. Use [signal-with-start](/book/patterns/durability/signal-with-start), which is cheaper and can create the workflow.
 
 **When the answer is a read.** *"What is the current deadline?"* is a query: no history, no admission, no mutation. Reaching for an update to read state is expensive by an order of magnitude.
 
-**When the handler has to wait on a human.** That is an [approval gate](/docs/patterns/durability/approval-gate). Use an update to *deliver* the human's decision and return immediately; the waiting is the workflow's job, not the caller's.
+**When the handler has to wait on a human.** That is an [approval gate](/book/patterns/durability/approval-gate). Use an update to *deliver* the human's decision and return immediately; the waiting is the workflow's job, not the caller's.
 
 **When the workflow may not exist.** Updates do not have a start variant. If the entity might be new, signal-with-start first and read the result separately.
 
@@ -157,13 +157,13 @@ Every interaction with a running agent is one of three things, and the failure m
 
 **Update.** Validated, handled, returns a result. *"Approve this, and tell me if it worked."*
 
-The tell that you picked wrong: if your client sends something and then polls to find out what happened, you wanted an update. If it polls to watch state change over time, you wanted a query on a schedule. Or, more likely, [a signal into the workflow so the workflow can act](/docs/durable-execution/signals-and-children) rather than the client watching.
+The tell that you picked wrong: if your client sends something and then polls to find out what happened, you wanted an update. If it polls to watch state change over time, you wanted a query on a schedule. Or, more likely, [a signal into the workflow so the workflow can act](/book/durable-execution/signals-and-children) rather than the client watching.
 </Aside>
 
 ## Related
 
-- [Signal With Start](/docs/patterns/durability/signal-with-start): the fire-and-forget sibling, and the one that can create the workflow
-- [Approval Gate](/docs/patterns/durability/approval-gate): where the waiting belongs; the update only delivers the decision
-- [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow): the running execution being addressed
-- [Signals and Children](/docs/durable-execution/signals-and-children): the three ways to talk to a running execution
-- [Generative UI and Approvals](/docs/interface/generative-ui-and-approvals): the console on the other end of this call
+- [Signal With Start](/book/patterns/durability/signal-with-start): the fire-and-forget sibling, and the one that can create the workflow
+- [Approval Gate](/book/patterns/durability/approval-gate): where the waiting belongs; the update only delivers the decision
+- [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow): the running execution being addressed
+- [Signals and Children](/book/durable-execution/signals-and-children): the three ways to talk to a running execution
+- [Generative UI and Approvals](/book/interface/generative-ui-and-approvals): the console on the other end of this call

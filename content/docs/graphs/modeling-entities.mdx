@@ -86,15 +86,15 @@ They differ, always, and the gap matters. "Who owned this account on 1 September
 
 Two consequences follow, and both are echoes of rules from earlier chapters:
 
-**Invalidate, don't delete.** A superseded fact gets an end to its validity window; it does not disappear. This is the [memory chapter's](/docs/context/memory) `supersedes` field taken seriously, and it's what makes contradiction resolvable instead of a coin flip: highest authority, then most recent *as of the time being asked about*.
+**Invalidate, don't delete.** A superseded fact gets an end to its validity window; it does not disappear. This is the [memory chapter's](/book/context/memory) `supersedes` field taken seriously, and it's what makes contradiction resolvable instead of a coin flip: highest authority, then most recent *as of the time being asked about*.
 
 **Keep provenance.** Every fact traces back to the raw source that produced it: the ticket, the CRM sync, the document. When two facts disagree, provenance is what adjudicates, and when an agent cites a relationship, provenance is the citation.
 
-This also makes the graph honest about staleness in a way an ordinary index isn't. From [Part IV](/docs/retrieval/where-does-the-answer-live): every index is a stale copy. A bitemporal graph is a stale copy **that knows it**. It can tell you a fact is from a sync three days ago, rather than presenting it as current truth.
+This also makes the graph honest about staleness in a way an ordinary index isn't. From [Part IV](/book/retrieval/where-does-the-answer-live): every index is a stale copy. A bitemporal graph is a stale copy **that knows it**. It can tell you a fact is from a sync three days ago, rather than presenting it as current truth.
 
 ## Model the traversals, not the domain
 
-The scoping rule, carried from [the last chapter](/docs/graphs/when-relationships-are-the-query) and worth making concrete.
+The scoping rule, carried from [the last chapter](/book/graphs/when-relationships-are-the-query) and worth making concrete.
 
 Do not start from "what does Meridian's business look like." Start from the questions:
 
@@ -108,7 +108,7 @@ For Atlas, ten account-health questions yield roughly five entities, **Account, 
 Everything else, including products, suppliers, warehouses, and shipments, exists in the business and is not in the graph, because no account-health traversal touches it. It can be added when a question needs it.
 
 <Aside type="tip" title="The ontology is the same artifact as the semantic layer">
-Worth noticing: the metric definitions from [SQL Is Still the Answer](/docs/retrieval/sql-is-still-the-answer) and the entity definitions here are the same *kind* of thing: the business's meaning, written down once, owned by someone, versioned, and testable.
+Worth noticing: the metric definitions from [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer) and the entity definitions here are the same *kind* of thing: the business's meaning, written down once, owned by someone, versioned, and testable.
 
 "Revenue excludes cancelled orders" and "a Customer is the legal entity in billing, not the shipping address" are both statements that were previously implicit in scattered queries and one analyst's memory. Treat them as one governed vocabulary with one owner rather than two projects, and both get cheaper.
 </Aside>
@@ -132,7 +132,7 @@ Provenance on every edge, back to the CRM sync or the ticket that produced it. A
 
 ---
 
-Next: [Graph Storage and Query Models](/docs/graphs/graph-storage-and-query-models), on relational edges, property graphs, RDF, Cypher, and SPARQL without confusing storage with meaning.
+Next: [Graph Storage and Query Models](/book/graphs/graph-storage-and-query-models), on relational edges, property graphs, RDF, Cypher, and SPARQL without confusing storage with meaning.
 
 ## Takeaways
 

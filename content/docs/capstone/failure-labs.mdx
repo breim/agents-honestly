@@ -237,7 +237,7 @@ Do not begin with the flashy attack corpus. If the ledger can duplicate an effec
 | Index build degrades quality | Retrieval eval plus canary gate |
 | Human queue cannot absorb fallback | Capacity test and operating policy |
 
-The [testing pyramid](/docs/evals/testing-pyramid) gives a useful discipline: promote the failure to the lowest layer that can prevent it, and retain one end-to-end case to prove the layers still compose.
+The [testing pyramid](/book/evals/testing-pyramid) gives a useful discipline: promote the failure to the lowest layer that can prevent it, and retain one end-to-end case to prove the layers still compose.
 
 <Aside type="caution" title="Do not clean up the evidence first">
 Keep the failed history, raw event, trace, and ledger state until the fixture is captured. Re-running after cleanup gives you a new execution, not the one that failed.
@@ -251,7 +251,7 @@ A lab passes when the invariant and terminal business outcome hold, the trace ex
 
 ---
 
-Next: [Operating It](/docs/capstone/operating-it), the first month, where the same failures arrive without asking permission.
+Next: [Operating It](/book/capstone/operating-it), the first month, where the same failures arrive without asking permission.
 
 ## Takeaways
 

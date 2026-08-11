@@ -7,7 +7,7 @@ Twenty parts of decisions, assembled into one system. This chapter walks the lay
 
 ## Layer 1 · Tools and data
 
-Meridian's [four systems](/docs/first-agent/the-problem) demand four different access strategies, and the tool catalogue is the place that gets decided.
+Meridian's [four systems](/book/first-agent/the-problem) demand four different access strategies, and the tool catalogue is the place that gets decided.
 
 | Tool | Class | Backing system | Scoping |
 | --- | --- | --- | --- |
@@ -22,19 +22,19 @@ Meridian's [four systems](/docs/first-agent/the-problem) demand four different a
 | `issue_credit` | ④ irreversible | ERP | Account from run scope; capped at tier 0 |
 | `send_reply` | ⑤ external | Mail service | **No recipient argument** |
 
-Nine tools, not nineteen. The catalogue is small because [every tool is a permission](/docs/security/least-privilege) and [every description is prompt text you pay for on every turn](/docs/tools/tool-discovery).
+Nine tools, not nineteen. The catalogue is small because [every tool is a permission](/book/security/least-privilege) and [every description is prompt text you pay for on every turn](/book/tools/tool-discovery).
 
 Three design decisions in that table are worth naming because they came from different parts of the book and agree:
 
-**`issue_credit` takes `order_id`, not `amount`.** It re-derives the amount from the order and the damage policy server-side. [Poisoning](/docs/context/context-poisoning) said don't let the model's arithmetic reach an effect; [injection](/docs/security/prompt-injection) said the leverage lives in the arguments. Same fix.
+**`issue_credit` takes `order_id`, not `amount`.** It re-derives the amount from the order and the damage policy server-side. [Poisoning](/book/context/context-poisoning) said don't let the model's arithmetic reach an effect; [injection](/book/security/prompt-injection) said the leverage lives in the arguments. Same fix.
 
-**`send_reply` has no recipient parameter.** The contact resolves from the ticket record. [Least privilege](/docs/security/least-privilege) called this removing a parameter rather than validating one; it also closes the [trifecta's](/docs/security/prompt-injection) exfiltration element.
+**`send_reply` has no recipient parameter.** The contact resolves from the ticket record. [Least privilege](/book/security/least-privilege) called this removing a parameter rather than validating one; it also closes the [trifecta's](/book/security/prompt-injection) exfiltration element.
 
-**Every class ④–⑤ tool ships with a paired read.** `get_credit`, `get_delivery_status`. Without them, [state ③, unknown](/docs/tools/idempotency) is permanently unresolvable.
+**Every class ④–⑤ tool ships with a paired read.** `get_credit`, `get_delivery_status`. Without them, [state ③, unknown](/book/tools/idempotency) is permanently unresolvable.
 
 ## Layer 2 · Context and knowledge
 
-[Where does the answer live](/docs/retrieval/where-does-the-answer-live) routes before it retrieves, and Meridian's four systems make the routing table concrete:
+[Where does the answer live](/book/retrieval/where-does-the-answer-live) routes before it retrieves, and Meridian's four systems make the routing table concrete:
 
 ```
    "can we return opened relays"        → semantic     → search_policies
@@ -50,13 +50,13 @@ The corpus is **two indexes, split by trust**, not one:
 | Reviewed policy | `reviewed` | The only source for policy answers | None |
 | Contributed / partner docs | `external` | Troubleshooting only | **Taints** |
 
-That split is what makes the opening scene of [the untrusted-retrieval chapter](/docs/security/untrusted-retrieval) a non-event: the poisoned article can still rank first for refund-timeline questions, and the run that reads it cannot reach `issue_credit`.
+That split is what makes the opening scene of [the untrusted-retrieval chapter](/book/security/untrusted-retrieval) a non-event: the poisoned article can still rank first for refund-timeline questions, and the run that reads it cannot reach `issue_credit`.
 
-Context assembly follows the [budget](/docs/context/context-as-budget): a stable prefix for [caching](/docs/foundations/prompt-caching), pointers rather than payloads, tool results summarized to the fields actually used, and a typed scratchpad that only accepts values a tool returned.
+Context assembly follows the [budget](/book/context/context-as-budget): a stable prefix for [caching](/book/foundations/prompt-caching), pointers rather than payloads, tool results summarized to the fields actually used, and a typed scratchpad that only accepts values a tool returned.
 
 ## Layer 3 · The agent runtime
 
-The graph is smaller than people expect, because most of the branching is [deterministic routing](/docs/workflows/routing-and-orchestration) rather than agent judgment: [the determinism test](/docs/workflows/the-determinism-test) applied honestly removes about half of what a first draft contains.
+The graph is smaller than people expect, because most of the branching is [deterministic routing](/book/workflows/routing-and-orchestration) rather than agent judgment: [the determinism test](/book/workflows/the-determinism-test) applied honestly removes about half of what a first draft contains.
 
 <Figure caption="Four nodes are model calls. Everything else is code. The classify → route split is what keeps the loop short." frame={false}>
 
@@ -76,13 +76,13 @@ The graph is smaller than people expect, because most of the branching is [deter
 
 </Figure>
 
-State is typed and minimal: ticket reference, account and order IDs in scope, the classification, retrieved chunk IDs, tool results, the taint flag, and budget counters. Not the transcript: the transcript is the model's working memory, and [everything that must survive](/docs/context/context-poisoning) lives in the scratchpad.
+State is typed and minimal: ticket reference, account and order IDs in scope, the classification, retrieved chunk IDs, tool results, the taint flag, and budget counters. Not the transcript: the transcript is the model's working memory, and [everything that must survive](/book/context/context-poisoning) lives in the scratchpad.
 
 `action_loop` is the only node that can call a write tool, and it is capped at eight turns, under the run-wide ceiling of twelve, because the node that can move money is the one worth bounding tightest.
 
 ## Layer 4 · Durable execution
 
-[One rule decides the layout](/docs/durability/agent-as-workflow): workflow code decides, activity code discovers.
+[One rule decides the layout](/book/durability/agent-as-workflow): workflow code decides, activity code discovers.
 
 | Element | Where | Why |
 | --- | --- | --- |
@@ -90,18 +90,18 @@ State is typed and minimal: ticket reference, account and order IDs in scope, th
 | Every model call | **Activity** | Nondeterministic by definition |
 | Every tool call | **Activity** | Touches the world |
 | The approval wait | **Workflow timer + signal** | Days, surviving deploys |
-| Retry policy per activity | Workflow config | [One layer](/docs/reliability/timeouts-and-retries) |
-| Credit compensation | **Activity**, invoked by the workflow | [Compensation](/docs/durability/compensation) |
+| Retry policy per activity | Workflow config | [One layer](/book/reliability/timeouts-and-retries) |
+| Credit compensation | **Activity**, invoked by the workflow | [Compensation](/book/durability/compensation) |
 
-The workflow ID carries the tenant, which is [structural tenancy](/docs/security/tenant-isolation) and per-account queue routing in one decision.
+The workflow ID carries the tenant, which is [structural tenancy](/book/security/tenant-isolation) and per-account queue routing in one decision.
 
 ## Layer 5 · Interface
 
-Two things the [interface part](/docs/interface/generative-ui-and-approvals) insists on, both of which are product requirements rather than polish:
+Two things the [interface part](/book/interface/generative-ui-and-approvals) insists on, both of which are product requirements rather than polish:
 
-**The approval card is rendered and stored as bytes.** Balances settle and documents get superseded, so re-rendering next year proves nothing: the [audit record](/docs/human-in-the-loop/escalation-and-audit) needs what the reviewer actually saw.
+**The approval card is rendered and stored as bytes.** Balances settle and documents get superseded, so re-rendering next year proves nothing: the [audit record](/book/human-in-the-loop/escalation-and-audit) needs what the reviewer actually saw.
 
-**The escalation package is the interface's real deliverable.** Original message, everything retrieved with citations, every tool call and result, and a stated reason. This is [the escalation contract](/docs/first-agent/the-problem), and it is the difference between saving a support lead time and costing them the investigation twice.
+**The escalation package is the interface's real deliverable.** Original message, everything retrieved with citations, every tool call and result, and a stated reason. This is [the escalation contract](/book/first-agent/the-problem), and it is the difference between saving a support lead time and costing them the investigation twice.
 
 ## The dispatcher, whole
 
@@ -222,45 +222,45 @@ Forty lines, eight checks, nine parts of this book. Three properties of that fun
 
 **Order matters and it is not arbitrary.** Cheap and total checks come first; the token is minted after every reason to refuse has been evaluated; the idempotency wrapper is outermost around the effect so nothing can commit without its record.
 
-**Refusals escalate; they do not error.** Steps 2, 3, and 4 produce a well-formed question for a human, and `escalate` assembles [the handover package](/docs/patterns/control/escalation-ladder), not just the reason: the original message, what was retrieved, every tool call and its result, and the scratchpad with provenance. [The escalation contract](/docs/first-agent/the-problem) counts a bare *"I couldn't handle this"* as a failure even when the refusal itself was correct, because it costs the human the whole investigation again. A control that returns a stack trace is a control that gets disabled.
+**Refusals escalate; they do not error.** Steps 2, 3, and 4 produce a well-formed question for a human, and `escalate` assembles [the handover package](/book/patterns/control/escalation-ladder), not just the reason: the original message, what was retrieved, every tool call and its result, and the scratchpad with provenance. [The escalation contract](/book/first-agent/the-problem) counts a bare *"I couldn't handle this"* as a failure even when the refusal itself was correct, because it costs the human the whole investigation again. A control that returns a stack trace is a control that gets disabled.
 
-**There is exactly one of these.** Every argument in [Part XVII](/docs/security/threat-model) reduces to that sentence. Four dispatch sites means implementing eight checks four times, and you will implement them in three.
+**There is exactly one of these.** Every argument in [Part XVII](/book/security/threat-model) reduces to that sentence. Four dispatch sites means implementing eight checks four times, and you will implement them in three.
 
 <Aside type="note" title="What the model never sees">
 Reading the function from the model's side: it emits a tool name and arguments and receives a result. It has no visibility into the taint flag, the scope, the tier, the token, or the key.
 
-That is the design. Every one of those is [authority, and authority comes from your code](/docs/tools/idempotency): the model supplies intent, and nothing it can say reaches the eight checks. It is also why the [prompt-injection](/docs/security/prompt-injection) defense holds: a hostile ticket can make Atlas *want* to issue a credit to account 9917, and wanting is where it stops.
+That is the design. Every one of those is [authority, and authority comes from your code](/book/tools/idempotency): the model supplies intent, and nothing it can say reaches the eight checks. It is also why the [prompt-injection](/book/security/prompt-injection) defense holds: a hostile ticket can make Atlas *want* to issue a credit to account 9917, and wanting is where it stops.
 </Aside>
 
 ## The seven decisions, listed
 
 | Decision | Choice | Because |
 | --- | --- | --- |
-| Workflow or agent? | Workflow shell, agent in one node | [Determinism test](/docs/workflows/the-determinism-test), most branching is routing |
-| One agent or several? | **One**, plus a quarantined reader | [Coordination tax](/docs/multi-agent/the-coordination-tax) exceeds per-ticket margin |
-| Where does the answer live? | Four routes, chosen before retrieval | [Part IV](/docs/retrieval/where-does-the-answer-live) |
-| Durable or not? | Durable, the approval pause decides it | [Part X](/docs/durable-execution/why-durable-execution) |
-| How much autonomy? | Tier 0 unassisted; everything above escalates | [Risk tiers](/docs/human-in-the-loop/risk-tiers) |
+| Workflow or agent? | Workflow shell, agent in one node | [Determinism test](/book/workflows/the-determinism-test), most branching is routing |
+| One agent or several? | **One**, plus a quarantined reader | [Coordination tax](/book/multi-agent/the-coordination-tax) exceeds per-ticket margin |
+| Where does the answer live? | Four routes, chosen before retrieval | [Part IV](/book/retrieval/where-does-the-answer-live) |
+| Durable or not? | Durable, the approval pause decides it | [Part X](/book/durable-execution/why-durable-execution) |
+| How much autonomy? | Tier 0 unassisted; everything above escalates | [Risk tiers](/book/human-in-the-loop/risk-tiers) |
 | Where do the checks live? | One dispatcher | Part XVII, all of it |
-| What state survives? | Typed scratchpad + workflow history, not the transcript | [Poisoning](/docs/context/context-poisoning) |
+| What state survives? | Typed scratchpad + workflow history, not the transcript | [Poisoning](/book/context/context-poisoning) |
 
 ## What we deliberately did not build
 
 Naming these matters as much as the build, because each is a thing a reviewer will ask about:
 
-**No multi-agent topology.** [The three legitimate reasons](/docs/multi-agent/when-not-to) are context overflow, a trust boundary, and separate ownership. Only the second applies, and it is a quarantine rather than a team.
+**No multi-agent topology.** [The three legitimate reasons](/book/multi-agent/when-not-to) are context overflow, a trust boundary, and separate ownership. Only the second applies, and it is a quarantine rather than a team.
 
 **No fine-tuning.** Every quality problem in the pilot traced to retrieval or context assembly. Fine-tuning would have frozen a corpus that changes weekly.
 
-**No generated code, except one flagged calculator.** [`run_python` is the largest single capability you can grant](/docs/security/sandboxing), and the proration math is three tools' worth of arithmetic.
+**No generated code, except one flagged calculator.** [`run_python` is the largest single capability you can grant](/book/security/sandboxing), and the proration math is three tools' worth of arithmetic.
 
-**No MCP server for internal tools.** [MCP is right for a boundary you don't own](/docs/mcp/when-a-function-is-better); these are functions in the same repo, and wrapping them adds a protocol and a [dynamic-catalogue attack surface](/docs/security/least-privilege) for nothing.
+**No MCP server for internal tools.** [MCP is right for a boundary you don't own](/book/mcp/when-a-function-is-better); these are functions in the same repo, and wrapping them adds a protocol and a [dynamic-catalogue attack surface](/book/security/least-privilege) for nothing.
 
-**No memory across tickets in v1.** A [fact store](/docs/context/memory) is a durable place for a wrong belief to live, and the erasure story is real work. Deferred deliberately, with the reason written down.
+**No memory across tickets in v1.** A [fact store](/book/context/memory) is a durable place for a wrong belief to live, and the erasure story is real work. Deferred deliberately, with the reason written down.
 
 ---
 
-Next: [Hardening It](/docs/capstone/hardening-it), evals, tracing, failure injection, authorization, and the security review.
+Next: [Hardening It](/book/capstone/hardening-it), evals, tracing, failure injection, authorization, and the security review.
 
 ## Takeaways
 

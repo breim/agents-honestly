@@ -15,10 +15,10 @@ Four things happen at a node boundary and nowhere else. If a step needs none of 
 
 | At the boundary | What you get | What it costs |
 | --- | --- | --- |
-| A checkpoint is written | [Resume, replay, time travel](/docs/langgraph/persistence) | A serialize plus a store write, per superstep |
-| Execution can pause | [Human gate](/docs/human-in-the-loop/approval-gates), interrupt | The node must be re-entrant, because resume re-runs it from the top |
-| A retry policy applies | Per-node attempts and backoff | The node must be [idempotent](/docs/tools/idempotency) |
-| An event is emitted | A [stream update](/docs/langgraph/streaming-and-control) and a named [trace span](/docs/observability/what-a-trace-must-answer) | A name your consumers now handle |
+| A checkpoint is written | [Resume, replay, time travel](/book/langgraph/persistence) | A serialize plus a store write, per superstep |
+| Execution can pause | [Human gate](/book/human-in-the-loop/approval-gates), interrupt | The node must be re-entrant, because resume re-runs it from the top |
+| A retry policy applies | Per-node attempts and backoff | The node must be [idempotent](/book/tools/idempotency) |
+| An event is emitted | A [stream update](/book/langgraph/streaming-and-control) and a named [trace span](/book/observability/what-a-trace-must-answer) | A name your consumers now handle |
 
 There is a fifth, structural rather than runtime. **A node is on the path by construction.** `compile()` can tell you that every route to `END` passes through it. That is not something a function call inside another node can promise, and it is the reason Atlas's policy check is a node despite containing no model call and no side effect.
 
@@ -34,7 +34,7 @@ The catch is that it is one setting for the whole graph. You cannot make one cha
 
 **Too many nodes** is the common one. A node per step, unconditional edges between all of them, a diagram that renders as a straight line. The costs compound quietly: write amplification on every superstep, a trace where the signal is buried in spans that only assign a field, and checkpoints that differ from their predecessor by one key.
 
-The cost people miss is that **node names are a schema.** Position is data, which was [the whole point of the graph](/docs/langgraph/state-nodes-edges), so the names are written into every checkpoint. Rename a node and a checkpoint written before the rename refers to a position that no longer exists. Splitting a step into two nodes is a code change; splitting a *node* is a migration on anything in flight. Fine-grained graphs are expensive to refactor for exactly the reason they were attractive.
+The cost people miss is that **node names are a schema.** Position is data, which was [the whole point of the graph](/book/langgraph/state-nodes-edges), so the names are written into every checkpoint. Rename a node and a checkpoint written before the rename refers to a position that no longer exists. Splitting a step into two nodes is a code change; splitting a *node* is a migration on anything in flight. Fine-grained graphs are expensive to refactor for exactly the reason they were attractive.
 
 **Too few nodes** is rarer and sharper. One node containing the whole pipeline gets you a trace with a single span called `run`, a retry that re-runs everything, and **no pause point**, because you cannot interrupt inside a node. That last one is what actually bites. A coarse node forecloses the human gate you will want in Part XII, and discovering that later means splitting a node, which is the migration above.
 
@@ -42,7 +42,7 @@ The upper bound is where the two failure modes stop being aesthetic:
 
 > **A node that can pause must contain exactly one side-effecting call.**
 
-Resume re-executes the node from the top. Not from the `interrupt()` line. From the top. Anything that ran before the interrupt runs again, which is why [the human gate topology](/docs/langgraph/graph-topologies) is the shape where this rule earns its keep. That is a correctness constraint, and it is the only hard limit in this chapter. Everything else is cost.
+Resume re-executes the node from the top. Not from the `interrupt()` line. From the top. Anything that ran before the interrupt runs again, which is why [the human gate topology](/book/langgraph/graph-topologies) is the shape where this rule earns its keep. That is a correctness constraint, and it is the only hard limit in this chapter. Everything else is cost.
 
 ## The option most people skip
 
@@ -122,14 +122,14 @@ The middle row is the one teams skip, and skipping it is how you end up with a t
 
 | If the step… | Then | Because |
 | --- | --- | --- |
-| Makes a bounded model call and returns fields | **Node** | You want the [retry policy](/docs/reliability/timeouts-and-retries) and a named span |
+| Makes a bounded model call and returns fields | **Node** | You want the [retry policy](/book/reliability/timeouts-and-retries) and a named span |
 | Purely transforms state: parse, format, map | **Function**, called by a node | Nothing at the boundary applies to it |
 | Performs a side effect | **Node, alone** | So a retry or a resume repeats exactly one thing |
 | Waits for a human | **Node, alone** | Pause points only exist between nodes |
 | Is expensive and deterministic in its inputs | **Node**, with a cache policy | The boundary is what a cache key can hang off |
 | Must be provably unskippable | **Node** | `compile()` can verify every path crosses it |
 | Assigns one field | **Function**, merged into its neighbour | You would be checkpointing a rename |
-| Loops over items with no pause inside | **Function**, or a [fan-out](/docs/langgraph/graph-topologies) if you need per-item retry | A `for` loop does not need an edge |
+| Loops over items with no pause inside | **Function**, or a [fan-out](/book/langgraph/graph-topologies) if you need per-item retry | A `for` loop does not need an edge |
 
 Retry and cache policies attach to the node, which is the mechanical reason those rows say node:
 
@@ -139,20 +139,20 @@ g.add_node("embed_query", embed, cache_policy=CachePolicy(ttl=120))
 ```
 
 <Aside type="tip" title="The TypeScript API mirrors this">
-Same options on `addNode`, camelCased, as with the rest of the graph API in [State, Nodes, Edges](/docs/langgraph/state-nodes-edges). The policies are the transferable idea; the spelling is not.
+Same options on `addNode`, camelCased, as with the rest of the graph API in [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The policies are the transferable idea; the spelling is not.
 </Aside>
 
 The row that gets argued about is the pure transform, and the argument is always "I want to *see* it." Visibility is a tracing concern. You get it from a span, and a span costs a decorator; a node costs a checkpoint, a stream event, and a name in your position schema. **Instrument it. Don't checkpoint it.**
 
 ## And should it be a graph at all?
 
-[Part VII opened](/docs/langgraph/state-nodes-edges) by deferring this. Three questions, all yes-or-no:
+[Part VII opened](/book/langgraph/state-nodes-edges) by deferring this. Three questions, all yes-or-no:
 
 1. **Is there more than one run shape?** If every run visits the same nodes in the same order, there is one shape.
 2. **Does anything need to survive the process?** A crash, a deploy, a three-day wait for a person.
 3. **Does someone who is not the author need to know what the system can do?**
 
-Zero yeses is a function, and [Part VI](/docs/workflows/composition-patterns) is the chapter for it. One yes is usually the functional API. Two or three is a graph.
+Zero yeses is a function, and [Part VI](/book/workflows/composition-patterns) is the chapter for it. One yes is usually the functional API. Two or three is a graph.
 
 <FrameworkCheck decision="Use the smallest boundary that owns the required guarantee: function first, functional API for resumability, StateGraph for topology, Temporal for durable business effects.">
 <FrameworkOption name="plain">
@@ -174,11 +174,11 @@ Zero yeses is a function, and [Part VI](/docs/workflows/composition-patterns) is
 
 The instructive failure is adopting a graph for question 3 alone. Generated legibility is a genuine purchase, since a diagram derived from the system does not rot the way a hand-maintained one does. But if the answers to 1 and 2 are no, what gets generated is a picture of a straight line, and you have bought per-step checkpointing to render it.
 
-And the ceiling is worth naming here rather than in Part X. Graph checkpointing persists *your graph's* position. It does not make the API call inside a node exactly-once, and it does not survive a node that succeeded remotely and failed locally. When that gap starts costing money, the answer is not a finer-grained graph. For Atlas it does, at `issue_credit`. It is [durable execution](/docs/durable-execution/why-durable-execution), and Part X argues the escalation properly.
+And the ceiling is worth naming here rather than in Part X. Graph checkpointing persists *your graph's* position. It does not make the API call inside a node exactly-once, and it does not survive a node that succeeded remotely and failed locally. When that gap starts costing money, the answer is not a finer-grained graph. For Atlas it does, at `issue_credit`. It is [durable execution](/book/durable-execution/why-durable-execution), and Part X argues the escalation properly.
 
 ## Atlas, audited
 
-Running the test against [the six nodes](/docs/langgraph/state-nodes-edges):
+Running the test against [the six nodes](/book/langgraph/state-nodes-edges):
 
 | Node | Boundary earns it via | Verdict |
 | --- | --- | --- |
@@ -189,7 +189,7 @@ Running the test against [the six nodes](/docs/langgraph/state-nodes-edges):
 | `escalate` | Side effect, alone | Node |
 | `finalize` | Side effect, and every path ends here | Node, with a caveat |
 
-The caveat is worth stating plainly, because it is a flaw in this book's own earlier example. `finalize` does three things: cite, log, send. It never pauses, so the exactly-one-effect rule does not bite. But it carries a retry policy, and a retry re-runs all three: a second send on a transient failure in the logging call. The fix is not a fourth node. It is that each of the three is [idempotent](/docs/tools/idempotency), keyed on the ticket. Node count is the wrong lever for a property that belongs to the effects themselves.
+The caveat is worth stating plainly, because it is a flaw in this book's own earlier example. `finalize` does three things: cite, log, send. It never pauses, so the exactly-one-effect rule does not bite. But it carries a retry policy, and a retry re-runs all three: a second send on a transient failure in the logging call. The fix is not a fourth node. It is that each of the three is [idempotent](/book/tools/idempotency), keyed on the ticket. Node count is the wrong lever for a property that belongs to the effects themselves.
 
 What is *not* in that table is the more useful half. Entity extraction is a function inside `triage`, not a node beside it. Result truncation is a function inside `gather`. Citation formatting is a function inside `finalize`. Each was a node in an earlier draft of Atlas, and each was deleted for the same reason: nothing was supposed to happen at the boundary.
 
@@ -201,7 +201,7 @@ What is *not* in that table is the more useful half. Entity extraction is a func
 
 ---
 
-Part VII ends here. Next: [Tools Are APIs for Models](/docs/tools/tools-are-apis-for-models), Part VIII, and the design of what an agent is permitted to do.
+Part VII ends here. Next: [Tools Are APIs for Models](/book/tools/tools-are-apis-for-models), Part VIII, and the design of what an agent is permitted to do.
 
 ## Takeaways
 

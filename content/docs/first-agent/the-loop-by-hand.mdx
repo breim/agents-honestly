@@ -165,7 +165,7 @@ The most important thing in that code is that `Outcome` is a union of three stat
 | `escalated` | The model, explicitly | It called `escalate_to_human`. A deliberate, structured handoff. |
 | `halted` (steps / cost / deadline) | You | It did not converge. An outcome, not an error. |
 
-[Part I](/docs/foundations/what-is-an-agent) argued that a loop whose only stopping condition is the model's own judgment has delegated its termination to a probability distribution. Here is what fixing that costs: three constants and two guard clauses.
+[Part I](/book/foundations/what-is-an-agent) argued that a loop whose only stopping condition is the model's own judgment has delegated its termination to a probability distribution. Here is what fixing that costs: three constants and two guard clauses.
 
 Note that the bounds are checked *before* the call, not after. A budget you enforce after spending it is a report, not a limit.
 
@@ -200,7 +200,7 @@ Two things in that trace matter more than the answer.
 
 **Step 2 chose itself.** Nothing in the code says "after fetching an account, fetch its tickets and volume." The model saw a renewal date sixty days out and decided what to look at next. That is the capability you bought, and it is why the sequence could not have been written in advance.
 
-**Step 2 is also where the cost lives.** Those two calls returned into a context that now carries the system prompt, four tool schemas, the ticket, and every prior result, all resent in full on steps 3 and 4. The [growth curve](/docs/foundations/context-window) is no longer theory; it is `messages.push` in a loop, running four times for one user-visible reply.
+**Step 2 is also where the cost lives.** Those two calls returned into a context that now carries the system prompt, four tool schemas, the ticket, and every prior result, all resent in full on steps 3 and 4. The [growth curve](/book/foundations/context-window) is no longer theory; it is `messages.push` in a loop, running four times for one user-visible reply.
 
 ## Every decision you just made
 
@@ -208,31 +208,31 @@ The value of writing this by hand is the list it produces. Each line below is a 
 
 | Decision | What v0 chose | Where it goes wrong |
 | --- | --- | --- |
-| History policy | Keep everything | Long tickets exceed the window ([compaction](/docs/context/compaction)) |
-| Tool result size | Truncate at 4,000 chars | A blunt cut loses the field that mattered ([result design](/docs/tools/result-design)) |
+| History policy | Keep everything | Long tickets exceed the window ([compaction](/book/context/compaction)) |
+| Tool result size | Truncate at 4,000 chars | A blunt cut loses the field that mattered ([result design](/book/tools/result-design)) |
 | Parallel execution | All calls at once | One slow tool blocks the turn |
-| Tool errors | Text back to the model | Some errors should retry, not inform ([retries](/docs/reliability/timeouts-and-retries)) |
-| Authorization | `customerId` passed into `runTool` | Easy to forget on the fifth tool ([tenancy](/docs/security/tenant-isolation)) |
+| Tool errors | Text back to the model | Some errors should retry, not inform ([retries](/book/reliability/timeouts-and-retries)) |
+| Authorization | `customerId` passed into `runTool` | Easy to forget on the fifth tool ([tenancy](/book/security/tenant-isolation)) |
 | Termination | Steps, cost, deadline, terminal tool | Nothing detects a two-tool ping-pong |
 | Observability | The `Outcome` return value | You cannot debug a run you didn't record |
 
-That authorization row deserves emphasis. `runTool` takes `ticket.customerId` and every tool must filter on it, because the model chooses the *arguments*, and a model that has read a document mentioning another account can ask for that account's data. The filter is not a prompt instruction. It is a parameter your code passes and your tool enforces, which is the [invariant-versus-request](/docs/first-agent/the-problem) distinction showing up in a function signature.
+That authorization row deserves emphasis. `runTool` takes `ticket.customerId` and every tool must filter on it, because the model chooses the *arguments*, and a model that has read a document mentioning another account can ask for that account's data. The filter is not a prompt instruction. It is a parameter your code passes and your tool enforces, which is the [invariant-versus-request](/book/first-agent/the-problem) distinction showing up in a function signature.
 
 ## What v0 cannot do
 
 Be precise about this, because the list is the table of contents for the rest of the book.
 
-**It dies with the process.** A deploy mid-run loses the run. Ticket #8823 needs a refund, and a crash between "issue credit" and "email the customer" leaves money moved and nobody told. → [Durable execution](/docs/durable-execution/why-durable-execution).
+**It dies with the process.** A deploy mid-run loses the run. Ticket #8823 needs a refund, and a crash between "issue credit" and "email the customer" leaves money moved and nobody told. → [Durable execution](/book/durable-execution/why-durable-execution).
 
-**It cannot wait.** If a customer needs to confirm something, there is no version of this loop that holds for three days. A `while` loop cannot survive lunch. → [Human in the loop](/docs/human-in-the-loop/approval-gates).
+**It cannot wait.** If a customer needs to confirm something, there is no version of this loop that holds for three days. A `while` loop cannot survive lunch. → [Human in the loop](/book/human-in-the-loop/approval-gates).
 
-**It has no memory.** Every ticket starts blank. The same customer explaining the same context, forever. → [Memory](/docs/context/memory).
+**It has no memory.** Every ticket starts blank. The same customer explaining the same context, forever. → [Memory](/book/context/memory).
 
-**It cannot repeat safely.** Run it twice on #8823 and you have issued two credits. Nothing here is idempotent. → [Idempotency](/docs/tools/idempotency).
+**It cannot repeat safely.** Run it twice on #8823 and you have issued two credits. Nothing here is idempotent. → [Idempotency](/book/tools/idempotency).
 
-**It is invisible.** `console.log` is not observability. When the 2-in-20 confident-wrong case happens in production, there is no way to see which lookup went wrong. → [Tracing](/docs/observability/what-a-trace-must-answer).
+**It is invisible.** `console.log` is not observability. When the 2-in-20 confident-wrong case happens in production, there is no way to see which lookup went wrong. → [Tracing](/book/observability/what-a-trace-must-answer).
 
-**Its history grows without bound.** Fine for a four-step ticket, fatal for a forty-step investigation. → [Context engineering](/docs/context/context-as-budget).
+**Its history grows without bound.** Fine for a four-step ticket, fatal for a forty-step investigation. → [Context engineering](/book/context/context-as-budget).
 
 None of those is a flaw in the eighty lines. They are the difference between an agent and an agentic system, which is the thesis of this book stated as a punch list.
 
@@ -255,7 +255,7 @@ Which raises the obvious question: should we have written this by hand at all?
 
 ---
 
-Next: [What a Framework Buys You](/docs/first-agent/what-a-framework-buys). Now that you have written it, an honest accounting of what you would delegate and what you would keep.
+Next: [What a Framework Buys You](/book/first-agent/what-a-framework-buys). Now that you have written it, an honest accounting of what you would delegate and what you would keep.
 
 ## Takeaways
 

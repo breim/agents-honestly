@@ -11,7 +11,7 @@ At step five it drafts a reply mentioning $540. At step six it checks the author
 
 The transcript has **no provenance**. A number the model asserted and a number a tool returned sit in the same conversation, in the same format, with nothing marking which is which. By step seven the false value is simply *something in the context*, indistinguishable from the order total and the policy text.
 
-The same absence causes three other failures: the value is lost when the context is [compacted](/docs/patterns/context/context-compaction), there is nothing to rebuild from when a run is [poisoned](/docs/context/context-poisoning), and there is no place to put a value that must survive a [three-day approval pause](/docs/human-in-the-loop/approval-gates).
+The same absence causes three other failures: the value is lost when the context is [compacted](/book/patterns/context/context-compaction), there is nothing to rebuild from when a run is [poisoned](/book/context/context-poisoning), and there is no place to put a value that must survive a [three-day approval pause](/book/human-in-the-loop/approval-gates).
 
 ## Forces
 
@@ -48,9 +48,9 @@ Three rules do the work:
 
 **Every field declares its writer.** `order_total_cents` can only be written by `get_order`. A number the model asserted has nowhere to go, so it stays prose, which is exactly right, because prose is what an unverified claim is.
 
-**Store provenance with the value.** Not `540` but `{ value: 540, source: 'compute_credit', at: '…', run_step: 6 }`. This is what makes [grounding checks](/docs/evals/trajectory-evals) mechanical: any number in the final reply that does not appear in the scratchpad is a candidate hallucination, whether or not it happens to be right.
+**Store provenance with the value.** Not `540` but `{ value: 540, source: 'compute_credit', at: '…', run_step: 6 }`. This is what makes [grounding checks](/book/evals/trajectory-evals) mechanical: any number in the final reply that does not appear in the scratchpad is a candidate hallucination, whether or not it happens to be right.
 
-**Read from it before acting, not from the conversation.** The [tool that issues the credit](/docs/tools/idempotency) takes the scratchpad's `order_id` and re-derives the amount server-side. The transcript's opinion about the total never reaches an effect.
+**Read from it before acting, not from the conversation.** The [tool that issues the credit](/book/tools/idempotency) takes the scratchpad's `order_id` and re-derives the amount server-side. The transcript's opinion about the total never reaches an effect.
 
 ## Code
 
@@ -142,17 +142,17 @@ def write(pad: Scratchpad, field: str, value, source: str, step: int) -> Scratch
 </Tab>
 </Tabs>
 
-The scratchpad lives in [graph state](/docs/langgraph/reducers-and-state) so it is checkpointed, and its fields are the ones the [reducer](/docs/langgraph/reducers-and-state) must not drop. For a [durable run](/docs/durability/agent-as-workflow) it is workflow state, which is what lets it survive a pause measured in days.
+The scratchpad lives in [graph state](/book/langgraph/reducers-and-state) so it is checkpointed, and its fields are the ones the [reducer](/book/langgraph/reducers-and-state) must not drop. For a [durable run](/book/durability/agent-as-workflow) it is workflow state, which is what lets it survive a pause measured in days.
 
 ## Trade-offs
 
 **Design cost up front.** You have to know which values matter before the run, which is a real constraint on exploratory agents, and also a useful forcing function, because a field you cannot name a writer for is usually a value you should not be depending on.
 
-**Tokens, modestly.** The scratchpad is rendered into the prompt so the model can see the established facts. It is small, it is stable across turns, and it sits below the [cacheable prefix](/docs/patterns/context/stable-prefix): the cost is far less than re-reading the turns it replaces.
+**Tokens, modestly.** The scratchpad is rendered into the prompt so the model can see the established facts. It is small, it is stable across turns, and it sits below the [cacheable prefix](/book/patterns/context/stable-prefix): the cost is far less than re-reading the turns it replaces.
 
 **Rigidity.** A run that discovers it needs a value with no field is stuck with prose. The mitigation is a typed `notes` list for narrative, kept explicitly separate so nothing structured hides in it.
 
-**It does not stop wrong tool results.** A scratchpad faithfully records `order_total_cents` from `get_order` even when `get_order` returned another order's total. That is the [semantic class](/docs/reliability/error-taxonomy), and the defense is the [wrong-result injection test](/docs/reliability/failure-injection) plus server-side re-derivation, not this pattern.
+**It does not stop wrong tool results.** A scratchpad faithfully records `order_total_cents` from `get_order` even when `get_order` returned another order's total. That is the [semantic class](/book/reliability/error-taxonomy), and the defense is the [wrong-result injection test](/book/reliability/failure-injection) plus server-side re-derivation, not this pattern.
 
 ## When not to use it
 
@@ -160,20 +160,20 @@ The scratchpad lives in [graph state](/docs/langgraph/reducers-and-state) so it 
 
 **When the transcript is short and the run is cheap.** Under about five turns with no writes, the transcript is a perfectly good working memory and this is ceremony.
 
-**When the values are genuinely free-form.** A drafting or summarization agent whose output *is* prose has nothing typed to hold. Give it [rolling summary](/docs/patterns/context/rolling-summary) instead.
+**When the values are genuinely free-form.** A drafting or summarization agent whose output *is* prose has nothing typed to hold. Give it [rolling summary](/book/patterns/context/rolling-summary) instead.
 
 **When you would use it to store the model's conclusions.** A scratchpad field written by `model` is a transcript with a schema on it, and it inherits every property this pattern exists to avoid. If no tool can produce the value, the value is an opinion. Treat it as one.
 
 <Aside type="note" title="The second reason it exists">
 Compaction and poisoning are usually discussed separately, and the scratchpad is the answer to both because they are the same problem seen twice: **the transcript is not a system of record.**
 
-Which gives the pattern's real test. Ask *if I discarded the entire transcript right now, could the run continue correctly?* If yes, you have a restore point, and [an agent whose only state is its conversation has no recovery mode at all](/docs/context/context-poisoning).
+Which gives the pattern's real test. Ask *if I discarded the entire transcript right now, could the run continue correctly?* If yes, you have a restore point, and [an agent whose only state is its conversation has no recovery mode at all](/book/context/context-poisoning).
 </Aside>
 
 ## Related
 
-- [Rolling Summary](/docs/patterns/context/rolling-summary): the narrative half; the scratchpad holds the facts so the summary does not have to
-- [Context Compaction](/docs/patterns/context/context-compaction): rebuilds the context *from* the scratchpad
-- [Sub-Agent Isolation](/docs/patterns/context/subagent-isolation): the sub-agent returns a value that lands in a field, not a transcript
-- [Context Poisoning](/docs/context/context-poisoning): the failure this pattern is the primary defense against
-- [Reducers and State](/docs/langgraph/reducers-and-state): where the scratchpad lives, and how not to lose it on merge
+- [Rolling Summary](/book/patterns/context/rolling-summary): the narrative half; the scratchpad holds the facts so the summary does not have to
+- [Context Compaction](/book/patterns/context/context-compaction): rebuilds the context *from* the scratchpad
+- [Sub-Agent Isolation](/book/patterns/context/subagent-isolation): the sub-agent returns a value that lands in a field, not a transcript
+- [Context Poisoning](/book/context/context-poisoning): the failure this pattern is the primary defense against
+- [Reducers and State](/book/langgraph/reducers-and-state): where the scratchpad lives, and how not to lose it on merge

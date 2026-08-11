@@ -79,7 +79,7 @@ It builds in seconds to minutes rather than hours, inserts are trivial, and it u
 
 > **IVF's recall drifts as your data changes**, because the centroids were fit on the corpus as it was at build time. Add a new product line, a new region, a new document type, and the partitions no longer match the distribution, quietly, with no error.
 
-That is [drift](/docs/observability/drift) in a place people don't look for it, and it means IVF wants periodic retraining as a scheduled job rather than a one-time build. It suits large, mostly-static corpora where memory or build cost dominates; it suits a fast-changing corpus badly.
+That is [drift](/book/observability/drift) in a place people don't look for it, and it means IVF wants periodic retraining as a scheduled job rather than a one-time build. It suits large, mostly-static corpora where memory or build cost dominates; it suits a fast-changing corpus badly.
 
 ## Quantization is a separate axis
 
@@ -112,7 +112,7 @@ Over-fetch with the cheap index, then recompute exact distances on the small can
 
 This is why aggressive compression is viable in production: **you are not choosing between compressed and accurate, you are choosing compressed-then-corrected.** Whenever you quantize, plan the rescoring step in the same breath. A compressed index without rescoring is the configuration that produces "search got worse" tickets six weeks later.
 
-And note the shape: search wide and cheap, then cut precisely. That is the same two-stage structure as [selection versus reranking](/docs/context/dynamic-selection), and as [hybrid retrieval](/docs/retrieval/hybrid-and-reranking) in the next chapters. It keeps recurring because it is the general answer to "recall and precision want opposite things."
+And note the shape: search wide and cheap, then cut precisely. That is the same two-stage structure as [selection versus reranking](/book/context/dynamic-selection), and as [hybrid retrieval](/book/retrieval/hybrid-and-reranking) in the next chapters. It keeps recurring because it is the general answer to "recall and precision want opposite things."
 
 ## The number nobody measures
 
@@ -122,7 +122,7 @@ Every published recall figure is unfiltered. Your queries are not. And post-filt
 
 Measure recall the way you query: with the filters on.
 
-And hold it at the value it has, which is a ceiling rather than a score. Recall says the right chunk reached the window; it says nothing about whether the model could use it, and [the two move independently often enough to be worth watching separately](/docs/retrieval/retrieval-evals). Tune the index on recall, because that is what an index controls, then check that the answers moved.
+And hold it at the value it has, which is a ceiling rather than a score. Recall says the right chunk reached the window; it says nothing about whether the model could use it, and [the two move independently often enough to be worth watching separately](/book/retrieval/retrieval-evals). Tune the index on recall, because that is what an index controls, then check that the answers moved.
 
 ## Building the harness
 
@@ -152,7 +152,7 @@ Add the index when the scan shows up in your latency budget. Not before, and not
 
 ---
 
-Next: [Chunking](/docs/retrieval/chunking), covering fixed, recursive, semantic, document-aware, and parent/child splitting, and why a policy split mid-sentence is a bug you will never see in a metric.
+Next: [Chunking](/book/retrieval/chunking), covering fixed, recursive, semantic, document-aware, and parent/child splitting, and why a policy split mid-sentence is a bug you will never see in a metric.
 
 ## Takeaways
 

@@ -3,7 +3,7 @@ title: "Tools Are APIs Designed for Models"
 description: "Never expose your internal API to an agent. Build an interface for the consumer you actually have."
 ---
 
-[Part II](/docs/first-agent/first-tools) showed how a tool call works: a contract, a request, a round trip. This part asks a different question: **which tools should exist at all**. It is the one that decides whether an agent is debuggable.
+[Part II](/book/first-agent/first-tools) showed how a tool call works: a contract, a request, a round trip. This part asks a different question: **which tools should exist at all**. It is the one that decides whether an agent is debuggable.
 
 The answer starts with an observation that sounds obvious and is routinely ignored in practice.
 
@@ -21,7 +21,7 @@ A tool surface is another one of those. What makes it feel unfamiliar is that th
 | Learns from a mistake | Over a career | Within one conversation, then forgets entirely |
 | Discovers what exists | Browses, greps, asks a colleague | Sees only what you declared this turn |
 | Chains three calls | Writes a client function once | Pays a full round trip and context growth per hop |
-| Holds intermediate state | In a variable, for free | In [the context window](/docs/foundations/context-window), at token cost, forever |
+| Holds intermediate state | In a variable, for free | In [the context window](/book/foundations/context-window), at token cost, forever |
 | On an ambiguous parameter | Reads the source | Guesses, plausibly |
 | Cost of a wrong call | An exception in dev | A confident answer to a customer |
 
@@ -37,15 +37,15 @@ Meridian's warehouse has an OpenAPI spec. Generating tools from it is one comman
 
 **The decomposition assumes a caller who will chain.** Answering *"why is the Acme account at risk"* means `GET /accounts/{id}`, then `/accounts/{id}/contracts`, then `/contracts/{id}/terms`. For a programmer that is three lines in a client function. For an agent it is three round trips of latency, three model calls billed, and three full JSON payloads that sit in the window for the rest of the conversation.
 
-**The responses are complete.** REST returns every field because bandwidth is cheap and the caller destructures what it wants. Here, every unused field is context spent, and [the highest-leverage change in tool design is returning only the fields the agent needs](/docs/tools/result-design).
+**The responses are complete.** REST returns every field because bandwidth is cheap and the caller destructures what it wants. Here, every unused field is context spent, and [the highest-leverage change in tool design is returning only the fields the agent needs](/book/tools/result-design).
 
 **Pagination is a protocol.** `?limit=&offset=` presumes a caller with a loop and a cursor. A model given an offset parameter will either ignore it or invent values for it.
 
-**Errors are for operators.** `500` and a stack trace tell you where to look. The model needs a sentence saying what to do instead. [Errors are prompt text](/docs/tools/errors-as-instructions).
+**Errors are for operators.** `500` and a stack trace tell you where to look. The model needs a sentence saying what to do instead. [Errors are prompt text](/book/tools/errors-as-instructions).
 
-**Auth is a header somebody else sets.** In a tool schema there is no "somebody else" unless you build one, and if identity becomes a parameter the model fills in, you have built a [tenancy bug](/docs/security/tenant-isolation) with a friendly name.
+**Auth is a header somebody else sets.** In a tool schema there is no "somebody else" unless you build one, and if identity becomes a parameter the model fills in, you have built a [tenancy bug](/book/security/tenant-isolation) with a friendly name.
 
-Sixty tools also blows the selection budget by a factor of three, for reasons [Part II measured](/docs/first-agent/first-tools) and this chapter will not re-argue.
+Sixty tools also blows the selection budget by a factor of three, for reasons [Part II measured](/book/first-agent/first-tools) and this chapter will not re-argue.
 
 <Aside type="tip" title="Generate to look, not to ship">
 This is not an argument against the generators. Pointing one at your spec is a genuinely good way to see your own API through an agent's eyes for the first time, and the exercise is uncomfortable in a useful way.
@@ -57,13 +57,13 @@ The consensus that has settled across the ecosystem is narrow and worth stating 
 
 Everything the remaining chapters develop comes out of the consumer table above. Named once, here:
 
-**1 · A tool is a job, not an endpoint.** The unit is a task someone wants done. If a question always requires three calls in a fixed order, that chain is one tool. Consolidating frequently-chained multi-step work into a single call is the whole point. → [Schema and Granularity](/docs/tools/schema-and-granularity)
+**1 · A tool is a job, not an endpoint.** The unit is a task someone wants done. If a question always requires three calls in a fixed order, that chain is one tool. Consolidating frequently-chained multi-step work into a single call is the whole point. → [Schema and Granularity](/book/tools/schema-and-granularity)
 
 **2 · The description is the interface.** Not a docstring, not a comment. It is shipped, it is the routing logic, it is re-sent on every request, and it is the only thing standing between two tools that could both plausibly answer a question. → this chapter, and every chapter after it
 
-**3 · The result is context, not a response.** What comes back is not consumed and discarded; it is appended and re-sent. Shape it, cap it, and say that you capped it. → [Tool Result Design](/docs/tools/result-design)
+**3 · The result is context, not a response.** What comes back is not consumed and discarded; it is appended and re-sent. Shape it, cap it, and say that you capped it. → [Tool Result Design](/book/tools/result-design)
 
-**4 · The failure mode is a confident wrong answer.** Not a stack trace. A tool that returns something misleading produces an agent that is articulate and incorrect, which is worse than one that crashed. → [Errors as Instructions](/docs/tools/errors-as-instructions), [Read Tools and Write Tools](/docs/tools/read-and-write-tools)
+**4 · The failure mode is a confident wrong answer.** Not a stack trace. A tool that returns something misleading produces an agent that is articulate and incorrect, which is worse than one that crashed. → [Errors as Instructions](/book/tools/errors-as-instructions), [Read Tools and Write Tools](/book/tools/read-and-write-tools)
 
 **5 · Arguments come from the model. Authority does not.** This one is load-bearing enough to get its own section.
 
@@ -94,7 +94,7 @@ The model chooses every value in `input`. That is what a tool call *is*. So the 
 
 Two different things travel to your tool. One is the **subject**: which account, which period, which order. That is a legitimate model decision, and it is the capability you bought. The **requester** is not a decision at all. It comes from the session, is never in `input_schema`, and is what the tool filters on.
 
-This is the [invariant-versus-request distinction](/docs/first-agent/the-problem) landing in a function signature, and it matters more here than anywhere because of a property established in Part II: **tool results enter the transcript as user content.** A model that has just read a policy document mentioning another account can, entirely without malice, ask for that account next. If `requester` were a parameter, it would fill that in too. See [Prompt Injection](/docs/security/prompt-injection) for the version where the document was written by someone who wanted exactly that, and [Least Privilege](/docs/security/least-privilege) for how far the principle extends.
+This is the [invariant-versus-request distinction](/book/first-agent/the-problem) landing in a function signature, and it matters more here than anywhere because of a property established in Part II: **tool results enter the transcript as user content.** A model that has just read a policy document mentioning another account can, entirely without malice, ask for that account next. If `requester` were a parameter, it would fill that in too. See [Prompt Injection](/book/security/prompt-injection) for the version where the document was written by someone who wanted exactly that, and [Least Privilege](/book/security/least-privilege) for how far the principle extends.
 
 ## Rewriting Meridian's four endpoints as one tool
 
@@ -173,11 +173,11 @@ ACCOUNT_RISK_PROFILE = {
 
 Four things changed, and each maps to a row in the consumer table.
 
-**Three hops became one.** In [step 2 of the Atlas trace](/docs/first-agent/the-loop-by-hand), the model decides, unprompted, to fetch tickets and volume after seeing a renewal date. That stays exactly as adaptive. What disappears is the mechanical chaining that was never a decision.
+**Three hops became one.** In [step 2 of the Atlas trace](/book/first-agent/the-loop-by-hand), the model decides, unprompted, to fetch tickets and volume after seeing a renewal date. That stays exactly as adaptive. What disappears is the mechanical chaining that was never a decision.
 
 **The description names its neighbours.** It calls out two `wms_` tools by name, in prose, with the conditions that select them. Boundaries stated in one tool's description are half a boundary; the sibling tools say the reverse.
 
-**The names are namespaced by service and resource.** `crm_`, `wms_`, `erp_`. This is a small thing with a measurable effect on selection. Prefixes give the model a coarse filter before it reaches the fine distinctions, and they make an ambiguous call legible in a [trace](/docs/observability/what-a-trace-must-answer) without cross-referencing anything.
+**The names are namespaced by service and resource.** `crm_`, `wms_`, `erp_`. This is a small thing with a measurable effect on selection. Prefixes give the model a coarse filter before it reaches the fine distinctions, and they make an ambiguous call legible in a [trace](/book/observability/what-a-trace-must-answer) without cross-referencing anything.
 
 **Pagination is gone, and its absence is stated.** The tool returns a count and the oldest few, because "how many open tickets and how old is the worst" is the actual question. A `limit`/`offset` pair would have been a protocol the consumer cannot drive.
 
@@ -189,9 +189,9 @@ Consolidation is not free, and the argument against it is real.
 
 A task-shaped tool encodes a guess about the task. When the guess is right it saves three round trips; when it is wrong the model has no way to compose around it, because you removed the primitives it would have composed *with*. Endpoint-shaped tools are the opposite: worse selection accuracy, more hops, more context, and a model that can answer a question you never anticipated.
 
-That is the trade, stated plainly: **composability against selection accuracy.** It has no universal answer, which is why [the next chapter](/docs/tools/schema-and-granularity) is entirely about where to sit on it. That chapter opens on the extreme position, *"just give it `execute_sql` and let it compose"*. One tool, perfect composability, no selection problem at all, and a blast radius nobody can bound.
+That is the trade, stated plainly: **composability against selection accuracy.** It has no universal answer, which is why [the next chapter](/book/tools/schema-and-granularity) is entirely about where to sit on it. That chapter opens on the extreme position, *"just give it `execute_sql` and let it compose"*. One tool, perfect composability, no selection problem at all, and a blast radius nobody can bound.
 
-Thin wrapping is also genuinely right in two places worth naming now: when the server is [an MCP server you do not own](/docs/mcp/what-mcp-is), where the surface is someone else's decision, and when the job really is CRUD-shaped and a `get`/`create`/`update` triple is the honest description of the work.
+Thin wrapping is also genuinely right in two places worth naming now: when the server is [an MCP server you do not own](/book/mcp/what-mcp-is), where the surface is someone else's decision, and when the job really is CRUD-shaped and a `get`/`create`/`update` triple is the honest description of the work.
 
 ## You cannot design this from a spec
 
@@ -199,11 +199,11 @@ The last property is a method rather than a rule, and it is the one that makes t
 
 Take the twenty tickets. For each, write the questions that must be answered before a reply can be sent. Group the questions that always occur together. Each group is a candidate tool, and the grouping, not the endpoint list, is what sets the granularity. Then run it, watch which calls the model makes, and consolidate the chains it keeps repeating.
 
-That loop is evaluation-driven by construction, which is the same discipline as everywhere else in this book: build a prototype, run it against realistic cases, read the failures, refine. It also means your tool surface is a thing with versions and a regression suite, not a thing you specified once. [Part XIV](/docs/evals/datasets) is where that becomes formal; the sample you need to start already exists in `data/tickets.jsonl`.
+That loop is evaluation-driven by construction, which is the same discipline as everywhere else in this book: build a prototype, run it against realistic cases, read the failures, refine. It also means your tool surface is a thing with versions and a regression suite, not a thing you specified once. [Part XIV](/book/evals/datasets) is where that becomes formal; the sample you need to start already exists in `data/tickets.jsonl`.
 
 ---
 
-Next: [Schema and Granularity](/docs/tools/schema-and-granularity), why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.
+Next: [Schema and Granularity](/book/tools/schema-and-granularity), why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.
 
 ## Takeaways
 

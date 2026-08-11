@@ -31,7 +31,7 @@ A reference catalog — sixty-six entries across nine categories, each self-cont
 Read one when you have the problem it names. Reading the catalog end to end is possible and not especially useful.
 
 <Aside type="tip" title="In a hurry?">
-The book is large on purpose — it is meant to still be useful in year two. If you need to ship now, [the core path](/docs/core-path) is the third of it that gets you there, with a table of what you are deferring and when to come back for it.
+The book is large on purpose — it is meant to still be useful in year two. If you need to ship now, [the core path](/book/core-path) is the third of it that gets you there, with a table of what you are deferring and when to come back for it.
 </Aside>
 
 ## The two code tracks
@@ -59,9 +59,9 @@ result = await atlas.run(request)
 </Tab>
 </Tabs>
 
-Both floors are load-bearing rather than decorative. The Python track annotates optionals as `str | None` throughout, which is 3.10, and the [plan schema](/docs/patterns/control/plan-then-execute) builds its closed vocabulary with `Literal[*TOOL_NAMES]`, which is 3.11 — on anything older that line is a syntax error rather than a subtle incompatibility. The floor is not only a syntax matter: [the Temporal LangGraph plugin](/docs/durability/langgraph-on-temporal) needs 3.11 at runtime for interrupts and its functional API, and degrades to a warning rather than an error below it. TypeScript is the lighter ask: only the `satisfies` in [Resumable Activity](/docs/patterns/durability/resumable-activity) needs anything past the language you are probably already on.
+Both floors are load-bearing rather than decorative. The Python track annotates optionals as `str | None` throughout, which is 3.10, and the [plan schema](/book/patterns/control/plan-then-execute) builds its closed vocabulary with `Literal[*TOOL_NAMES]`, which is 3.11 — on anything older that line is a syntax error rather than a subtle incompatibility. The floor is not only a syntax matter: [the Temporal LangGraph plugin](/book/durability/langgraph-on-temporal) needs 3.11 at runtime for interrupts and its functional API, and degrades to a warning rather than an error below it. TypeScript is the lighter ask: only the `satisfies` in [Resumable Activity](/book/patterns/durability/resumable-activity) needs anything past the language you are probably already on.
 
-The tracks are equivalent in behavior, not transliterated line by line. Where an ecosystem genuinely does something differently — and it does; see the timeout semantics in [Agent as Entity Workflow](/docs/patterns/durability/agent-as-entity-workflow) — the sample follows local idiom and the difference is called out rather than papered over. [Appendix A](/docs/appendix/ts-python-cheatsheet) maps the concepts across.
+The tracks are equivalent in behavior, not transliterated line by line. Where an ecosystem genuinely does something differently — and it does; see the timeout semantics in [Agent as Entity Workflow](/book/patterns/durability/agent-as-entity-workflow) — the sample follows local idiom and the difference is called out rather than papered over. [Appendix A](/book/appendix/ts-python-cheatsheet) maps the concepts across.
 
 <Aside type="note" title="Which track should you pick?">
 Building the user-facing side: TypeScript — the AI SDK has no Python equivalent. Building retrieval, ingestion, and evaluation tooling: Python — that ecosystem is deeper. Most production systems end up with both, split along exactly that line, which is why this book carries both rather than choosing for you.
@@ -71,7 +71,7 @@ Building the user-facing side: TypeScript — the AI SDK has no Python equivalen
 
 **The framework check.** Where more than one approach is defensible, a box lays them side by side: plain code, LangGraph, Temporal, the AI SDK, MCP, or A2A. It says which one this book picks and why. The point is to leave you able to evaluate the *next* framework, because there will be one.
 
-**Decision tables.** Every "which one should I use" question resolves to a table, and all of them are collected in [Appendix C](/docs/appendix/decision-tables) for when you remember the question but not the chapter.
+**Decision tables.** Every "which one should I use" question resolves to a table, and all of them are collected in [Appendix C](/book/appendix/decision-tables) for when you remember the question but not the chapter.
 
 **Illustrative numbers are labeled.** Prices, context sizes, and latencies change. Where a concrete figure makes an example legible, it says it is illustrative.
 

@@ -21,7 +21,7 @@ A resolution rate is a proportion, so its uncertainty is arithmetic rather than 
 | 1,000 | ± 3 points |
 
 <Aside type="caution" title="An audit of this book's own numbers">
-Atlas scored 14/20 in [Part II](/docs/first-agent/the-loop-by-hand) and this book reported it as 70%.
+Atlas scored 14/20 in [Part II](/book/first-agent/the-loop-by-hand) and this book reported it as 70%.
 
 The honest statement is **70% ± 20**. The twenty-ticket set cannot distinguish a system that resolves half the tickets from one that resolves nearly all of them. Those scores were directionally useful, and they were never precise. Every version comparison built on them showed a direction rather than a magnitude.
 
@@ -42,7 +42,7 @@ Detecting a *regression* is harder than measuring a rate, because you are compar
 
 Those two settings are worth stating rather than assuming, because the table is not robust to them. Hold the threshold and raise power to 90%, a defensible choice for a gate you intend to trust, and **every row grows by about a third**: the five-point row goes from ~1,350 to ~1,840. A table of sample sizes without its power and its threshold is the same species of claim this chapter is about to criticise.
 
-Read the fourth row and then re-read [the dataset chapter's ceiling](/docs/evals/datasets) of about a thousand cases per route. Those two numbers agree, and together they say something specific and worth internalising:
+Read the fourth row and then re-read [the dataset chapter's ceiling](/book/evals/datasets) of about a thousand cases per route. Those two numbers agree, and together they say something specific and worth internalising:
 
 > **A well-built golden set detects a five-point regression. It does not detect a two-point one, and no realistic budget will.**
 
@@ -59,7 +59,7 @@ Most CI suites are simultaneously flaky and blind because they use one configura
 
 A regression test does not need the model's creativity. Pinning temperature and seed removes a large share of run-to-run variance for free, and what remains is much closer to the change you introduced.
 
-That last word is the one to watch, because on the frontier it is no longer free. [Current models reject `temperature`, `top_p` and `top_k` outright](/docs/foundations/nondeterminism), so the cheapest variance reduction in this chapter is unavailable for the system you are actually shipping. The split still holds; the price changed. What is left to pin is the [configuration bundle](/docs/production/versioning), and what replaces the sampler is repetition, which means the variance you used to remove for nothing now comes out of the sample sizes above.
+That last word is the one to watch, because on the frontier it is no longer free. [Current models reject `temperature`, `top_p` and `top_k` outright](/book/foundations/nondeterminism), so the cheapest variance reduction in this chapter is unavailable for the system you are actually shipping. The split still holds; the price changed. What is left to pin is the [configuration bundle](/book/production/versioning), and what replaces the sampler is repetition, which means the variance you used to remove for nothing now comes out of the sample sizes above.
 
 The measurement run is the opposite. It should sample the distribution you will actually ship, across several fixed seeds, because a quality claim made at temperature 0 is a claim about a system nobody runs.
 
@@ -69,9 +69,9 @@ The measurement run is the opposite. It should sample the distribution you will 
 | --- | --- |
 | Sampling temperature | Provider-side variation |
 | Unfixed seeds | Model updates beneath you |
-| [Unsorted JSON, timestamps in prompts](/docs/foundations/prompt-caching) | Genuine sampling at production settings |
+| [Unsorted JSON, timestamps in prompts](/book/foundations/prompt-caching) | Genuine sampling at production settings |
 | Tool results arriving in racing order | |
-| [Judge drift](/docs/evals/scoring) between runs | |
+| [Judge drift](/book/evals/scoring) between runs | |
 
 The rule: **eliminate every source you control before sizing your set against the ones you do not.** Otherwise you are buying thousands of cases to see past noise you introduced yourself, an expensive way to avoid sorting a dictionary.
 
@@ -79,7 +79,7 @@ The rule: **eliminate every source you control before sizing your set against th
 
 A problem nobody mentions and everybody has.
 
-[The scoring chapter](/docs/evals/scoring) recommended decomposing quality into binary checks: twenty per route, perhaps sixty across the suite. If each criterion gets its own pass/fail gate at the conventional 5% threshold, then **you expect about three false alarms every run, by construction.** Not because anything broke; because you ran sixty tests.
+[The scoring chapter](/book/evals/scoring) recommended decomposing quality into binary checks: twenty per route, perhaps sixty across the suite. If each criterion gets its own pass/fail gate at the conventional 5% threshold, then **you expect about three false alarms every run, by construction.** Not because anything broke; because you ran sixty tests.
 
 The consequences are predictable: the suite cries wolf, the team learns to re-run until green, and the gate stops being a gate.
 
@@ -112,19 +112,19 @@ The final discipline, and the one that keeps the suite credible:
 | --- | --- |
 | Regression runs | Per route; temperature 0 and a fixed seed on the models that accept them, a pinned bundle and repeats on the ones that do not |
 | Measurement runs | Production settings, three seeds, weekly |
-| Detectable regression | ~5 points per route, which takes ~1,350 cases per arm. [Atlas is not there yet](/docs/capstone/hardening-it) |
-| Gated | Aggregate resolution rate, [cost per resolved ticket](/docs/evals/cost-and-latency-evals), p95 latency, and every [deterministic assertion](/docs/evals/scoring) |
+| Detectable regression | ~5 points per route, which takes ~1,350 cases per arm. [Atlas is not there yet](/book/capstone/hardening-it) |
+| Gated | Aggregate resolution rate, [cost per resolved ticket](/book/evals/cost-and-latency-evals), p95 latency, and every [deterministic assertion](/book/evals/scoring) |
 | Reported only | Individual rubric criteria, step efficiency, redundant-call rate |
 | Flake budget | 2% of correct releases may be rejected |
 | Re-run policy | Two of three, declared in the config, not negotiated at the time |
 
 The deterministic assertions are the row worth noticing. **They have no sampling error at all.** The requester check either filtered or it did not, and the citation either matched the version or it did not, so they gate at any set size, on a single run, with no statistics required.
 
-Which is the practical argument for [the scoring ladder](/docs/evals/scoring) restated as a CI property: every criterion you move from a judge to an assertion is a criterion that stops needing a thousand cases to say anything.
+Which is the practical argument for [the scoring ladder](/book/evals/scoring) restated as a CI property: every criterion you move from a judge to an assertion is a criterion that stops needing a thousand cases to say anything.
 
 ---
 
-Next: [Online Evals and Guardrails](/docs/evals/online-evals), scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery.
+Next: [Online Evals and Guardrails](/book/evals/online-evals), scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery.
 
 ## Takeaways
 

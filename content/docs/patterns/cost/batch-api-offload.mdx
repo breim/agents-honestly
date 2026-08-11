@@ -7,7 +7,7 @@ description: "Move anything that can wait onto the discounted asynchronous path.
 
 Three workloads share one quota and one price: live ticket handling, the nightly eval suite, and a quarterly backfill re-classifying 340,000 historical tickets.
 
-Only the first has anyone waiting. The other two run on the interactive endpoint at interactive prices, and at 02:04 they cause [the incident where a job with no deadline starves the workload with customers in it](/docs/patterns/scale/priority-queues).
+Only the first has anyone waiting. The other two run on the interactive endpoint at interactive prices, and at 02:04 they cause [the incident where a job with no deadline starves the workload with customers in it](/book/patterns/scale/priority-queues).
 
 Both problems have the same one-line fix, and most teams do not take it: providers sell a **batch endpoint at 50% off both input and output tokens**, in exchange for asynchronous completion within 24 hours. The eval suite does not care whether it finishes at 02:10 or 06:00. It has been paying double for a latency guarantee nobody needed.
 
@@ -18,7 +18,7 @@ Both problems have the same one-line fix, and most teams do not take it: provide
 - **Separate metering removes contention** with interactive traffic, which is worth as much as the discount.
 - **Asynchrony changes the code shape**: submit, poll, collect, rather than call and await.
 - **Partial failures need handling**: a batch returns per-request outcomes, not one status.
-- **The discount [stacks with prefix caching](/docs/patterns/cost/cache-first-prefix)**, and a shared preamble across thousands of items is exactly the case where it compounds.
+- **The discount [stacks with prefix caching](/book/patterns/cost/cache-first-prefix)**, and a shared preamble across thousands of items is exactly the case where it compounds.
 
 ## Solution
 
@@ -55,7 +55,7 @@ Four rules:
 
 **Chunk submissions and record the mapping.** A batch is capped at 100,000 requests or 256 MB, whichever comes first, so a job of 340,000 is several batches, and a job with large payloads may hit the size limit long before the count. Keep a durable map from your item ID to the batch request ID, because results come back keyed by the latter and a lost mapping is a completed batch you cannot use. Collect on a schedule too: results are retained for **29 days** after the batch is created, so a job whose collector has been broken for a month is a batch you paid for and can no longer read.
 
-**Handle per-item outcomes.** A batch does not succeed or fail as a unit: each request has its own result or error. Treat it exactly as [a fan-out](/docs/patterns/scale/fan-out): isolate per-item failures, break on a systemic rate, and write a manifest saying what is missing.
+**Handle per-item outcomes.** A batch does not succeed or fail as a unit: each request has its own result or error. Treat it exactly as [a fan-out](/book/patterns/scale/fan-out): isolate per-item failures, break on a systemic rate, and write a manifest saying what is missing.
 
 **Structure the batch to share a prefix.** Ten thousand items with one large common system prompt get the batch discount on everything *and* the cache-read discount on the shared portion. Randomizing anything at the front of each request throws the second one away.
 
@@ -162,9 +162,9 @@ async def collect(job, handle) -> None:
 
 **24 hours is a hard ceiling, not an estimate.** Most batches complete within an hour, and nothing guarantees it: a batch that does not finish expires, though the expired requests are not billed. Any job on a schedule tighter than a day needs a fallback plan, usually running the remainder interactively, at full price, which is fine as an exception and expensive as a habit.
 
-**Asynchrony is a real code change.** Submit, persist, poll, collect, handle partials. That is a [durable workflow](/docs/patterns/durability/agent-as-entity-workflow) rather than a function call, and the polling loop must survive deploys.
+**Asynchrony is a real code change.** Submit, persist, poll, collect, handle partials. That is a [durable workflow](/book/patterns/durability/agent-as-entity-workflow) rather than a function call, and the polling loop must survive deploys.
 
-**The stacking is conditional on the cache TTL, and the default one loses.** The discounts do compose: cache multipliers apply on top of the batch discount. But a batch runs for hours, and [the short-TTL entry expires in about five minutes](/docs/foundations/prompt-caching). Every request after the first few pays the write premium and never reads it, which is worse than not caching. Use the long TTL for batch work, keep the prefix identical across every request in the batch, and treat a low `cache_read_input_tokens` on a batch job as the signal that the stacking never happened.
+**The stacking is conditional on the cache TTL, and the default one loses.** The discounts do compose: cache multipliers apply on top of the batch discount. But a batch runs for hours, and [the short-TTL entry expires in about five minutes](/book/foundations/prompt-caching). Every request after the first few pays the write premium and never reads it, which is worse than not caching. Use the long TTL for batch work, keep the prefix identical across every request in the batch, and treat a low `cache_read_input_tokens` on a batch job as the signal that the stacking never happened.
 
 **Some capabilities are unavailable on the batch path.** Provider feature parity is not guaranteed: certain modes are excluded. Check before assuming a workload can move, particularly if it depends on a specific serving configuration.
 
@@ -183,18 +183,18 @@ async def collect(job, handle) -> None:
 <Aside type="note" title="The discount is the smaller half of the win">
 Half price on a large workload is a real saving and it is not the main reason to do this.
 
-The main reason is that **batch traffic is metered separately**, so the eval suite and the backfill stop competing with live traffic for the same [token quota](/docs/reliability/backpressure). That removes the 2am incident structurally rather than scheduling around it: no [priority shares](/docs/patterns/scale/priority-queues) to tune, no borrowing rules, no risk that a misconfigured concurrency setting starves the workload with customers in it.
+The main reason is that **batch traffic is metered separately**, so the eval suite and the backfill stop competing with live traffic for the same [token quota](/book/reliability/backpressure). That removes the 2am incident structurally rather than scheduling around it: no [priority shares](/book/patterns/scale/priority-queues) to tune, no borrowing rules, no risk that a misconfigured concurrency setting starves the workload with customers in it.
 
 Which reorders the decision. The question is not *is this worth 50% off* but **is anyone waiting for this**, and for evals, backfills, dataset generation, and embedding jobs the answer is no, which means they should have been on this path from the day they were written.
 </Aside>
 
 ## Related
 
-- [Cache-First Prefix](/docs/patterns/cost/cache-first-prefix): the discount that stacks with this one on a shared preamble
-- [Priority Task Queues](/docs/patterns/scale/priority-queues): the contention this removes rather than schedules
-- [Fan-Out Over Items](/docs/patterns/scale/fan-out): the per-item failure handling a batch result needs
-- [Batch Iterator](/docs/patterns/scale/batch-iterator): walking a job too large for a single submission
-- [Cost Engineering](/docs/production/cost-engineering): where this sits in the lever ordering
+- [Cache-First Prefix](/book/patterns/cost/cache-first-prefix): the discount that stacks with this one on a shared preamble
+- [Priority Task Queues](/book/patterns/scale/priority-queues): the contention this removes rather than schedules
+- [Fan-Out Over Items](/book/patterns/scale/fan-out): the per-item failure handling a batch result needs
+- [Batch Iterator](/book/patterns/scale/batch-iterator): walking a job too large for a single submission
+- [Cost Engineering](/book/production/cost-engineering): where this sits in the lever ordering
 
 ## References
 

@@ -3,7 +3,7 @@ title: "Idempotency in Practice"
 description: "Keys, dedup windows, and the exactly-once illusion you are actually building."
 ---
 
-[Part VIII designed the key](/docs/tools/idempotency): derived in your code from the run ID, the tool name, and a canonical hash of the arguments, never supplied by the model. That chapter deferred three things: where the keys live, how long they live, and what "exactly once" is actually promising. This is that chapter, and it exists because the deferred parts are where the money gets lost.
+[Part VIII designed the key](/book/tools/idempotency): derived in your code from the run ID, the tool name, and a canonical hash of the arguments, never supplied by the model. That chapter deferred three things: where the keys live, how long they live, and what "exactly once" is actually promising. This is that chapter, and it exists because the deferred parts are where the money gets lost.
 
 Start with the sentence the whole thing turns on:
 
@@ -21,7 +21,7 @@ The dedup record has to be written somewhere. There are three places, and only o
 | **Your dispatcher's dedup table** | Always | Nothing; this is the fallback you own |
 | The agent's state / checkpoint | Never | It is the thing that gets replayed |
 
-The third row is the mistake worth naming. Recording "I already issued this credit" in the graph state feels natural and is circular: the state is exactly what a [replay](/docs/langgraph/persistence) reconstructs, and a crash between the effect and the state write leaves you with the effect and no record of it. **The dedup record must be more durable than the thing that would repeat the call.**
+The third row is the mistake worth naming. Recording "I already issued this credit" in the graph state feels natural and is circular: the state is exactly what a [replay](/book/langgraph/persistence) reconstructs, and a crash between the effect and the state write leaves you with the effect and no record of it. **The dedup record must be more durable than the thing that would repeat the call.**
 
 When the downstream API does support keys, use it. The deduplication then lives on the same side of the network as the effect, which closes a gap your own table cannot. When it does not, your dispatcher owns a table, and the table's job is to make the write and the record atomic enough that no crash can separate them.
 
@@ -52,7 +52,7 @@ The naive table has one row per key with a result. The correct one has a state m
 
 </Figure>
 
-The `IN_FLIGHT` row is what distinguishes a real implementation from a decorative one. Two workers processing the same logical operation at the same instant, which happens whenever a [retry fires while the original is still running](/docs/reliability/timeouts-and-retries), must not both proceed. The insert has to be atomic, and the second caller has to block or return "in progress," never fall through.
+The `IN_FLIGHT` row is what distinguishes a real implementation from a decorative one. Two workers processing the same logical operation at the same instant, which happens whenever a [retry fires while the original is still running](/book/reliability/timeouts-and-retries), must not both proceed. The insert has to be atomic, and the second caller has to block or return "in progress," never fall through.
 
 The **lease** on that row is what stops it from being a deadlock. A worker that dies mid-call leaves `IN_FLIGHT` forever unless the row expires; the lease says *this claim is valid until T*, after which another worker may take it over. Setting that lease is a judgment call with teeth: it must be longer than the slowest legitimate call, because expiring early means a duplicate effect, which is the exact failure the table exists to prevent.
 
@@ -167,7 +167,7 @@ async def once(key, args_hash, lease_ms, effect):
 
 The single most consequential line is the one that does not appear: there is **no separate connection for the dedup store**. The effect and the record commit in one transaction, which is the only arrangement where a crash cannot land between them. Putting the dedup table in Redis and the effect in Postgres reintroduces the exact problem: a crash after the write and before the marker, and you are back to guessing.
 
-When the effect is genuinely external and cannot join your transaction, as with a payment API or an email send, you cannot have atomicity, and you fall back to the [transactional outbox](/docs/durability/compensation): commit the *intent* with the record, and let a separate process perform the effect with the key attached. That converts "did it happen" into "has the outbox row been processed," which is a question your database can answer.
+When the effect is genuinely external and cannot join your transaction, as with a payment API or an email send, you cannot have atomicity, and you fall back to the [transactional outbox](/book/durability/compensation): commit the *intent* with the record, and let a separate process perform the effect with the key attached. That converts "did it happen" into "has the outbox row been processed," which is a question your database can answer.
 
 ## The window is the bug
 
@@ -184,8 +184,8 @@ For a web request, that is minutes and 24 hours is generous. For an agent, walk 
 | SDK retry | Seconds |
 | Node retry | Seconds |
 | Worker crash and workflow replay | Minutes to hours |
-| **A run paused on [human approval](/docs/human-in-the-loop/approval-gates)** | **Hours to days** |
-| A [scheduled retry of a failed run](/docs/reliability/fallbacks-and-breakers) | Days |
+| **A run paused on [human approval](/book/human-in-the-loop/approval-gates)** | **Hours to days** |
+| A [scheduled retry of a failed run](/book/reliability/fallbacks-and-breakers) | Days |
 | An operator manually re-running a stuck run | Whenever they get to it |
 
 The fourth row is the one that breaks the default. A run that pauses on Friday for an approval, resumes Monday, and re-attempts `issue_credit` is *outside a 24-hour window*, so the key is gone, so the dedup layer sees a brand-new operation, so the credit is issued a second time. Every component behaved correctly. The window was a business decision made by a default.
@@ -194,7 +194,7 @@ Three practical consequences:
 
 **Size the window from your longest pause, not from your retry policy.** If runs can wait a week for approval, the window is longer than a week.
 
-**Prefer natural keys where the domain has one.** A key derived from `(order_id, 'delayed_shipment_credit')` never expires because it is not stored in a TTL'd table at all. The uniqueness constraint on the credits table is the dedup, and it is permanent. [Natural idempotency beats the synthetic kind](/docs/tools/idempotency) here for a second reason: it has no window to get wrong.
+**Prefer natural keys where the domain has one.** A key derived from `(order_id, 'delayed_shipment_credit')` never expires because it is not stored in a TTL'd table at all. The uniqueness constraint on the credits table is the dedup, and it is permanent. [Natural idempotency beats the synthetic kind](/book/tools/idempotency) here for a second reason: it has no window to get wrong.
 
 **Make expiry visible.** When a key is pruned, the operation becomes repeatable again. That transition deserves a metric, and an alert if it happens to keys belonging to runs that are still alive.
 
@@ -202,7 +202,7 @@ Three practical consequences:
 
 The `FAILED` state is more dangerous than it looks, and mishandling it is the second common way a real implementation goes wrong.
 
-Recall [the three outcomes](/docs/tools/idempotency): succeeded, failed, and unknown. Unknown skews toward *it happened*, because most timeouts occur on the response. So a row marked `FAILED` is only safe to retry if the failure was **provably before** the effect:
+Recall [the three outcomes](/book/tools/idempotency): succeeded, failed, and unknown. Unknown skews toward *it happened*, because most timeouts occur on the response. So a row marked `FAILED` is only safe to retry if the failure was **provably before** the effect:
 
 | Failure | Effect could have happened? | Retryable |
 | --- | --- | --- |
@@ -212,7 +212,7 @@ Recall [the three outcomes](/docs/tools/idempotency): succeeded, failed, and unk
 | 5xx after the request was accepted | Yes | No. Confirm first |
 | Worker killed mid-call | Yes | No. Confirm first |
 
-For the bottom three, the resolution is the [paired read every irreversible write was required to ship with](/docs/tools/idempotency): call `get_credit(reference)` and find out. If the read says it happened, mark `COMPLETED` with the real result. If it says it did not, the retry is safe. If the read itself is unavailable, the correct action is to escalate, not to guess. An unresolvable unknown is exactly the class of thing a [human should decide](/docs/human-in-the-loop/escalation-and-audit).
+For the bottom three, the resolution is the [paired read every irreversible write was required to ship with](/book/tools/idempotency): call `get_credit(reference)` and find out. If the read says it happened, mark `COMPLETED` with the real result. If it says it did not, the retry is safe. If the read itself is unavailable, the correct action is to escalate, not to guess. An unresolvable unknown is exactly the class of thing a [human should decide](/book/human-in-the-loop/escalation-and-audit).
 
 Marking `FAILED` and blindly retrying is how a system with a full idempotency implementation still issues two credits.
 
@@ -231,7 +231,7 @@ Every one of these is a real system with a real idempotency implementation.
 
 **The window expired.** The approval pause outlived the key. The most common, by a wide margin.
 
-**The key changed.** An argument was normalized differently on the second attempt, or a serialization was unsorted, so the same operation hashed to a new key. [Canonicalization is load-bearing](/docs/tools/idempotency).
+**The key changed.** An argument was normalized differently on the second attempt, or a serialization was unsorted, so the same operation hashed to a new key. [Canonicalization is load-bearing](/book/tools/idempotency).
 
 **The dedup store and the effect were not atomic.** Redis for the marker, Postgres for the write, a crash in between.
 
@@ -259,7 +259,7 @@ The `issue_credit` row is the one to copy. It has no dedup window because it has
 
 ---
 
-Next: [Fallbacks and Circuit Breakers](/docs/reliability/fallbacks-and-breakers). Degrading to a smaller model, another provider, or a human, instead of failing.
+Next: [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers). Degrading to a smaller model, another provider, or a human, instead of failing.
 
 ## Takeaways
 

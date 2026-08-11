@@ -3,7 +3,7 @@ title: "Scoring"
 description: "Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge, including calibrating a judge you can trust."
 ---
 
-You have [a set](/docs/evals/datasets). Now something has to decide whether each case passed, and the instrument you pick determines whether the resulting number means anything.
+You have [a set](/book/evals/datasets). Now something has to decide whether each case passed, and the instrument you pick determines whether the resulting number means anything.
 
 The order of preference is the opposite of the order most teams try.
 
@@ -35,7 +35,7 @@ The mistake is starting at rung four because the question feels subjective. Most
 - Was the credit amount within the policy limit? → assertion
 - Was the customer's actual question answered? → judge
 
-Four assertions and one judgement. [Part IV made this point](/docs/retrieval/sql-is-still-the-answer) about warehouse numbers: twenty questions with independently verified answers, `assert result == 184532`, no rubric, no judge, no agreement rate. That opportunity exists more often than it is taken.
+Four assertions and one judgement. [Part IV made this point](/book/retrieval/sql-is-still-the-answer) about warehouse numbers: twenty questions with independently verified answers, `assert result == 184532`, no rubric, no judge, no agreement rate. That opportunity exists more often than it is taken.
 
 ## Binary beats graded, and the numbers are not close
 
@@ -86,13 +86,13 @@ Two of those deserve a second sentence.
 
 **The verbosity mitigation is partial.** A rubric line telling the judge not to prefer longer answers reduces the bias by roughly half on most judges and does not eliminate it. Plan for a residue rather than assuming a fix.
 
-**Self-preference is large, varies by judge, and is subtler than a score bump.** The measurement that named the effect found one judge favouring its own outputs by about 10 points of win rate and another by about 25. So the magnitude is a property of the judge you picked, not a constant you can subtract, and any single figure quoted for it averages over a spread wide enough to change a decision. It is also not only a bump. Judge ratings of a model's behaviour have been found to converge with that model's *own self-report* in a way human ratings of the same outputs do not, which suggests the judge is partly measuring something about the model family rather than about the output. That is the strongest argument for crossing families, and it is the same rule [the dataset chapter](/docs/evals/datasets) gave for generation.
+**Self-preference is large, varies by judge, and is subtler than a score bump.** The measurement that named the effect found one judge favouring its own outputs by about 10 points of win rate and another by about 25. So the magnitude is a property of the judge you picked, not a constant you can subtract, and any single figure quoted for it averages over a spread wide enough to change a decision. It is also not only a bump. Judge ratings of a model's behaviour have been found to converge with that model's *own self-report* in a way human ratings of the same outputs do not, which suggests the judge is partly measuring something about the model family rather than about the output. That is the strongest argument for crossing families, and it is the same rule [the dataset chapter](/book/evals/datasets) gave for generation.
 
 ## Calibrating a judge you can trust
 
 The chapter's actual promise, and it is a procedure rather than a choice of model:
 
-1. **Human-label a calibration slice**, a couple of hundred cases, using the same discipline as the golden set: two annotators, and [kappa of at least 0.7](/docs/evals/datasets) or the labels are noise.
+1. **Human-label a calibration slice**, a couple of hundred cases, using the same discipline as the golden set: two annotators, and [kappa of at least 0.7](/book/evals/datasets) or the labels are noise.
 2. **Run the judge on that slice.**
 3. **Measure judge-versus-human agreement**, with the same statistic.
 4. **If it falls short, fix the rubric, not the model.** Ambiguous criteria are the usual cause, and swapping judges hides the problem rather than solving it.
@@ -101,7 +101,7 @@ The chapter's actual promise, and it is a procedure rather than a choice of mode
 The reported ceiling is around **80% agreement with human preferences, which happens to match human-to-human consistency.** That is a useful bar and it is not a licence to skip step three. It is the agreement someone else measured, on their task, with their rubric.
 
 <Aside type="caution" title="An uncalibrated judge is an unmeasured instrument">
-This is the [measurement-validity failure](/docs/durable-execution/everything-that-breaks) in its purest form: a number produced by a component whose accuracy nobody established, used to gate releases.
+This is the [measurement-validity failure](/book/durable-execution/everything-that-breaks) in its purest form: a number produced by a component whose accuracy nobody established, used to gate releases.
 
 The uncomfortable version: a judge is itself an agent, scored by nothing. Everything this book says about needing evals applies to it, and it is the one component teams routinely exempt.
 </Aside>
@@ -112,7 +112,7 @@ Three things, and reaching for a stronger model on any of them wastes a week:
 
 **A vague criterion.** "Is the reply helpful?" has no fixed answer, so no judge can be reliable on it. Decompose it or drop it.
 
-**A missing definition of success.** If the [acceptance spec](/docs/first-agent/the-problem) does not say what a good outcome is, the judge is being asked to invent the standard and then apply it.
+**A missing definition of success.** If the [acceptance spec](/book/first-agent/the-problem) does not say what a good outcome is, the judge is being asked to invent the standard and then apply it.
 
 **Genuine human disagreement.** If your annotators cannot reach 0.7 with each other, no judge will exceed them. It will produce a confident number over an unsettled question, which is worse than no number.
 
@@ -139,7 +139,7 @@ Nine rows, and only three involve a model scoring anything. That ratio is the ch
 
 ---
 
-Next: [Evaluating the Path, Not Just the Answer](/docs/evals/trajectory-evals), tool choice, argument correctness, step efficiency, and recovery behaviour.
+Next: [Evaluating the Path, Not Just the Answer](/book/evals/trajectory-evals), tool choice, argument correctness, step efficiency, and recovery behaviour.
 
 ## Takeaways
 

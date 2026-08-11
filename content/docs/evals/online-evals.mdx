@@ -3,7 +3,7 @@ title: "Online Evals and Guardrails"
 description: "Scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery."
 ---
 
-[The previous chapter](/docs/evals/ci-for-agents) ended on a debt: detecting a two-point regression needs roughly 8,400 cases per arm, which no CI budget will buy, so something else has to catch that class of change.
+[The previous chapter](/book/evals/ci-for-agents) ended on a debt: detecting a two-point regression needs roughly 8,400 cases per arm, which no CI budget will buy, so something else has to catch that class of change.
 
 Production is that something else, and the reason is volume.
 
@@ -44,7 +44,7 @@ And one rule that decides whether shadow is worth running at all:
 Shadow traffic that nobody scores is duplicate inference spend that produces no information. It is a surprisingly common configuration, because the mirroring is a gateway setting and the scoring is a project.
 
 <Aside type="caution" title="Shadowing an agent is not shadowing a classifier">
-The general guidance assumes the shadowed system is a function: same input, compare outputs, no consequences. An agent has [side effects](/docs/tools/read-and-write-tools).
+The general guidance assumes the shadowed system is a function: same input, compare outputs, no consequences. An agent has [side effects](/book/tools/read-and-write-tools).
 
 A shadowed agent must run with writes disabled, which means **you are shadowing a different system than the one you will ship.** It proves the reads, the tool selection, and the decisions. It does not prove `issue_credit`, and it cannot, because the whole point of shadow is that nothing happens.
 
@@ -53,17 +53,17 @@ Be explicit about that boundary. The write path is validated by canary, with rea
 
 ## Scoring production is a sampling problem
 
-You cannot judge every turn, because [the judge cost arithmetic](/docs/evals/datasets) that capped golden sets applies with more force to unbounded traffic. So online scoring is stratified sampling, and the stratification is where the value is.
+You cannot judge every turn, because [the judge cost arithmetic](/book/evals/datasets) that capped golden sets applies with more force to unbounded traffic. So online scoring is stratified sampling, and the stratification is where the value is.
 
 Sample a baseline percentage of everything, and then **deliberately oversample the places failures live**:
 
-- Runs that ended in [escalation](/docs/human-in-the-loop/escalation-and-audit)
-- Runs that hit a retry, or a [repeated identical error](/docs/evals/trajectory-evals)
+- Runs that ended in [escalation](/book/human-in-the-loop/escalation-and-audit)
+- Runs that hit a retry, or a [repeated identical error](/book/evals/trajectory-evals)
 - Runs in the long tail of duration or cost
-- Runs where the agent [stated uncertainty](/docs/interface/trust-patterns)
+- Runs where the agent [stated uncertainty](/book/interface/trust-patterns)
 - Every run on a route that changed this week
 
-Then close the loop: the failures you find become [the production and replay buckets](/docs/evals/datasets) of the golden set. **Online evals are the mechanism by which the offline suite learns**, and a team doing one without the other has either a suite that stops improving or a stream of findings nothing regresses against.
+Then close the loop: the failures you find become [the production and replay buckets](/book/evals/datasets) of the golden set. **Online evals are the mechanism by which the offline suite learns**, and a team doing one without the other has either a suite that stops improving or a stream of findings nothing regresses against.
 
 ## A guardrail is not an eval
 
@@ -76,7 +76,7 @@ The distinction that keeps this chapter's second half honest:
 | Effect of being wrong | A misleading number | **A customer is refused a correct answer** |
 | Budget | Whatever the batch allows | Milliseconds |
 
-The budgets are not close. Rule-based and classifier guardrails add roughly **10–50ms**; an LLM-based judge on the output path adds **200–1000ms**. Against [the sub-second time-to-first-token target](/docs/interface/streaming-ux), a model-based output guard can consume the entire perceptual budget on its own. That is a design constraint, not a tuning detail.
+The budgets are not close. Rule-based and classifier guardrails add roughly **10–50ms**; an LLM-based judge on the output path adds **200–1000ms**. Against [the sub-second time-to-first-token target](/book/interface/streaming-ux), a model-based output guard can consume the entire perceptual budget on its own. That is a design constraint, not a tuning detail.
 
 ## The false positive is the cost nobody prices
 
@@ -86,13 +86,13 @@ Sit with the second number. At the top of that range, **roughly one in seven leg
 
 > **A guardrail is a component with an accuracy, and it needs a gate like everything else.**
 
-Measure its false-positive rate on the golden set, where the correct answer is known and a block is unambiguously wrong. Treat that rate as a gated score. This is the same argument [the scoring chapter made about the judge](/docs/evals/scoring): the components doing the measuring and the blocking are the ones teams routinely exempt from measurement.
+Measure its false-positive rate on the golden set, where the correct answer is known and a block is unambiguously wrong. Treat that rate as a gated score. This is the same argument [the scoring chapter made about the judge](/book/evals/scoring): the components doing the measuring and the blocking are the ones teams routinely exempt from measurement.
 
 ## Guard the input where you can
 
 Two reasons input guards beat output guards when the check can be done at either end.
 
-**They are cheaper.** Detecting [an injection attempt](/docs/security/prompt-injection) in the input saves the entire model call: the tokens, the latency, and the tool calls that would have followed.
+**They are cheaper.** Detecting [an injection attempt](/book/security/prompt-injection) in the input saves the entire model call: the tokens, the latency, and the tool calls that would have followed.
 
 **They cannot leak.** An output guard is deciding whether to suppress something that has already been generated; if it is streaming, some of it may already be on screen. Nothing generated is nothing exposed.
 
@@ -121,7 +121,7 @@ What none of it explains is **why** a particular run did what it did. That is th
 
 ---
 
-Next: [Learning From Production Feedback](/docs/evals/learning-from-production-feedback), turning corrections, overrides, and complaints into evidence without treating every click as truth.
+Next: [Learning From Production Feedback](/book/evals/learning-from-production-feedback), turning corrections, overrides, and complaints into evidence without treating every click as truth.
 
 ## Takeaways
 

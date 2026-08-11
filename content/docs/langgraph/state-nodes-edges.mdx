@@ -13,7 +13,7 @@ That's the model. The reason it's worth a part of this book is not the primitive
 
 ## Control flow becomes data
 
-In [Atlas v0](/docs/first-agent/the-loop-by-hand), control flow was `for`, `if`, and `break`. Instructions in a function. At run time that structure is invisible: you cannot ask the program which step it's on, you cannot serialize its position, and you cannot resume it in another process. The loop exists only while the stack frame does.
+In [Atlas v0](/book/first-agent/the-loop-by-hand), control flow was `for`, `if`, and `break`. Instructions in a function. At run time that structure is invisible: you cannot ask the program which step it's on, you cannot serialize its position, and you cannot resume it in another process. The loop exists only while the stack frame does.
 
 In a graph, the same control flow is **a value**. Nodes and edges are data you constructed before running anything, and the current position is a field you can read.
 
@@ -39,8 +39,8 @@ Everything a graph framework sells you is downstream of that one property:
 
 | Because position is data… | You get |
 | --- | --- |
-| It can be written to a store | [Resume a run](/docs/langgraph/persistence) in another process, after a crash or a deploy |
-| It can be paused between nodes | [Human-in-the-loop](/docs/human-in-the-loop/approval-gates) that holds no thread open |
+| It can be written to a store | [Resume a run](/book/langgraph/persistence) in another process, after a crash or a deploy |
+| It can be paused between nodes | [Human-in-the-loop](/book/human-in-the-loop/approval-gates) that holds no thread open |
 | It can be enumerated | A diagram of what your system can do, generated from the system |
 | It can be replayed | Re-run from step four with a changed node, to debug |
 
@@ -65,7 +65,7 @@ def should_continue(state) -> str:
 
 That function is as deterministic as an `if` statement, because it *is* an `if` statement. The model's output landed in `state["messages"]`; a deterministic function read it and picked an edge.
 
-This is exactly [the shape Part VI argued for](/docs/workflows/the-determinism-test), a deterministic backbone with intelligence at specific nodes, expressed in a runtime that makes the backbone explicit. Adopting a graph should make your control flow **more** legible than the hand-written loop, not less. If it's making it less, you've put a model somewhere it doesn't belong.
+This is exactly [the shape Part VI argued for](/book/workflows/the-determinism-test), a deterministic backbone with intelligence at specific nodes, expressed in a runtime that makes the backbone explicit. Adopting a graph should make your control flow **more** legible than the hand-written loop, not less. If it's making it less, you've put a model somewhere it doesn't belong.
 
 ## Nodes return updates, not state
 
@@ -82,11 +82,11 @@ def classify(state):
 
 Not a new state object. A **partial update** that the framework merges into the existing state. That keeps nodes small and independent. A node doesn't need to know about fields it doesn't touch, which means adding a field doesn't require touching every node.
 
-The merge itself is where this gets interesting and where graphs go subtly wrong. What happens when two parallel nodes both write `messages`? That's the reducer question, and it's [the next chapter](/docs/langgraph/reducers-and-state), because it deserves one.
+The merge itself is where this gets interesting and where graphs go subtly wrong. What happens when two parallel nodes both write `messages`? That's the reducer question, and it's [the next chapter](/book/langgraph/reducers-and-state), because it deserves one.
 
 ## Rebuilding Atlas
 
-Now the actual exercise. The [Part VI decomposition](/docs/workflows/the-determinism-test) was nine steps, one of them an agent loop. Here it is as an explicit graph:
+Now the actual exercise. The [Part VI decomposition](/book/workflows/the-determinism-test) was nine steps, one of them an agent loop. Here it is as an explicit graph:
 
 <Figure caption="Atlas as a state machine. Six nodes, two conditional edges, one cycle. Everything that was implicit in the loop is now a value." frame={false}>
 
@@ -149,11 +149,11 @@ app = g.compile(checkpointer=checkpointer)
 
 Four things worth noticing about that.
 
-**Four of six nodes contain no model call.** `check_policy` is the [invariant](/docs/first-agent/the-problem), the credit limit, as a node that cannot be prompted around. The graph didn't make Atlas more autonomous; it made the non-autonomous parts visible.
+**Four of six nodes contain no model call.** `check_policy` is the [invariant](/book/first-agent/the-problem), the credit limit, as a node that cannot be prompted around. The graph didn't make Atlas more autonomous; it made the non-autonomous parts visible.
 
-**The cycle is one edge.** `gather → gather` is the entire agent loop, and it's bounded by `should_continue`, which is the [step cap from v0](/docs/first-agent/the-loop-by-hand) relocated into a testable function.
+**The cycle is one edge.** `gather → gather` is the entire agent loop, and it's bounded by `should_continue`, which is the [step cap from v0](/book/first-agent/the-loop-by-hand) relocated into a testable function.
 
-**Every path ends at `finalize`.** Including escalation. That's the [outcome union](/docs/first-agent/what-a-framework-buys) enforced structurally. There is no way to leave this graph without logging what happened.
+**Every path ends at `finalize`.** Including escalation. That's the [outcome union](/book/first-agent/what-a-framework-buys) enforced structurally. There is no way to leave this graph without logging what happened.
 
 **`compile()` validates the structure.** Type checking and edge connectivity. It catches a node with no path to `END` before you run anything. That's a class of bug the hand-written loop had no way to detect.
 
@@ -181,15 +181,15 @@ That's it. Every prebuilt "ReAct agent" in every framework is this graph with th
 
 Being precise, because this is where expectations get set wrong.
 
-**It does not survive a crash by itself.** The graph makes position *serializable*; a checkpointer with a durable store is what persists it. In memory, you have the same volatility as the `while` loop with extra structure. That's [the persistence chapter](/docs/langgraph/persistence), and it has a hard limit worth knowing about early.
+**It does not survive a crash by itself.** The graph makes position *serializable*; a checkpointer with a durable store is what persists it. In memory, you have the same volatility as the `while` loop with extra structure. That's [the persistence chapter](/book/langgraph/persistence), and it has a hard limit worth knowing about early.
 
-**Replay is only as deterministic as your nodes.** Re-running from a checkpoint replays the graph, not the world. A node that calls an API gets a fresh answer, and a node with a side effect does it again. Node purity is a property you maintain, not one the framework grants. It is also the hinge on which [durable execution](/docs/durable-execution/why-durable-execution) later turns.
+**Replay is only as deterministic as your nodes.** Re-running from a checkpoint replays the graph, not the world. A node that calls an API gets a fresh answer, and a node with a side effect does it again. Node purity is a property you maintain, not one the framework grants. It is also the hinge on which [durable execution](/book/durable-execution/why-durable-execution) later turns.
 
-**It doesn't reduce the number of decisions you own.** The [seven decisions](/docs/first-agent/the-loop-by-hand) from the hand-written loop are all still yours: history policy, result truncation, error handling, authorization, termination. They've moved into nodes and edges, which makes them easier to see and no less your responsibility.
+**It doesn't reduce the number of decisions you own.** The [seven decisions](/book/first-agent/the-loop-by-hand) from the hand-written loop are all still yours: history policy, result truncation, error handling, authorization, termination. They've moved into nodes and edges, which makes them easier to see and no less your responsibility.
 
 ## When it earns its overhead
 
-The honest boundary, which [gets its own chapter](/docs/langgraph/node-or-function) later:
+The honest boundary, which [gets its own chapter](/book/langgraph/node-or-function) later:
 
 **A graph earns it when you have more than one run shape**, when you need to pause and resume, or when someone other than the author needs to understand what the system can do. Those are real and common.
 
@@ -203,7 +203,7 @@ Atlas qualifies: three run shapes, an approval pause, and a cycle. Most of what 
 
 ---
 
-Next: [Reducers and State Schemas](/docs/langgraph/reducers-and-state), what flows along an edge, what must not, and why this is where graphs get subtly wrong.
+Next: [Reducers and State Schemas](/book/langgraph/reducers-and-state), what flows along an edge, what must not, and why this is where graphs get subtly wrong.
 
 ## Takeaways
 

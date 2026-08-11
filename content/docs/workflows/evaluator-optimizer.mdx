@@ -11,7 +11,7 @@ The last shape in Part VI is a loop, which sounds like a contradiction in a part
                     └── revise ◀──┘        (bounded)
 ```
 
-This is a loop with **fixed control flow**. It always does the same three things in the same order. What varies is only the number of iterations, and you bound that. Compare with [the agent loop](/docs/first-agent/the-loop-by-hand), where what varies is the *action*: which tool, in what order, discovered at run time. That difference is the entire distinction from [the determinism test](/docs/workflows/the-determinism-test), and it's why this belongs here rather than in Part VII.
+This is a loop with **fixed control flow**. It always does the same three things in the same order. What varies is only the number of iterations, and you bound that. Compare with [the agent loop](/book/first-agent/the-loop-by-hand), where what varies is the *action*: which tool, in what order, discovered at run time. That difference is the entire distinction from [the determinism test](/book/workflows/the-determinism-test), and it's why this belongs here rather than in Part VII.
 
 ## The condition that decides everything
 
@@ -31,7 +31,7 @@ The research here is unusually clear, and it splits along a line that most imple
 
 That asymmetry is the design principle. Point at the problem and the revision is genuinely good. Ask the model to find the problem in its own output, and it mostly doesn't. The literature reports that naive self-reflection sometimes makes results *worse*, not merely no better.
 
-There's a mechanism behind that, and Part III already named it: a model generates output coherent with its context, and its own prior output is in its context. Asked to critique it, the same reasoning that produced the flaw evaluates the flaw. This is the same phenomenon as [self-consistency in poisoning](/docs/context/context-poisoning), and the same reason that "are you sure?" is a bad debugging tool, because challenging a model degrades performance in some settings rather than surfacing the error.
+There's a mechanism behind that, and Part III already named it: a model generates output coherent with its context, and its own prior output is in its context. Asked to critique it, the same reasoning that produced the flaw evaluates the flaw. This is the same phenomenon as [self-consistency in poisoning](/book/context/context-poisoning), and the same reason that "are you sure?" is a bad debugging tool, because challenging a model degrades performance in some settings rather than surfacing the error.
 
 **The evaluator's job is detection and localization. The generator's job is repair.** Split them that way and the pattern works. Merge them and it doesn't.
 
@@ -42,7 +42,7 @@ Ranked by how much genuinely external signal they carry:
 | Evaluator | External signal | Use when |
 | --- | --- | --- |
 | **Deterministic check**: compiler, test suite, schema validator, policy limit | Total | Always, when available. Free, exact, localizes precisely. |
-| **Grounding check**: every claim traced to a retrieved source or tool result | High | Any factual output. Mechanical, and it's [what Part IV built](/docs/retrieval/retrieval-evals). |
+| **Grounding check**: every claim traced to a retrieved source or tool result | High | Any factual output. Mechanical, and it's [what Part IV built](/book/retrieval/retrieval-evals). |
 | **Rubric judge with the source material**: a model scoring against explicit criteria, given the evidence | Moderate | Subjective quality: tone, completeness, clarity. |
 | **Fresh-context judge**: a different model, or the same model with none of the generation history | Low | Better than nothing; it at least doesn't inherit the reasoning. |
 | **"Critique your own output"**: same model, same context | **None** | Rarely worth the call. |
@@ -109,7 +109,7 @@ The cheap variant worth knowing: **evaluate without the loop.** Run the determin
 
 **When the criteria conflict.** "More concise" and "more complete" pull opposite ways, and a loop with contradictory criteria oscillates forever within its bound, burning calls to alternate between two failures.
 
-**When variance is the goal.** For creative or exploratory output, generating three options and letting a human choose beats converging on one. That's [voting](/docs/workflows/composition-patterns) or sectioning, not this.
+**When variance is the goal.** For creative or exploratory output, generating three options and letting a human choose beats converging on one. That's [voting](/book/workflows/composition-patterns) or sectioning, not this.
 
 **When the first draft is already inside your quality threshold.** Measure before adding the loop. If your generator passes the checks 96% of the time, the loop's ceiling is a four-point improvement on a small base, and escalating the 4% may be cheaper and better.
 
@@ -117,7 +117,7 @@ The cheap variant worth knowing: **evaluate without the loop.** Run the determin
 
 One evaluator–optimizer loop, on exactly one step: the outbound customer reply.
 
-The evaluator is three deterministic checks and no judge. Every policy claim must cite a document ID and version present in this run's retrieved set. Every monetary amount must match a value a tool returned. Any credit must be within the policy limit. All three are mechanical, all three localize precisely, and all three are the [invariants from the acceptance spec](/docs/first-agent/the-problem). That is not a coincidence. The invariants were always the right evaluation criteria.
+The evaluator is three deterministic checks and no judge. Every policy claim must cite a document ID and version present in this run's retrieved set. Every monetary amount must match a value a tool returned. Any credit must be within the policy limit. All three are mechanical, all three localize precisely, and all three are the [invariants from the acceptance spec](/book/first-agent/the-problem). That is not a coincidence. The invariants were always the right evaluation criteria.
 
 Two revision attempts maximum, best-scoring candidate wins, original allowed to win. If a check still fails after two attempts, the ticket escalates with the findings attached, because a reply that can't be made to cite its sources is exactly the reply a human should write.
 
@@ -127,15 +127,15 @@ And the findings are counted by criterion, which is how Meridian discovered that
 
 Four chapters, and none of them is an agent.
 
-A test applied per step. Chains with gates, sectioning, fan-out, and voting. Routing, cascades, and bounded orchestration. And a loop whose control flow is fixed. Between them they cover the large majority of what teams reach for an agent to do, which was [the part's claim](/docs/foundations/when-not-to-build-an-agent), now with the shapes attached.
+A test applied per step. Chains with gates, sectioning, fan-out, and voting. Routing, cascades, and bounded orchestration. And a loop whose control flow is fixed. Between them they cover the large majority of what teams reach for an agent to do, which was [the part's claim](/book/foundations/when-not-to-build-an-agent), now with the shapes attached.
 
-Each shape has a catalog entry carrying the code: [Router](/docs/patterns/control/router), [Plan-then-Execute](/docs/patterns/control/plan-then-execute), [Deterministic Rails](/docs/patterns/control/deterministic-rails), and [Critic–Reviser](/docs/patterns/control/critic-reviser) for the loop above. [Reflection](/docs/patterns/control/reflection) is worth reading next to that last one, because it is largely an argument against the version of itself that everyone builds first.
+Each shape has a catalog entry carrying the code: [Router](/book/patterns/control/router), [Plan-then-Execute](/book/patterns/control/plan-then-execute), [Deterministic Rails](/book/patterns/control/deterministic-rails), and [Critic–Reviser](/book/patterns/control/critic-reviser) for the loop above. [Reflection](/book/patterns/control/reflection) is worth reading next to that last one, because it is largely an argument against the version of itself that everyone builds first.
 
 What's left over is genuine: the step where the next action depends on the last result, the number of steps is unknown, and the tool set is open. That step is real, Atlas has one, and Part VII is about engineering it properly instead of leaving it as a `while` loop in the middle of an otherwise disciplined system.
 
 ---
 
-Next: [LangChain, Honestly](/docs/langgraph/langchain-honestly), what the abstraction earns, what to skip, and how to use it without handing over your architecture.
+Next: [LangChain, Honestly](/book/langgraph/langchain-honestly), what the abstraction earns, what to skip, and how to use it without handing over your architecture.
 
 ## Takeaways
 
