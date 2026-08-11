@@ -69,7 +69,7 @@ function Hero() {
       <div aria-hidden className="landing-scrim absolute inset-0" />
       <div className="relative mx-auto w-full max-w-5xl px-6 pt-16 pb-20 sm:pt-24 sm:pb-28">
         <Badge className="landing-rise" style={rise(0)} variant="outline">
-          Free · no signup · nothing for sale
+          A free book · no signup · nothing for sale
         </Badge>
         <h1 className="landing-rise mt-7 max-w-[18ch] text-display text-balance" style={rise(1)}>
           Building an agent is easy.
