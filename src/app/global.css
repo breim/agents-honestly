@@ -244,8 +244,13 @@ html > body[data-scroll-locked] {
   text-wrap: balance;
 }
 
-#nd-page p {
-  text-wrap: pretty;
+/* Orphan avoidance pays for a short last line by shortening the lines above it. On a phone
+   column that trade is a bad one — a paragraph loses a whole word off its first line to save
+   one off its last — so prose only gets it once there is slack to absorb the reflow. */
+@media (min-width: 40rem) {
+  #nd-page p {
+    text-wrap: pretty;
+  }
 }
 
 /* Blocks whose content is box-drawing characters, tagged in `mdx.tsx` by looking at the
