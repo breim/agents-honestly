@@ -24,7 +24,7 @@ export function TokenStrip({
                 background: `color-mix(in oklab, ${color} 15%, transparent)`,
               }}
             >
-              <span className="font-mono text-sm whitespace-pre">
+              <span className="text-sm whitespace-pre">
                 {markSpaces ? token.replaceAll(' ', '␣') : token}
               </span>
               <span className="text-[0.65rem]" style={{ color }}>

@@ -66,7 +66,7 @@ export function TurnGrowth({
               y={y(tick)}
               fill="var(--viz-muted)"
               fontSize="10"
-              fontFamily="var(--font-mono)"
+              fontFamily="var(--font-sans)"
               textAnchor="end"
               dominantBaseline="middle"
             >
@@ -104,7 +104,7 @@ export function TurnGrowth({
               y={y(ceiling) - 6}
               fill="var(--viz-5)"
               fontSize="10"
-              fontFamily="var(--font-mono)"
+              fontFamily="var(--font-sans)"
               textAnchor="end"
             >
               context window · {abbreviate(ceiling)}
@@ -136,7 +136,7 @@ export function TurnGrowth({
             y={PAD.top + PLOT_H + 18}
             fill="var(--viz-muted)"
             fontSize="10"
-            fontFamily="var(--font-mono)"
+            fontFamily="var(--font-sans)"
             textAnchor="middle"
           >
             {i + 1}

@@ -64,7 +64,7 @@ export function Flow({ steps, loop, mono = false }: FlowProps) {
                 <span
                   className={
                     mono
-                      ? 'font-mono text-[0.8125rem] font-medium text-fd-foreground'
+                      ? 'text-[0.8125rem] font-medium text-fd-foreground'
                       : 'text-sm font-semibold leading-[1.3] text-fd-foreground'
                   }
                 >

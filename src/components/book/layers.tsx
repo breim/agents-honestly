@@ -168,7 +168,7 @@ function BandBox({ band }: { band: Band }) {
                   <Corner style={{ insetInlineEnd: 0, top: '50%', transform: 'translateY(-50%) rotate(45deg)' }} />
                 </span>
               )}
-              <span className="font-mono text-xs text-fd-foreground">{step}</span>
+              <span className="text-xs text-fd-foreground">{step}</span>
             </Fragment>
           ))}
         </div>
