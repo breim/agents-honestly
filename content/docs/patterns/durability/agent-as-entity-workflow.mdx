@@ -31,7 +31,7 @@ The workflow *is* the agent loop, expressed as ordinary sequential code. Its loc
 
 The agent's turns and its tools become **activities**: retried independently, timed independently, and, critically, allowed to be nondeterministic. The LLM call lives in an activity precisely because it cannot live in the workflow.
 
-<Figure caption="The workflow holds position and state across weeks. Each blocking wait costs nothing while idle; only activities consume a worker.">
+<Figure caption="The workflow holds position and state across weeks. Each blocking wait costs nothing while idle; only activities consume a worker." frame={false}>
 
 ```
   workflow  ticket-8842                          worker process

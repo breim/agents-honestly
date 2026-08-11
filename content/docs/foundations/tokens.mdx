@@ -102,7 +102,7 @@ Processing your prompt is **prefill**: the whole input goes through the model in
 
 Generating the response is **decode**: one token at a time, each one requiring a full forward pass through the model whose input includes every token generated so far. It cannot be parallelized, because token 200 depends on token 199. It is bound by memory bandwidth, not compute, which is the resource that scales worst.
 
-<Figure caption="Prefill reads the whole prompt in one pass. Decode emits one token per pass, and each pass must wait for the last.">
+<Figure caption="Prefill reads the whole prompt in one pass. Decode emits one token per pass, and each pass must wait for the last." frame={false}>
 
 ```
 PREFILL                                DECODE
