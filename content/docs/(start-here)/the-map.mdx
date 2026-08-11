@@ -10,60 +10,70 @@ That sentence is the thesis of this book, and this chapter is the map it draws. 
 
 ## The layers
 
-<Figure caption="Each layer owns a different kind of decision. Most production failures are a decision made at the wrong altitude." frame={false}>
+<Figure caption="Each layer owns a different kind of decision. Most production failures are a decision made at the wrong altitude.">
 
-```
-   ┌────────────────────────────────────────────────────────────────┐
-   │  PURPOSE · VALUE · GOVERNANCE                                  │   Parts I, XVIII
-   │  process · baseline · ownership · risk · evidence · retirement │
-   └────────────────────────────────────────────────────────────────┘
-
-                        ┌─────────────────────────┐
-                        │          USER           │
-                        └────────────┬────────────┘
-                                     │ streams, approvals, interruptions
-                        ┌────────────▼────────────┐
-                        │       INTERFACE         │   Part XIII
-                        │  streaming · approvals  │
-                        │  access · locale · voice│
-                        └────────────┬────────────┘
-                                     │ intent
-   ┌─────────────────────────────────▼─────────────────────────────────┐
-   │                          AGENT RUNTIME                            │   Parts II, VII
-   │                                                                   │
-   │        model  →  decide  →  tool  →  observe  →  decide  …        │
-   │                                                                   │
-   │        state · memory · routing · subgraphs · stopping            │
-   └───────┬───────────────────────────────────────────────┬───────────┘
-           │ what does it need to know?                    │ what should happen?
-   ┌───────▼──────────────────┐                  ┌─────────▼───────────┐
-   │   CONTEXT & KNOWLEDGE    │   Parts III–V    │  DURABLE EXECUTION  │   Parts X–XII
-   │                          │                  │                     │
-   │  prompt   · retrieval    │                  │  retries · timers   │
-   │  memory   · embeddings   │                  │  signals · approval  │
-   │  SQL      · graph        │                  │  compensation       │
-   └───────┬──────────────────┘                  └─────────┬───────────┘
-           │                                               │
-           └──────────────────┬────────────────────────────┘
-                              │ effects on the real world
-                     ┌────────▼─────────┐
-                     │  TOOLS & DATA    │   Parts VI, VIII, IX
-                     │  APIs · DBs      │
-                     │ MCP · A2A · UI   │
-                     │ code workspaces  │
-                     └────────┬─────────┘
-                              ▼
-                       External World
-
-   ┌────────────────────────────────────────────────────────────────┐
-   │  EVALS · OBSERVABILITY · RELIABILITY · SECURITY · SUPPLY CHAIN │   Parts XIV–XVII
-   │  cross-cutting: none of the above is safe without them         │
-   └────────────────────────────────────────────────────────────────┘
-```
+<Layers
+	bands={[
+		{ label: 'User', plain: true },
+		{
+			label: 'Interface',
+			part: 'Part XIII',
+			tone: 1,
+			via: 'streams, approvals, interruptions',
+			items: ['streaming', 'approvals', 'access', 'locale', 'voice'],
+		},
+		{
+			label: 'Agent Runtime',
+			part: 'Parts II, VII',
+			tone: 2,
+			via: 'intent',
+			flow: ['model', 'decide', 'tool', 'observe', 'decide', '…'],
+			items: ['state', 'memory', 'routing', 'subgraphs', 'stopping'],
+		},
+		{
+			split: [
+				{
+					label: 'Context & Knowledge',
+					part: 'Parts III–V',
+					tone: 3,
+					via: 'what does it need to know?',
+					items: ['prompt', 'retrieval', 'memory', 'embeddings', 'SQL', 'graph'],
+				},
+				{
+					label: 'Durable Execution',
+					part: 'Parts X–XII',
+					tone: 4,
+					via: 'what should happen?',
+					items: ['retries', 'timers', 'signals', 'approval', 'compensation'],
+				},
+			],
+		},
+		{
+			label: 'Tools & Data',
+			part: 'Parts VI, VIII, IX',
+			tone: 5,
+			via: 'effects on the real world',
+			items: ['APIs', 'DBs', 'MCP', 'A2A', 'UI', 'code workspaces'],
+		},
+		{ label: 'External world', plain: true },
+	]}
+	spans={[
+		{
+			label: 'Purpose · Value · Governance',
+			part: 'Parts I, XVIII',
+			items: ['process', 'baseline', 'ownership', 'risk', 'evidence', 'retirement'],
+		},
+		{
+			label: 'Evals · Observability · Reliability · Security · Supply chain',
+			part: 'Parts XIV–XVII',
+			items: ['none of the above is safe without them'],
+		},
+	]}
+/>
 
 </Figure>
 
-The top and bottom bands are drawn across everything on purpose. Purpose and governance decide whether the system should exist, who owns it, and when it stops. Evals, tracing, reliability, security, and supply-chain controls decide whether it remains safe to operate. Neither band is a phase after the build.
+Both cross-cutting bands are drawn across everything on purpose. Purpose and governance decide whether the system should exist, who owns it, and when it stops. Evals, tracing, reliability, security, and supply-chain controls decide whether it remains safe to operate. Neither band is a phase after the build.
 
 ## The question before the architecture
 
@@ -77,26 +87,25 @@ Almost every architectural mistake in this field is the same mistake: **state he
 
 <Figure caption="Ask this before writing the code, not after the incident.">
 
-```
-                  "Who should own this state?"
-
-  The model is choosing, reasoning, or judging
-                        ↓
-                  Agent Runtime
-
-  Conversation position, intermediate results, the plan
-                        ↓
-                  Graph state  (LangGraph)
-
-  A business process that must survive hours, days,
-  deploys, crashes, and retries
-                        ↓
-                  Workflow  (Temporal)
-
-  Facts the business considers true
-                        ↓
-                  Database / APIs
-```
+<Ladder
+	question="Who should own this state?"
+	rungs={[
+		{ when: 'The model is choosing, reasoning, or judging', then: 'Agent Runtime', tone: 2 },
+		{
+			when: 'Conversation position, intermediate results, the plan',
+			then: 'Graph state',
+			note: 'LangGraph',
+			tone: 1,
+		},
+		{
+			when: 'A business process that must survive hours, days, deploys, crashes, and retries',
+			then: 'Workflow',
+			note: 'Temporal',
+			tone: 4,
+		},
+		{ when: 'Facts the business considers true', then: 'Database / APIs', tone: 3 },
+	]}
+/>
 
 </Figure>
 
@@ -131,28 +140,39 @@ The third question, and the one that separates engineers from enthusiasts.
 
 <Figure caption="Every rung up costs latency, money, and predictability. Take one only when the rung below genuinely cannot do it.">
 
-```
-                          The task
-                              │
-                    Is the sequence known?
-                       ┌──────┴──────┐
-                     yes             no
-                      │               │
-              Does it need to    Does it decide
-              survive failure?   more than once?
-                ┌────┴────┐        ┌───┴────┐
-               no        yes      no       yes
-                │          │       │         │
-                ▼          ▼       ▼         ▼
-            Function   Workflow  Rules     Agent
-                                              │
-                                    Is one context enough?
-                                       ┌──────┴──────┐
-                                     yes             no
-                                      │               │
-                                      ▼               ▼
-                                 One agent      Multi-agent
-```
+<Decision
+	root="The task"
+	node={{
+		q: 'Is the sequence known?',
+		branches: [
+			{
+				on: 'yes',
+				q: 'Does it need to survive failure?',
+				branches: [
+					{ on: 'no', outcome: 'Function', tone: 3 },
+					{ on: 'yes', outcome: 'Workflow', tone: 1 },
+				],
+			},
+			{
+				on: 'no',
+				q: 'Does it decide more than once?',
+				branches: [
+					{ on: 'no', outcome: 'Rules', tone: 3 },
+					{
+						on: 'yes',
+						outcome: 'Agent',
+						tone: 2,
+						q: 'Is one context enough?',
+						branches: [
+							{ on: 'yes', outcome: 'One agent', tone: 2 },
+							{ on: 'no', outcome: 'Multi-agent', tone: 5 },
+						],
+					},
+				],
+			},
+		],
+	}}
+/>
 
 </Figure>
 
