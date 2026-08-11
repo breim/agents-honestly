@@ -32,7 +32,7 @@ The detail that should make this book's readers sit up:
 
 The SDK makes you supply one, `stopWhen: stepCountIs(n)`, and the guidance that ships with it maps almost exactly onto the versions of Atlas from Part II: **1** for a one-tool-then-answer interface, **5** for a chat, **10–20** for an autonomous agent.
 
-[Atlas v1 was `stepCountIs(1)`](/book/first-agent/first-tools). [Atlas v2 was `stepCountIs(12)`](/book/first-agent/the-loop-by-hand). The argument that a loop whose only stopping condition is the model's judgement has delegated its termination to a probability distribution is now a parameter you cannot omit. That is a good outcome for an ecosystem to have converged on.
+[The one-tool round trip](/book/first-agent/first-tools) was `stepCountIs(1)`. [Atlas v0](/book/first-agent/the-loop-by-hand) was `stepCountIs(12)`. The argument that a loop whose only stopping condition is the model's judgement has delegated its termination to a probability distribution is now a parameter you cannot omit. That is a good outcome for an ecosystem to have converged on.
 
 Be precise about what it does *not* cover, though. There are two first-party stop conditions, `stepCountIs` and `hasToolCall`, and Atlas v0 had three bounds. **Cost and deadline are still yours.** A step cap does not stop a run whose steps are individually expensive, and it does not notice that ninety seconds have passed.
 
