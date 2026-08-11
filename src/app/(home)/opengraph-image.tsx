@@ -12,7 +12,7 @@ export default async function Image() {
     await ogCard({
       title: 'Building an agent is easy.',
       description:
-        'Building one a company can depend on is software engineering. Free to read in full, no signup, nothing for sale.',
+        'Building one that survives production is software engineering. Free to read in full, no signup, nothing for sale.',
     }),
     { ...size, fonts: await ogFonts },
   );
