@@ -84,10 +84,10 @@ function Hero() {
           className="landing-rise mt-8 max-w-[62ch] text-body text-muted-foreground text-pretty"
           style={rise(3)}
         >
-          A handbook that starts at one API call and ends with a system that survives crashes, waits
-          three days for a human without holding a thread open, and treats every document it reads
-          as written by an attacker. You do not need to have built an agent before. The prerequisite
-          is the backend engineering you already have.
+          This is a book. The first chapter is one API call. By the last it is a system that
+          survives crashes, waits three days for a human without holding a thread open, and treats
+          every document it reads as written by an attacker. You do not need to have built an agent
+          before. The prerequisite is the backend engineering you already have.
         </p>
         <div className="landing-rise mt-9 flex flex-wrap items-center gap-3" style={rise(4)}>
           <Link
