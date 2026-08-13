@@ -5,7 +5,13 @@ description: "Run the companion system, seed its data, and prove that both langu
 
 Reading about an ambiguous timeout is useful. Watching an effect occur, losing the response, retrying, and proving that only one ledger entry exists changes how you design the next tool.
 
-The companion lives in `labs/atlas/`. It has two modes:
+The companion lives in its own repository, [breim/atlas](https://github.com/breim/atlas). Clone it next to this one:
+
+```bash
+git clone https://github.com/breim/atlas
+```
+
+It has two modes:
 
 1. a no-key deterministic kernel that runs anywhere and proves the invariants;
 2. optional Postgres and Temporal services for replacing the in-memory boundaries with the real ones.
@@ -15,7 +21,7 @@ The no-key mode comes first because authorization, idempotency, taint, event ded
 ## What the lab contains
 
 ```text
-labs/atlas/
+atlas/
 ├── compose.yaml                 Postgres + pgvector
 ├── shared/
 │   ├── cases.json               fixtures used by both tracks
@@ -24,10 +30,13 @@ labs/atlas/
 │   └── src/
 │       ├── core.ts              deterministic Atlas kernel
 │       └── labs.test.ts         six executable failures
-└── py/
-    ├── atlas/core.py            the same contracts in Python
-    └── tests/test_labs.py       the same six failures
+├── py/
+│   ├── atlas/core.py            the same contracts in Python
+│   └── tests/test_labs.py       the same six failures
+└── exercises/<part>/<chapter>/  one directory per chapter that has an exercise
 ```
+
+The kernel is what this chapter is about. The exercises beside it belong to individual chapters and are built on the same rule.
 
 The implementations are siblings. Neither is generated from the other. They share inputs and expected properties, which makes drift visible without pretending two languages will have identical internal code.
 
@@ -37,7 +46,7 @@ The implementations are siblings. Neither is generated from the other. They shar
 <Tab value="TypeScript">
 
 ```bash
-cd labs/atlas/ts
+cd atlas/ts
 npm test
 ```
 
@@ -45,7 +54,7 @@ npm test
 <Tab value="Python">
 
 ```bash
-cd labs/atlas/py
+cd atlas/py
 python3.11 -m unittest discover -s tests -v
 ```
 
@@ -100,7 +109,7 @@ Replacing an adapter must not change the test's assertion. If moving to Temporal
 The compose file starts Postgres with pgvector and loads the same two-tenant scenario.
 
 ```bash
-cd labs/atlas
+cd atlas
 docker compose up -d
 docker compose exec -T db psql -U atlas -d atlas -c \
   "select tenant_id, chunk_id, trust from policy_chunks order by tenant_id, chunk_id"
@@ -115,7 +124,7 @@ The database is optional for the first pass. When you add a Postgres adapter, ke
 Start a persistent local server:
 
 ```bash
-cd labs/atlas
+cd atlas
 mkdir -p .temporal
 temporal server start-dev --db-filename .temporal/atlas.db
 ```

@@ -177,7 +177,13 @@ gRPC on `localhost:7233`, Web UI on [localhost:8233](http://localhost:8233/), an
 
 ## 4. The repo, and why it is two of everything
 
-The source repository includes a runnable companion at `labs/atlas/`. It is a small, provider-free kernel with shared TypeScript and Python fixtures, not a second copy of every listing below. Start there when you want executable checks immediately; grow the full project shape below as the chapters introduce each boundary. [The lab environment chapter](/book/capstone/lab-environment) explains the contract between the companion and the production architecture.
+A companion repository, [breim/atlas](https://github.com/breim/atlas), holds a runnable version of what follows: a small, provider-free kernel with shared TypeScript and Python fixtures, plus one exercise directory per chapter that has one. It is not a second copy of every listing below.
+
+```bash
+git clone https://github.com/breim/atlas
+```
+
+Start there when you want executable checks immediately; grow the full project shape below as the chapters introduce each boundary. [The lab environment chapter](/book/capstone/lab-environment) explains the contract between the companion and the production architecture.
 
 ```
 atlas/
@@ -309,6 +315,6 @@ Next: Part I, [What an Agent Actually Is](/book/foundations/what-is-an-agent), w
 - The warehouse and the policy corpus share one Postgres on purpose. Splitting them early is the mistake Part IV is about.
 - `temporal server start-dev` without `--db-filename` is in-memory. Part X needs a history that survives the process, or its central claim is untestable.
 - Both language tracks share `data/`, so the same evaluation set can be pointed at either implementation.
-- The repository's `labs/atlas/` companion exercises the deterministic failure contracts in both languages without a model key.
+- The [breim/atlas](https://github.com/breim/atlas) companion repository exercises the deterministic failure contracts in both languages without a model key.
 - LangGraph, Temporal's SDK, the AI SDK, and OpenTelemetry are absent by design. Each is installed by the chapter that can name what it buys.
 - Verify the capability, not the container: check that `pg_extension` has `vector`, not that Docker says `Up`.
