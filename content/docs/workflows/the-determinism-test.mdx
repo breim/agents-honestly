@@ -40,21 +40,23 @@ Run those three and every step lands in one of four places:
 <Figure caption="Four placements. Most steps in a working system are in the first two columns." frame={false}>
 
 ```
+   you decide ◀─────────────────────────────────────────▶ the model decides
+
    ①  CODE            ②  BOUNDED CALL    ③  BOUNDED LOOP    ④  OPEN LOOP
 
    deterministic      one model call,    model chooses      model decides
    logic you wrote    typed output,      from a fixed       what to do
-                      no control          toolset, you       until it stops
-                                          bound the steps
+                      no control         toolset, you       until it stops
+                                         bound the steps
 
-   auth checks        classify a ticket   look up an order   investigate an
-   policy limits      extract entities    then decide what   account, follow
-   money movement     draft a reply       else to fetch      the evidence
+   auth checks        classify a ticket  look up an order   investigate an
+   policy limits      extract entities   then decide what   account, follow
+   money movement     draft a reply      else to fetch      the evidence
    formatting         summarize
 
-   unit tests         eval with a         eval + trace       eval + trace
-                      threshold           + step bound       + everything
-                                                              in Parts X–XVII
+   unit tests         eval with a        eval + trace       eval + trace
+                      threshold          + step bound       + everything
+                                                            in Parts X–XVII
 ```
 
 </Figure>
