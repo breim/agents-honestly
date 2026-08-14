@@ -11,8 +11,9 @@ import { notFound } from 'next/navigation';
 import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
-import { gitConfig } from '@/lib/shared';
+import { docsRoute, gitConfig } from '@/lib/shared';
 import { ReadMarker } from '@/components/book/read-marker';
+import { LabLink } from '@/components/book/lab-link';
 
 export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
   const params = await props.params;
@@ -32,6 +33,7 @@ export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
           markdownUrl={markdownUrl}
           githubUrl={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/content/docs/${page.path}`}
         />
+        <LabLink slug={page.url.slice(docsRoute.length + 1)} />
       </div>
       <DocsBody>
         <MDX

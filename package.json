@@ -6,6 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "start": "next start",
+    "sync:labs": "node scripts/sync-labs.mjs",
     "types:check": "next typegen && tsc --noEmit",
     "lint": "eslint"
   },

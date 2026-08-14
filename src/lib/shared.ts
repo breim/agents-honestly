@@ -13,3 +13,11 @@ export const gitConfig = {
 };
 
 export const githubUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
+
+export const labsGitConfig = {
+  user: 'breim',
+  repo: 'atlas-from-agents-honestly',
+  branch: 'main',
+};
+
+export const labsUrl = `https://github.com/${labsGitConfig.user}/${labsGitConfig.repo}`;
