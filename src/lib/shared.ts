@@ -1,4 +1,5 @@
 export const appName = 'Agents Honestly';
+export const siteUrl = 'https://agentshonestly.com';
 export const appTagline = 'A handbook for agentic systems in production.';
 export const authorName = 'Henrique Breim';
 export const authorUrl = 'https://www.linkedin.com/in/henrique-breim/';
