@@ -1,5 +1,6 @@
 import { FlaskConical } from 'lucide-react';
-import { buttonVariants } from '@/components/ui/button';
+import { buttonVariants } from 'fumadocs-ui/components/ui/button';
+import { cn } from '@/lib/cn';
 import { labFor, type LabTier } from '@/lib/labs';
 
 const TIER_HINT: Record<LabTier, string> = {
@@ -20,7 +21,13 @@ export function LabLink({ slug }: { slug: string }) {
       target="_blank"
       rel="noreferrer"
       title={TIER_HINT[lab.tier]}
-      className={buttonVariants({ variant: 'outline', size: 'sm' })}
+      /* fumadocs' own button rather than shadcn's, matching what `MarkdownCopyButton` beside
+         it resolves to: the shadcn one themes off a different token set and reads as a white
+         chip among grey ones in the light theme. */
+      className={cn(
+        buttonVariants({ color: 'secondary', size: 'sm' }),
+        'gap-2 [&_svg]:size-3.5 [&_svg]:text-fd-muted-foreground',
+      )}
     >
       <FlaskConical />
       Exercise
