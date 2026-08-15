@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "next build",
+    "build:epub": "bun scripts/cover.mjs && bun scripts/build-epub.mjs",
     "dev": "next dev",
     "start": "next start",
     "sync:labs": "node scripts/sync-labs.mjs",

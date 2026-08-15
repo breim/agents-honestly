@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  epub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: bun install --frozen-lockfile
+
+      # A tag that disagrees with the manifest ships an edition whose version nobody can
+      # trace back, and it is only ever noticed several releases later.
+      - name: Check the tag matches package.json
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared="$(bun --print 'require("./package.json").version')"
+          if [ "$tagged" != "$declared" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $declared"
+            exit 1
+          fi
+
+      - run: bun run build:epub
+
+      # Guards against a build that walked no chapters: the package would still be a valid
+      # epub, and epubcheck would pass it.
+      - name: Check the book is not empty
+        run: |
+          size="$(stat -c%s dist/agents-honestly.epub)"
+          echo "epub is $size bytes"
+          [ "$size" -gt 500000 ]
+
+      - name: Validate with epubcheck
+        run: |
+          curl -sSLo epubcheck.zip https://github.com/w3c/epubcheck/releases/download/v5.2.1/epubcheck-5.2.1.zip
+          unzip -q epubcheck.zip
+          java -jar epubcheck-5.2.1/epubcheck.jar dist/agents-honestly.epub
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/agents-honestly.epub
+          generate_release_notes: true

@@ -13,7 +13,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { getParts, type Part } from '@/lib/contents';
 import { readerRequirements } from '@/lib/landing-content';
-import { appName, authorName, authorUrl, docsRoute, githubUrl } from '@/lib/shared';
+import { appName, authorName, authorUrl, docsRoute, epubUrl, githubUrl } from '@/lib/shared';
 import { cn } from '@/lib/utils';
 
 export const metadata: Metadata = {
@@ -23,7 +23,6 @@ export const metadata: Metadata = {
 };
 
 const prefaceHref = `${docsRoute}/preface`;
-const mapHref = `${docsRoute}/the-map`;
 
 const rise = (order: number) => ({ '--i': order }) as React.CSSProperties;
 
@@ -97,12 +96,12 @@ function Hero() {
             Start reading
             <ArrowRight aria-hidden />
           </Link>
-          <Link
+          <a
             className={cn(buttonVariants({ size: 'lg', variant: 'ghost' }), 'h-12 px-5 text-note')}
-            href={mapHref}
+            href={epubUrl}
           >
-            See the map first
-          </Link>
+            Download EPUB
+          </a>
         </div>
         <p
           className="landing-rise mt-7 max-w-[58ch] text-note text-muted-foreground"
@@ -254,6 +253,14 @@ export default function HomePage() {
             Start reading
             <ArrowRight aria-hidden />
           </Link>
+          {/* The release asset is served as an attachment, so this downloads in place
+              rather than navigating away, and needs no new tab. */}
+          <a
+            className={cn(buttonVariants({ size: 'lg', variant: 'outline' }), 'h-12 px-5 text-note')}
+            href={epubUrl}
+          >
+            Download EPUB
+          </a>
           <a
             className={cn(buttonVariants({ size: 'lg', variant: 'outline' }), 'h-12 px-5 text-note')}
             href={githubUrl}
