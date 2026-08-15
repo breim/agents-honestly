@@ -1,0 +1,171 @@
+@font-face {
+  font-family: 'Geist Mono';
+  font-weight: normal;
+  font-style: normal;
+  src: url('fonts/GeistMono-Regular.ttf');
+}
+
+body {
+  margin: 0 5%;
+  line-height: 1.5;
+  text-align: left;
+  widows: 2;
+  orphans: 2;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: 1.2;
+  text-align: left;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+
+h1 {
+  margin: 2em 0 1em;
+  font-size: 1.7em;
+}
+
+h2 {
+  margin: 2em 0 0.6em;
+  font-size: 1.3em;
+}
+
+h3 {
+  margin: 1.6em 0 0.5em;
+  font-size: 1.1em;
+}
+
+p {
+  margin: 0 0 1em;
+}
+
+a {
+  text-decoration: underline;
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid currentColor;
+  margin: 2em auto;
+  width: 30%;
+  opacity: 0.4;
+}
+
+/* The chapter's own description, printed under the title. */
+.chapter-summary {
+  font-style: italic;
+  margin-bottom: 2.5em;
+  opacity: 0.8;
+}
+
+pre {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.8em;
+  line-height: 1.4;
+  margin: 1.4em 0;
+  padding: 0.7em 0.8em;
+  border-left: 3px solid currentColor;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+code {
+  font-family: 'Geist Mono', monospace;
+}
+
+p code,
+li code {
+  font-size: 0.9em;
+}
+
+/* Diagrams are drawn with box characters and must not reflow. Sized to fit the book's
+   widest one (85 columns, tools/read-and-write-tools) inside a 6" screen; wrapping one
+   turns it into noise, so it scrolls instead. */
+pre.diagram {
+  font-size: 0.58em;
+  line-height: 1.25;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-x: auto;
+  border-left: 0;
+  padding-left: 0;
+}
+
+.code-title,
+.figcaption {
+  font-size: 0.85em;
+  font-style: italic;
+  opacity: 0.75;
+  margin: 0 0 0.4em;
+}
+
+.figcaption {
+  margin: -0.6em 0 1.6em;
+  border-left: 2px solid currentColor;
+  padding-left: 0.7em;
+}
+
+blockquote {
+  margin: 1.4em 0;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid currentColor;
+}
+
+blockquote.aside {
+  border-left-width: 5px;
+}
+
+blockquote.missing-figure {
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 1.4em 0;
+  font-size: 0.85em;
+  width: 100%;
+}
+
+th,
+td {
+  border: 1px solid currentColor;
+  padding: 0.35em 0.5em;
+  text-align: left;
+  vertical-align: top;
+}
+
+ul,
+ol {
+  margin: 0 0 1em;
+  padding-left: 1.4em;
+}
+
+li {
+  margin-bottom: 0.4em;
+}
+
+nav#toc ol {
+  list-style: none;
+  padding-left: 1em;
+}
+
+nav#toc > ol {
+  padding-left: 0;
+}
+
+.cover {
+  margin: 0;
+  padding: 0;
+  text-align: center;
+}
+
+.cover img {
+  max-width: 100%;
+  max-height: 100%;
+}
