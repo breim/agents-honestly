@@ -140,6 +140,14 @@ td {
   vertical-align: top;
 }
 
+.align-center {
+  text-align: center;
+}
+
+.align-right {
+  text-align: right;
+}
+
 ul,
 ol {
   margin: 0 0 1em;

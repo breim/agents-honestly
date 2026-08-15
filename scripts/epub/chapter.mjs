@@ -182,6 +182,18 @@ function rewriteLinks(tree, resolve, unresolved) {
   });
 }
 
+/** A column alignment in GFM becomes the presentational `align` attribute, which XHTML5
+    dropped and epubcheck rejects, so it is carried by a class instead. */
+function alignTableCells(tree) {
+  visit(tree, { type: 'element' }, (node) => {
+    const align = node.properties?.align;
+    if (!align) return;
+
+    delete node.properties.align;
+    node.properties.className = [...(node.properties.className ?? []), `align-${align}`];
+  });
+}
+
 /** `pre` is what carries the diagram rule, but remark-rehype hangs the class on the inner
     `code`, so it is moved up once the tree is HTML. */
 function hoistCodeClasses(tree) {
@@ -209,6 +221,7 @@ export async function renderChapter({ source, title, description, url, resolve }
 
   const hast = await toHast.run(tree);
   hoistCodeClasses(hast);
+  alignTableCells(hast);
 
   const summary = description ? `<p class="chapter-summary">${escapeText(description)}</p>` : '';
   const body = toHtml(hast, { closeSelfClosing: true, characterReferences: { useNamedReferences: false } });
