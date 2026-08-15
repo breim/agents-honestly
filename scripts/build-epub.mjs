@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { appTagline, authorName, githubUrl, readBook, root, siteUrl } from './epub/book.mjs';
+import { appTagline, authorName, epubFile, githubUrl, readBook, root, siteUrl } from './epub/book.mjs';
 import { escapeText, renderChapter } from './epub/chapter.mjs';
 
 const bookId = 'urn:uuid:6f9c1a52-8a3e-4a2f-9c1d-2b7e5f04a0c1';
@@ -64,7 +64,7 @@ const missing = [];
 const unresolved = [];
 const leftover = [];
 
-const out = join(dist, 'agents-honestly.epub');
+const out = join(dist, epubFile);
 
 await rm(stage, { recursive: true, force: true });
 await rm(out, { force: true });
@@ -182,7 +182,7 @@ const report = (title, entries) => {
   for (const entry of [...new Set(entries)].slice(0, 12)) console.log(`  ${entry}`);
 };
 
-console.log(`${book.chapters.length} chapters, ${book.parts.length} parts → dist/agents-honestly.epub`);
+console.log(`${book.chapters.length} chapters, ${book.parts.length} parts → dist/${epubFile}`);
 report('Chapters listed in meta.json without a file', book.skipped);
 report('Components with no EPUB rendering', missing);
 report('Links that resolved to the website', unresolved);

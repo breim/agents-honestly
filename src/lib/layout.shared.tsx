@@ -1,5 +1,5 @@
 import type { BaseLayoutProps } from 'fumadocs-ui/layouts/shared';
-import { appName, docsRoute, githubUrl } from './shared';
+import { appName, docsRoute, epubUrl, githubUrl } from './shared';
 
 export function baseOptions(): BaseLayoutProps {
   return {
@@ -7,7 +7,10 @@ export function baseOptions(): BaseLayoutProps {
       // JSX supported
       title: appName,
     },
-    links: [{ text: 'Book', url: docsRoute }],
+    links: [
+      { text: 'Book', url: docsRoute },
+      { external: true, text: 'EPUB', url: epubUrl },
+    ],
     githubUrl,
   };
 }

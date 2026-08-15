@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
-export { appTagline, authorName, githubUrl, siteUrl } from '../../src/lib/shared.ts';
+export { appTagline, authorName, epubFile, githubUrl, siteUrl } from '../../src/lib/shared.ts';
 
 export const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
 
