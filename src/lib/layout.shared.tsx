@@ -9,7 +9,7 @@ export function baseOptions(): BaseLayoutProps {
     },
     links: [
       { text: 'Book', url: docsRoute },
-      { external: true, text: 'EPUB', url: epubUrl },
+      { external: true, text: 'Download EPUB', url: epubUrl },
     ],
     githubUrl,
   };

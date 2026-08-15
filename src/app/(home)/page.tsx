@@ -23,7 +23,6 @@ export const metadata: Metadata = {
 };
 
 const prefaceHref = `${docsRoute}/preface`;
-const mapHref = `${docsRoute}/the-map`;
 
 const rise = (order: number) => ({ '--i': order }) as React.CSSProperties;
 
@@ -97,12 +96,12 @@ function Hero() {
             Start reading
             <ArrowRight aria-hidden />
           </Link>
-          <Link
+          <a
             className={cn(buttonVariants({ size: 'lg', variant: 'ghost' }), 'h-12 px-5 text-note')}
-            href={mapHref}
+            href={epubUrl}
           >
-            See the map first
-          </Link>
+            Download EPUB
+          </a>
         </div>
         <p
           className="landing-rise mt-7 max-w-[58ch] text-note text-muted-foreground"
