@@ -148,10 +148,6 @@ High threshold auto-merges, low threshold auto-rejects, and the middle band, abo
 
 And the honest note for the plan: this is roughly two-thirds of the effort of Atlas's graph, which is the ratio that should have been in the estimate from the beginning.
 
----
-
-Next: [Graph Retrieval](/book/graphs/graph-retrieval), on traversal, neighbourhoods, and returning a subgraph small enough to fit in a prompt.
-
 ## Takeaways
 
 - Defining what a Customer is and identifying which records are one are different problems. The second is most of the work and never finishes.
@@ -164,3 +160,7 @@ Next: [Graph Retrieval](/book/graphs/graph-retrieval), on traversal, neighbourho
 - Use three bands with a human review queue in the middle. There is no threshold that resolves genuinely ambiguous pairs.
 - Merges are reversible assertions with provenance, not destructive rewrites, and they have validity windows, because companies really do merge.
 - Sample near the threshold when measuring, and watch cluster size, unresolved rate, and ontology violations.
+
+---
+
+The graph is coherent. It is also far too large to hand to a model. Next: [Graph Retrieval](/book/graphs/graph-retrieval), on walking it and coming back with a subgraph that fits in a prompt.

@@ -130,10 +130,6 @@ But Part X is deliberately doing this **with no AI in sight.** Durable execution
 
 There is one connection worth planting, because it determines the entire shape of Part XI: a model call is the least deterministic thing in your system, and replay requires determinism. That does not make the two incompatible. It makes the boundary between them the most important design decision in an agentic system, and it has an exact answer. [Part XI](/book/durability/agent-as-workflow) is where it gets made.
 
----
-
-Next: [Temporal in Forty Minutes](/book/durable-execution/temporal-in-forty-minutes). Workflows, activities, workers, task queues, event history, replay: the whole mental model, quickly.
-
 ## Takeaways
 
 - The four practices that rescue a checkpointed system are deduplication, ownership, a scheduler, and a hand-rolled unit of atomicity. You started building a durable execution engine and stopped partway.
@@ -147,3 +143,7 @@ Next: [Temporal in Forty Minutes](/book/durable-execution/temporal-in-forty-minu
 - You get retries as policy, timers that survive anything, once-only effects, automatic recovery of dead runs, signals and queries, and a complete audit history as a by-product of the replay mechanism.
 - The costs are real: infrastructure, determinism rules, workflow versioning, and a new category of replay-only bug. For short single-process runs with cheap duplicate actions, a checkpointer is still the right answer.
 - Engines differ in centre of gravity, not in concept. The vocabulary transfers.
+
+---
+
+The argument is made. The vocabulary is not. Next: [Temporal in Forty Minutes](/book/durable-execution/temporal-in-forty-minutes), six nouns, in the order that makes each one necessary.

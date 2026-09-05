@@ -234,10 +234,6 @@ Atlas can read order status aloud. A credit proposal pauses the call workflow an
 - [RFC 8827: WebRTC Security Architecture](https://www.rfc-editor.org/rfc/rfc8827), IETF security model for WebRTC deployments.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/), accessible alternatives, input, status, focus, and interaction requirements that also apply to the synchronized web interface.
 
----
-
-Next: [Two Durable Runtimes, One System](/book/interface/two-durable-runtimes), choosing which runtime owns work that must survive the voice or browser session.
-
 ## Takeaways
 
 - Model voice as a duplex state machine with provisional and committed turns.
@@ -248,3 +244,7 @@ Next: [Two Durable Runtimes, One System](/book/interface/two-durable-runtimes), 
 - Bind every tool proposal to one committed turn and invalidate it when the user changes the input.
 - Separate raw audio, provisional text, committed transcript, and approval records by purpose and retention.
 - Evaluate audio, timing, interruption, correction, reconnect, and effects, not only transcript text.
+
+---
+
+Next: [Two Durable Runtimes, One System](/book/interface/two-durable-runtimes), choosing which runtime owns work that must survive the voice or browser session.

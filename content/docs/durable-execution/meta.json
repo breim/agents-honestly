@@ -1,5 +1,6 @@
 {
   "title": "Part X · Durable Execution",
+  "description": "Temporal with no AI in sight. Learn the model on its own terms before combining it with something nondeterministic.",
   "pages": [
     "everything-that-breaks",
     "why-durable-execution",

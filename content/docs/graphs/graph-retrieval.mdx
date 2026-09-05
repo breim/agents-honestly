@@ -134,10 +134,6 @@ Node cap of 500 with an explicit truncation flag. Per-hop tenant predicate. Two-
 
 Twelve fields and three IDs, in place of a subgraph. That is the whole interface between Part V and the rest of the system.
 
----
-
-Next: [Evaluating Graph Quality](/book/graphs/evaluating-graph-quality), on nodes, edges, paths, provenance, freshness, and whether the graph improved the answer.
-
 ## Takeaways
 
 - A graph query returns a subgraph; a prompt takes a few thousand tokens. That mismatch is where most graph integrations fail.
@@ -149,3 +145,7 @@ Next: [Evaluating Graph Quality](/book/graphs/evaluating-graph-quality), on node
 - Bound depth, node count, and time, and return the bound explicitly with a hint, so the agent can re-query instead of believing a truncated answer.
 - Authorization applies per hop, not at entry. You can start at an allowed node and walk somewhere you aren't allowed, and edges themselves can be confidential.
 - The graph is an index like any other. Traverse for structure, verify volatile facts against the source before acting.
+
+---
+
+A traversal that returns something is not a traversal that returns something true. Next: [Evaluating Graph Quality](/book/graphs/evaluating-graph-quality), where one false edge produces a clean path and a confident wrong answer.

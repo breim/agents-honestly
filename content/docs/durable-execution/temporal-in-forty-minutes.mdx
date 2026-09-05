@@ -283,10 +283,6 @@ Nothing above mentioned a model, and that was the point. The refund workflow is 
 
 Atlas's version has one difference: a step in the middle whose output is not a function of its input. That difference is the entire subject of [Part XI](/book/durability/agent-as-workflow). The nouns will not change.
 
----
-
-Next: [Determinism, Retries, and Timers](/book/durable-execution/determinism-and-retries). The rules that make replay work, and the retry policies you will actually configure.
-
 ## Takeaways
 
 - Six nouns: workflow, activity, worker, task queue, event history, replay. Each exists because of the one before it.
@@ -302,3 +298,7 @@ Next: [Determinism, Retries, and Timers](/book/durable-execution/determinism-and
 - Task queues are routing, scaling, isolation, and the deploy unit. Priority and fairness are now available at the queue level.
 - `sleep('3 days')` is a durable timer. Nothing is held open, and this is what makes long human waits cheap.
 - Worker Versioning is GA and pins in-flight executions to the version that started them, which removes most of the deploy-mid-run problem flagged in the previous chapter.
+
+---
+
+Replay is what makes all six nouns work, and replay has rules a workflow can break without saying so. Next: [Determinism, Retries, and Timers](/book/durable-execution/determinism-and-retries), the constraints, and the knobs you will actually turn.

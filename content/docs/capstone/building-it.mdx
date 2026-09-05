@@ -80,6 +80,8 @@ State is typed and minimal: ticket reference, account and order IDs in scope, th
 
 `action_loop` is the only node that can call a write tool, and it is capped at eight turns, under the run-wide ceiling of twelve, because the node that can move money is the one worth bounding tightest.
 
+`escalate` is the fourth shape from [the brief](/book/first-agent/the-problem#four-tickets), and the only branch that ends without an answer. Ticket #8830, the third follow-up on a Q2 discrepancy, is not a hard question but a customer out of patience, which is why `classify` reads the signal rather than the subject and the branch hands a person the work already gathered.
+
 ## Layer 4 · Durable execution
 
 [One rule decides the layout](/book/durability/agent-as-workflow): workflow code decides, activity code discovers.
@@ -258,10 +260,6 @@ Naming these matters as much as the build, because each is a thing a reviewer wi
 
 **No memory across tickets in v1.** A [fact store](/book/context/memory) is a durable place for a wrong belief to live, and the erasure story is real work. Deferred deliberately, with the reason written down.
 
----
-
-Next: [Hardening It](/book/capstone/hardening-it), evals, tracing, failure injection, authorization, and the security review.
-
 ## Takeaways
 
 - Build bottom-up: tools and data, context, runtime, durability, interface. That is the order things must exist in, not the order they demo in.
@@ -280,3 +278,7 @@ Next: [Hardening It](/book/capstone/hardening-it), evals, tracing, failure injec
 - There is exactly one dispatcher. Four dispatch sites means implementing the checks four times and getting three.
 - The model sees a tool name, arguments, and a result: never the taint, scope, tier, token, or key. A hostile ticket can make Atlas *want* to issue a credit, and wanting is where it stops.
 - Write down what you did not build and why: no multi-agent topology, no fine-tuning, no general code execution, no MCP for internal functions, no cross-ticket memory in v1.
+
+---
+
+It is assembled and it runs. Nothing has tried to break it yet, or asked it to prove anything. Next: [Hardening It](/book/capstone/hardening-it), evals, tracing, failure injection, authorization, and a security review with evidence attached.

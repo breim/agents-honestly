@@ -130,6 +130,16 @@ Without a `meta.json`, Fumadocs orders pages alphabetically and titles a group b
 - Group titles and chapter order come from `book-structure.mjs` in the source book. When that file changes, mirror the change into the affected `meta.json` rather than editing one to taste.
 - A sidebar group needs a real directory; a `---Label---` separator only prints a heading. Where the book groups chapters that sit at its root, the directory is parenthesised — `(start-here)` — because Fumadocs strips parenthesised segments when building slugs. The group appears in the sidebar and `/book/preface` stays `/book/preface`.
 
+## 12. Chapter Openings Orient Before They Teach
+
+Chapters open on a scene inside the running example (Atlas, Meridian Supply, a ticket), and the site makes every chapter page one: readers arrive from search and the sidebar, not from the previous page. A scene with no orientation beat is a fragment.
+
+- **Orientation test.** By the end of the first paragraph, a reader who has never heard of Atlas knows what it does, said by a verb or a noun inside the scene, and before any reversal the scene turns on. The first mention of Atlas in such a chapter links to `/book/preface#what-youll-build`, which is where Atlas is defined. Nothing goes above the scene.
+- **Swap test.** A sentence that could be pasted into another chapter unchanged is deleted. No "In this chapter", no "as we saw in Chapter N" (the book has no chapter numbers), no fixed bridge formula, never the same carrier noun twice in a Part.
+- The first chapter of a Part says in one sentence where Atlas stands. The Part's one-line blurb lives in its `meta.json` `description`, mirrored from `book-structure.mjs`.
+- A chapter ends with `## Takeaways`, then a rule, then the `Next:` line. The summary comes before the exit sign.
+- **The `Next:` line is a hinge, not a catalog entry.** It says what this chapter concluded and which hole that leaves, then points forward. It must never restate the next chapter's `description`, which the reader already sees as the subtitle on the page it links to. The last chapter of a Part says where Atlas stands before pointing at the next Part.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

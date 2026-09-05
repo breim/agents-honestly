@@ -126,10 +126,6 @@ Worth restating from [the routing chapter](/book/retrieval/where-does-the-answer
 
 The corpus that genuinely deserves embedding is usually smaller than the one teams start with, which is fortunate, because everything in this chapter gets more expensive with size.
 
----
-
-Next: [Vector Search and the Database Question](/book/retrieval/vector-search), starting with Postgres and pgvector, because it forces you to see vector search as a capability rather than a product.
-
 ## Takeaways
 
 - A vector is a learned position, not a summary. It encodes similarity as defined by a training objective that knows nothing about your business.
@@ -142,3 +138,7 @@ Next: [Vector Search and the Database Question](/book/retrieval/vector-search), 
 - Your embedding provider sits in the query path. That's an availability dependency.
 - Truncating dimensions buys 3× at 512 of 1536, 6× at 256, and 12× at 64 of 768, at losses from a couple of points to the low teens, and only within the same model. The published rows are different models and do not form a curve.
 - Keep the source text. You will re-embed.
+
+---
+
+You have vectors and a standing reason to remake them. Nothing yet stores or searches them. Next: [Vector Search and the Database Question](/book/retrieval/vector-search), which starts at Postgres precisely because Postgres refuses to look like a product.

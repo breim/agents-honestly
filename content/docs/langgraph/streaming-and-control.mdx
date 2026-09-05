@@ -116,10 +116,6 @@ An agent with a visible trace and a working stop button is safer than an agent w
 
 Note the split: the *operator* gets full visibility and control; the *customer* gets a finished answer. Those are different audiences with different needs, and building one stream for both is how internal reasoning ends up in a customer's inbox.
 
----
-
-Next: [Graph Topologies](/book/langgraph/graph-topologies). Pipeline, router, loop, fan-out/fan-in, supervisor, human gate, subgraph: the shapes and what each one costs.
-
 ## Takeaways
 
 - Agent latency compounds across model calls, so the first user-visible output can be half a minute away. Progress beats prose. A visible step is worth more than smooth streaming of the final answer.
@@ -133,3 +129,7 @@ Next: [Graph Topologies](/book/langgraph/graph-topologies). Pipeline, router, lo
 - Three ceiling layers: a semantic bound producing a `halted` outcome, a framework backstop, and an external kill. If an outer layer fires, the inner one has a bug.
 - A stop button on an opaque run is decoration. Show what you can stop; make stoppable what you show.
 - Operators and customers need different streams. One stream for both is how internal reasoning reaches an inbox.
+
+---
+
+Bounded, visible and stoppable, the graph is finally safe to arrange in whatever shape the work wants. Next: [Graph Topologies](/book/langgraph/graph-topologies), the seven arrangements, and what each one costs to run.

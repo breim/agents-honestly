@@ -125,10 +125,6 @@ That makes the choice easy and worth stating as the general recommendation it is
 - [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), node re-execution on resume and the side-effect caveat that follows from it.
 - [The `Durability` type](https://reference.langchain.com/python/langgraph/types/Durability), checkpoint granularity per invocation.
 
----
-
-Next: [Escalation, Timeouts, and Audit Trails](/book/human-in-the-loop/escalation-and-audit), what happens when nobody approves, and how to prove afterwards what the agent did and why.
-
 ## Takeaways
 
 - Both mechanisms pause for a human. The difference that matters is what re-executes on resume: LangGraph re-runs the whole node from the top, Temporal re-runs nothing.
@@ -141,3 +137,7 @@ Next: [Escalation, Timeouts, and Audit Trails](/book/human-in-the-loop/escalatio
 - One interrupt per node. Two human decisions is two nodes.
 - The plugin delivers the answer as a signal, which is acknowledged before processing. If your gate has a validator or an expiry, put an update in front of it.
 - When you own the code, prefer the mechanism that does not re-execute. `interrupt()` earns its place when the graph already exists, the same condition that justifies the plugin.
+
+---
+
+Every mechanism here assumes the person answers. Next: [Escalation, Timeouts, and Audit Trails](/book/human-in-the-loop/escalation-and-audit), for the case where nobody does, and for proving months later what happened instead.

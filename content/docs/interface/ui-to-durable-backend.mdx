@@ -125,10 +125,6 @@ The failure this avoids is the one where each surface starts its own run, and it
 
 Six endpoints, and the only one that touches a database directly is the list. Everything else addresses a running execution through an identity the API derived after checking the session. So the browser has no knowledge that a workflow engine exists, and could be pointed at a different one without changing a line of React.
 
----
-
-Next: [Interface Patterns for Trust](/book/interface/trust-patterns). Provenance, progress, undo, confidence, failure states: the vocabulary that makes an agent usable by sceptics.
-
 ## Takeaways
 
 - There is no browser client for a workflow engine and there should not be. An API layer always exists; the question is what belongs in it.
@@ -142,3 +138,7 @@ Next: [Interface Patterns for Trust](/book/interface/trust-patterns). Provenance
 - Cold load is stream-first: open the stream, take a snapshot, render, reconcile buffered events by ID. Querying first drops whatever arrives before the stream attaches.
 - The API layer must not hold the request open, must not start work on `GET`, must not proxy identifiers, and must not put credentials in a buffered stream.
 - Multi-tab and multi-device are free when the stream is a buffered projection. If a second tab doubles your token spend, the architecture is wrong.
+
+---
+
+It streams, it survives a refresh, and none of that decides whether a person is willing to rely on it. Next: [Interface Patterns for Trust](/book/interface/trust-patterns), the vocabulary that makes an agent usable by somebody who starts out sceptical.

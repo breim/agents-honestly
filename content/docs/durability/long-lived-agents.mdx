@@ -187,10 +187,6 @@ Being honest about the cost, because entity workflows are attractive and slightl
 
 **Continuous load is the disqualifier.** As above. If there is never a quiet moment, history cannot recycle, and the ceiling is not negotiable.
 
----
-
-Next: [When Tools Have Side Effects](/book/durability/compensation), the saga pattern for refunds, emails, and inventory, plus the "we already sent it" problem.
-
 ## Takeaways
 
 - An entity workflow is one execution per case, addressed by the case, alive for its whole lifetime, with every transition arriving as a signal or an update.
@@ -207,3 +203,7 @@ Next: [When Tools Have Side Effects](/book/durability/compensation), the saga pa
 - Timers must be absolute. `sleep('7 days')` restarts on every transition; carry the deadline and sleep until it.
 - An entity workflow needs a defined end, or it runs until somebody notices it months later.
 - Long-lived executions run old code until they close or recycle. Continue-as-new is also when they adopt new code.
+
+---
+
+A case that stays alive for weeks accumulates effects that no replay can take back. Next: [When Tools Have Side Effects](/book/durability/compensation), where step two fails after step one has already moved the money.

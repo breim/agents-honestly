@@ -178,10 +178,6 @@ Log, per run: what was offered, and what was actually used. Then two ratios tell
 
 That last row is the highest-value log line in this chapter. An agent that says it lacked something is reporting a selection bug in plain language, and it will be sitting in your escalation queue already labelled.
 
----
-
-Next: [Memory: Short-Term, Long-Term, and Neither](/book/context/memory), on thread state, durable user facts, and the knowledge base: three different things that people put in one vector store.
-
 ## Takeaways
 
 - The inherited default is shipping the union of everything any request might need. It's expensive twice: tokens, and distractors drawn from the worst distribution.
@@ -192,3 +188,7 @@ Next: [Memory: Short-Term, Long-Term, and Neither](/book/context/memory), on thr
 - Just-in-time loading buys attention with latency, and it only works if your pointers are genuinely navigable.
 - Omitting the right item is silent, because the model answers from what it has. Optimize the selector for recall and the final cut for precision; never the reverse.
 - Log offered versus used. Escalations that mention missing access are selection bugs, pre-labelled.
+
+---
+
+Selection decides what this request sees. What should outlive the request is a different question with a different answer. Next: [Memory: Short-Term, Long-Term, and Neither](/book/context/memory), three different systems that teams keep building as one vector store.

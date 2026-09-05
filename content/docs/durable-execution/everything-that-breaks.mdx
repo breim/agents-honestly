@@ -123,10 +123,6 @@ That distribution is typical, and it is the honest case for this part: **most of
 - [Beyond the Leaderboard](https://arxiv.org/abs/2607.05775), twenty-seven benchmark, taxonomy, and audit papers reduced to six failure clusters.
 - [When Errors Become Narratives](https://arxiv.org/abs/2606.14589), twenty-two incidents with postmortems from eight weeks of one production runtime.
 
----
-
-Next: [Why Durable Execution](/book/durable-execution/why-durable-execution). Retries plus a queue plus a cron job is a distributed system you did not design. This is the one you would have arrived at.
-
 ## Takeaways
 
 - Dependent steps multiply. 99% per-step success is 82% over twenty steps and 61% over fifty, and long-horizon research reports compounding that is nonlinear rather than merely multiplicative.
@@ -140,3 +136,7 @@ Next: [Why Durable Execution](/book/durable-execution/why-durable-execution). Re
 - Loud failures get fixed in week one. The ones that survive to month six look like success.
 - Durable execution removes dead processes, mid-run deploys, repeated effects, unnoticed stopped runs, and the absence of a record. It does not fix tool selection, context decay, or a bad evaluation.
 - Most of an agent does not need this. The part that moves money cannot be talked out of it.
+
+---
+
+The list of what breaks is written down now, and every item on it has been solved before, separately, badly. Next: [Why Durable Execution](/book/durable-execution/why-durable-execution), which is the system you would have arrived at yourself, three incidents later.

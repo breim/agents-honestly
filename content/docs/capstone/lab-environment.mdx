@@ -174,10 +174,6 @@ The deterministic kernel does not validate model quality, provider compatibility
 
 The kernel proves narrower and more important properties: a model cannot widen scope, untrusted evidence cannot reach a write path, a duplicate trigger does not duplicate work, approval is checked at effect time, and the system terminates even when the model would not.
 
----
-
-Next: [Building It](/book/capstone/building-it), replacing each laboratory boundary with the production architecture while keeping its contracts.
-
 ## Takeaways
 
 - The companion has a no-key deterministic kernel and optional real services.
@@ -188,3 +184,7 @@ Next: [Building It](/book/capstone/building-it), replacing each laboratory bound
 - Seed multiple tenants so a missing isolation predicate becomes observable.
 - Pin approval bytes, idempotency inputs, reason codes, taint, and outcomes across language tracks.
 - A test suite that runs while the provider is down is evidence that deterministic software still has a boundary.
+
+---
+
+Next: [Building It](/book/capstone/building-it), replacing each laboratory boundary with the production architecture while keeping its contracts.

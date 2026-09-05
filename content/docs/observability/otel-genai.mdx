@@ -118,10 +118,6 @@ The `meridian.route` attribute is doing quiet work. Everything in [Part XIV](/bo
 - [The gen-ai attribute registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/), canonical attribute names with their stability levels.
 - [The dedicated GenAI conventions repository](https://github.com/open-telemetry/semantic-conventions-genai), where these conventions now develop.
 
----
-
-Next: [Replay-Driven Debugging](/book/observability/replay-debugging), event histories as ground truth, and re-running a real failure against new code.
-
 ## Takeaways
 
 - Four layers will instrument the same run: the model SDK, the agent framework, the gateway, and the workflow engine. Whether that composes into one trace depends on agreeing names in advance.
@@ -135,3 +131,7 @@ Next: [Replay-Driven Debugging](/book/observability/replay-debugging), event his
 - One owner per span type: the SDK owns `chat`, your dispatcher owns `execute_tool`, the workflow owns `invoke_agent`. Double instrumentation looks like a more complete trace and corrupts your cost numbers.
 - Verify by checking that summed span tokens match the provider's reported usage for a known run.
 - Put the route on every span. Everything in the eval part is per-route, and this is what lets a trace query answer a per-route question without a join.
+
+---
+
+A trace tells you what happened. It cannot tell you what a fix would have done instead. Next: [Replay-Driven Debugging](/book/observability/replay-debugging), where the event history becomes the fixture and last Tuesday runs again against today's code.

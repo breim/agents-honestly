@@ -139,10 +139,6 @@ Three passes, in order.
 
 Do this at every model upgrade. A system prompt is a per-model artifact, and the line that is load-bearing on one generation is dead weight on the next.
 
----
-
-Next: [Dynamic Context Selection](/book/context/dynamic-selection), choosing what the model sees per request instead of shipping everything every time.
-
 ## Takeaways
 
 - One question sorts the whole prompt: could the model already know this? Keep what only you know: audience, environment, quality bar, constraints, and their reasons.
@@ -156,3 +152,7 @@ Next: [Dynamic Context Selection](/book/context/dynamic-selection), choosing wha
 - No secrets, no per-user data, and nothing that must always hold. An invariant in a prompt is a request.
 - Mid-run operator instructions belong in a system-role message, not a user turn, because a user turn can be forged by retrieved content.
 - Audit by provenance, enforcement, and measurement, at every model upgrade.
+
+---
+
+That leaves the system prompt frozen and small, with everything a particular request needs still outside it. Next: [Dynamic Context Selection](/book/context/dynamic-selection), on choosing per request instead of shipping everything every time.

@@ -145,10 +145,6 @@ And the recommendation for now is still **don't build the graph.** Atlas answers
 
 Part V is what to do when you get there: how to model the entities, how to resolve them, how to traverse without returning a subgraph too large to fit in a prompt, and an honest account of when to stop.
 
----
-
-Next: [Entities, Relations, and Ontology](/book/graphs/modeling-entities), on deciding what a Customer is once, so five systems stop each having their own answer.
-
 ## Takeaways
 
 - Some answers exist in no record. They're implied by several facts, none of which is *about* the question.
@@ -160,3 +156,7 @@ Next: [Entities, Relations, and Ontology](/book/graphs/modeling-entities), on de
 - The bill is entity resolution, not the database. If it isn't your largest line item, the plan is wrong.
 - Evidence: plain retrieval wins on single-hop, graphs win on multi-hop. So it's a bet on your traffic mix; measure it.
 - Start agentic, log the hop shapes, and build only what the traffic actually traverses.
+
+---
+
+Before anything can be resolved, the thing being resolved has to be defined. Next: [Entities, Relations, and Ontology](/book/graphs/modeling-entities), on deciding what a Customer is once, so five systems stop each keeping their own answer.

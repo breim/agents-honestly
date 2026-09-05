@@ -1,5 +1,6 @@
 {
   "title": "Part XXI · Pattern Catalog",
+  "description": "Reference, not narrative. Every entry: Problem · Forces · Solution · Code · Trade-offs · When not to use.",
   "pages": [
     "context",
     "retrieval",

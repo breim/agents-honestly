@@ -138,10 +138,6 @@ On ticket #8812 the identifier list contributes the four chunks naming `RB-400`,
 
 - [Reciprocal rank fusion outperforms Condorcet and individual rank learning methods](https://doi.org/10.1145/1571941.1572114), Cormack, Clarke and Büttcher, SIGIR 2009, the fusion formula and the constant everyone ships.
 
----
-
-Next: [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer), because "how much did we sell in Spain in Q2" is not a retrieval problem.
-
 ## Takeaways
 
 - Fusion and reranking are different operations solving different problems. Fuse first, then rerank.
@@ -154,3 +150,7 @@ Next: [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer), becaus
 - Filter before reranking, or you send restricted content to a third party.
 - Reranking cannot fix recall. Fix retrieval first.
 - Recall@k grades retrieval, nDCG@k grades reranking, and both are proxies for the only number that matters.
+
+---
+
+All of this ranks documents, and one of Atlas's four tickets does not want a document. Next: [SQL Is Still the Answer](/book/retrieval/sql-is-still-the-answer), because a quarter's tonnage is a computation, and top-k over rows is not one.

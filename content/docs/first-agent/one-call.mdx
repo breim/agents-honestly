@@ -240,10 +240,6 @@ None of those is a prompting problem, and this is the load-bearing observation o
 
 That is the next chapter, and it is where the agent actually starts.
 
----
-
-Next: [One Tool, Then Many](/book/first-agent/first-tools), function calling from scratch: the schema, the request, the result, the second request.
-
 ## Takeaways
 
 - The smallest useful version is one call with no loop. Build it first, not as a warm-up, but to find out empirically which cases need more.
@@ -254,3 +250,7 @@ Next: [One Tool, Then Many](/book/first-agent/first-tools), function calling fro
 - One call plus a switch is a router, not an agent. It has no blast radius and needs none of the operational machinery.
 - Scoring v0 against the ticket set turns "we need an agent" from an assumption into a measurement, and 19/20 correct classification with 0/20 resolved is a useful, honest result.
 - The ceiling is a missing capability, not a prompting failure. No wording puts an unseen document into the context.
+
+---
+
+Nineteen of twenty classified, none resolved, and no wording closes that gap. Next: [One Tool, Then Many](/book/first-agent/first-tools), where the model gets a way to go and fetch the fact it was never given.

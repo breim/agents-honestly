@@ -63,7 +63,7 @@ function buildPart(dir, segments, title, skipped) {
     else skipped.push([...segments, entry].join('/'));
   }
 
-  return { type: 'part', title, children };
+  return { type: 'part', title, description: readMeta(dir)?.description, children };
 }
 
 export function readBook() {

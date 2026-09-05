@@ -151,10 +151,6 @@ Layout-aware parsing by default, vision-language on pages where table detection 
 
 Roughly 1,200 documents, 41,000 chunks, rebuilt incrementally on change and fully on any pipeline version bump. The full rebuild takes about forty minutes and costs real money, which is the [migration cost](/book/retrieval/embeddings) made concrete, and the reason `pipeline_ver` is on every row.
 
----
-
-Next: [Multimodal Document Intelligence](/book/retrieval/multimodal-document-intelligence), on PDFs, scans, tables, images, and audio without flattening away the evidence.
-
 ## Takeaways
 
 - The discourse is about parsers; the incidents are about lifecycle. Budget attention accordingly.
@@ -167,3 +163,7 @@ Next: [Multimodal Document Intelligence](/book/retrieval/multimodal-document-int
 - Make ingestion idempotent with deterministic chunk identity, or a retry duplicates your corpus.
 - Write a manifest and reconcile source count against index count. Silent skips become holes nobody finds.
 - Alert on stage-to-stage ratios. A corpus missing documents still shows excellent recall over the ones it has.
+
+---
+
+The pipeline is reproducible as long as every source is text. Next: [Multimodal Document Intelligence](/book/retrieval/multimodal-document-intelligence), where one PDF holds a scan, a chart, and a table whose headers repeat after the page break.

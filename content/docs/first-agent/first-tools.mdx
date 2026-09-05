@@ -284,10 +284,6 @@ Nine resolved is real. So is that last row: v1 is the first version that can be 
 
 The remaining eleven need more than one round.
 
----
-
-Next: [The Loop, By Hand](/book/first-agent/the-loop-by-hand), Atlas v0 in about eighty lines. No framework, no magic, every decision visible.
-
 ## Takeaways
 
 - A tool is a published contract and a returned request, not code the model runs. One tool use costs two API requests and resends the entire history.
@@ -299,3 +295,7 @@ Next: [The Loop, By Hand](/book/first-agent/the-loop-by-hand), Atlas v0 in about
 - Selection accuracy falls as the catalogue grows: roughly ten to fifteen tools for smaller models, twenty to thirty for larger. Keep under twenty live; use dynamic discovery beyond thirty.
 - Benchmarks test about three candidate tools. Measure selection on your own catalogue.
 - One round of tool use is still a workflow. Letting the model choose again after seeing a result is what makes it an agent.
+
+---
+
+One round of tool use is still a workflow, because you decided where it stopped. Next: [The Loop, By Hand](/book/first-agent/the-loop-by-hand), where the model decides instead, in about eighty lines with nothing hidden.

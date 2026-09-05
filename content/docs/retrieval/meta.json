@@ -1,5 +1,6 @@
 {
   "title": "Part IV · Data & Retrieval Engineering",
+  "description": "RAG is not embeddings plus a vector database. It is deciding, per question, where the answer actually lives.",
   "pages": [
     "where-does-the-answer-live",
     "embeddings",

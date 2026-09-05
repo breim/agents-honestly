@@ -3,6 +3,8 @@ title: "Risk Tiers"
 description: "Classifying actions by reversibility and blast radius, so the approval policy writes itself."
 ---
 
+[Atlas](/book/preface#what-youll-build) can now look up an order, issue a credit, and send the customer a reply, and since [Part XI](/book/durability/not-a-background-job) it survives long enough to finish doing them. The lookup needs no one's permission and a half-million-dollar transfer needs a signature; this part is about everything in between.
+
 The instinct when an agent can spend money is to put a human in front of everything. It is the wrong instinct, and the reason is arithmetic rather than philosophy.
 
 ## The resource you are spending is attention
@@ -175,10 +177,6 @@ That is the move worth taking from this chapter. When an action lands in a tier 
 
 - [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), including human-agent trust exploitation and overwhelming the reviewer as named threats rather than UX complaints.
 
----
-
-Next: [Approval Gates](/book/human-in-the-loop/approval-gates), blocking indefinitely on a human decision without holding a process, a socket, or a thread open.
-
 ## Takeaways
 
 - Fifty agents at twenty calls an hour produce a thousand approval-eligible events; routing ten percent needs three full-time reviewers. One reported reviewer averaged eleven seconds per approval.
@@ -193,3 +191,7 @@ Next: [Approval Gates](/book/human-in-the-loop/approval-gates), blocking indefin
 - Uniform tiers are worse than either extreme: trivial actions consume the budget and dangerous ones get the same glance.
 - Batch low-risk notifications, define safe automatic ranges, and escalate exceptions rather than instances.
 - When an action lands in a tier you cannot afford, redesign the action rather than lowering the bar. Templated replies are a different risk from free-text ones.
+
+---
+
+The tiers say which actions want a person. They say nothing about how an agent waits for one. Next: [Approval Gates](/book/human-in-the-loop/approval-gates), where the waiting turns out to be the easy half.

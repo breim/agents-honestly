@@ -4,11 +4,11 @@ description: "Deciding what a Customer is once, so five systems stop each having
 ---
 
 
-Ask five systems at Meridian what a Customer is.
+Ask five systems at Meridian Supply what a Customer is.
 
 The CRM says an account record with an owner and a renewal date. Billing says a legal entity with a tax ID and payment terms. Shipping says a delivery address with a receiving contact. Support says whoever sent the email. The warehouse says a `customer_id` column that has meant three different things since 2019.
 
-Every one of those is correct **locally**. Each system's definition serves its own job perfectly well. The trouble starts the moment you want to say something that spans them, like "why is Acme at risk," which requires the CRM's Acme, support's Acme, and the warehouse's Acme to be the same Acme.
+Every one of those is correct **locally**. Each system's definition serves its own job perfectly well. The trouble starts the moment [Atlas](/book/preface#what-youll-build) is asked something that spans them, like "why is Acme at risk," which requires the CRM's Acme, support's Acme, and the warehouse's Acme to be the same Acme.
 
 ## The graph doesn't create this problem. It exposes it.
 
@@ -130,10 +130,6 @@ That last decision is the one worth stealing: **bitemporal where the history is 
 
 Provenance on every edge, back to the CRM sync or the ticket that produced it. And a validation suite that fails ingestion when two ownership windows overlap, because that is a real upstream bug, and the graph is now the place it becomes visible.
 
----
-
-Next: [Graph Storage and Query Models](/book/graphs/graph-storage-and-query-models), on relational edges, property graphs, RDF, Cypher, and SPARQL without confusing storage with meaning.
-
 ## Takeaways
 
 - Five systems have five correct local definitions of Customer. The graph doesn't create that conflict, it forces you to resolve it, because you cannot draw an edge before agreeing what the nodes are.
@@ -147,3 +143,7 @@ Next: [Graph Storage and Query Models](/book/graphs/graph-storage-and-query-mode
 - Start from ten real questions; the nouns are entities and the verbs are edges. Everything else is v2.
 - Be bitemporal where history is queried and current-state where it isn't, because full bitemporality doubles query complexity for questions nobody asks.
 - The ontology and the semantic layer are the same artifact: business meaning, written once, owned, versioned, tested.
+
+---
+
+Next: [Graph Storage and Query Models](/book/graphs/graph-storage-and-query-models), on relational edges, property graphs, RDF, Cypher, and SPARQL without confusing storage with meaning.

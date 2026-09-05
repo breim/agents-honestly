@@ -198,10 +198,6 @@ Two things worth reading off that table.
 
 **`close_ticket` is reversible and still sits after the pivot.** Reversibility and ordering are different axes. The pivot is about where commitment happens, not about where undo stops being possible.
 
----
-
-Next: [Scale and Quality of Service](/book/durability/scale-and-qos), fan-out across thousands of cases, provider quotas, priority queues, and fairness across tenants.
-
 ## Takeaways
 
 - Durable execution fixed the crash, the retry, and the duplicate. It does not fix a sequence where every step succeeded and the outcome is still wrong.
@@ -217,3 +213,7 @@ Next: [Scale and Quality of Service](/book/durability/scale-and-qos), fan-out ac
 - Every irreversible step implies customer communication that does not exist yet. Surface it during design.
 - Compensations are writes: idempotent, generously retried, and escalated to a human by name when they finally fail.
 - Mark business rejections non-retryable so the saga starts unwinding immediately instead of burning its retry budget first.
+
+---
+
+One case, unwound correctly. Next: [Scale and Quality of Service](/book/durability/scale-and-qos), where there are thousands at once, the provider quota is shared, and one tenant's Monday can starve everybody else's.

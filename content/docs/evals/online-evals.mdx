@@ -119,10 +119,6 @@ Part XIV closes here. Atlas can now be measured before release, gated on what th
 
 What none of it explains is **why** a particular run did what it did. That is the next part.
 
----
-
-Next: [Learning From Production Feedback](/book/evals/learning-from-production-feedback), turning corrections, overrides, and complaints into evidence without treating every click as truth.
-
 ## Takeaways
 
 - A 10% mirror of a busy route yields on the order of 100,000 scored pairs a day. That is the sample size CI said was unaffordable, arriving for free.
@@ -139,3 +135,7 @@ Next: [Learning From Production Feedback](/book/evals/learning-from-production-f
 - Measure the guardrail's false-positive rate on the golden set and gate it. The components doing the blocking and the judging are the ones teams exempt from measurement.
 - Guard the input where you can: it saves the whole model call and cannot leak what was never generated.
 - Cheap fast validators on every turn; expensive validators on a subset.
+
+---
+
+Scoring production traffic collects opinions from users as well as from judges. Next: [Learning From Production Feedback](/book/evals/learning-from-production-feedback), on turning corrections and complaints into evidence without treating a click as truth.

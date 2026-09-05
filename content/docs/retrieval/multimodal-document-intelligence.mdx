@@ -232,10 +232,6 @@ Atlas stores source PDFs and rendered pages under the source hash. Native extrac
 
 Every chunk carries document, version, page, region, extractor version, tenant, ACL, and trust class. Table objects live beside their retrieval text. A policy answer may cite a paragraph or table cell; the approval UI opens the exact rendered region that produced it.
 
----
-
-Next: [Evaluating Retrieval](/book/retrieval/retrieval-evals), covering recall, precision, evidence fidelity, and whether the answer survived the trip from source to context.
-
 ## Takeaways
 
 - A PDF is a container. Route mixed documents page by page.
@@ -247,3 +243,7 @@ Next: [Evaluating Retrieval](/book/retrieval/retrieval-evals), covering recall, 
 - Multimodal embeddings add a retrieval route. They do not replace OCR, metadata, or structured queries.
 - Reject missing identity and authorization metadata. Quarantine broken evidence without hiding the valid rest of a document.
 - Extraction changes format, never trust. OCR confidence is not source authority.
+
+---
+
+Part IV has now built every route it named, and no way to say whether any of them works. Next: [Evaluating Retrieval](/book/retrieval/retrieval-evals), on the ceiling retrieval sets, which no generator can raise.

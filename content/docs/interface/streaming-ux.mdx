@@ -139,10 +139,6 @@ Four things that are all learned the same expensive way:
 
 The last two rows are the same decision seen twice. Atlas streams what it is *doing* freely and what it *concludes* only once, because the first is provisional by nature and the second is a commitment the customer will hold it to.
 
----
-
-Next: [Generative UI and Tool Approvals](/book/interface/generative-ui-and-approvals), rendering tool calls as interface, and putting the approval gate where the user actually is.
-
 ## Takeaways
 
 - Streaming does not reduce duration. It changes the question the user is asking from "is it working" to "what is it saying," and the perceived wait collapses.
@@ -157,3 +153,7 @@ Next: [Generative UI and Tool Approvals](/book/interface/generative-ui-and-appro
 - Explicit stop is a signal to the workflow, and it propagates to the heartbeating activity so the model call actually aborts.
 - Buffer a few tokens before painting, do not re-parse markdown per chunk, and render tool calls as components rather than text.
 - Anything you show, you have said. Stream what the agent is doing freely; stream what it concludes once.
+
+---
+
+One rule was stated there and left unpaid: a tool call is a structured element rather than text. Next: [Generative UI and Tool Approvals](/book/interface/generative-ui-and-approvals), which is what it costs to mean that, and where the approval gate belongs once you do.

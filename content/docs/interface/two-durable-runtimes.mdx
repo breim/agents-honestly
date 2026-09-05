@@ -104,10 +104,6 @@ The decision took one question: *does this company already run a durable executi
 
 - [Workflow agents](https://ai-sdk.dev/docs/agents/workflow-agent), the AI SDK's durable-agent surface and its execution model.
 
----
-
-Next: [Wiring the UI to a Durable Backend](/book/interface/ui-to-durable-backend). Start, signal, query, reconnect: a React front end over agents that outlive the browser tab.
-
 ## Takeaways
 
 - The AI SDK composes with Temporal; Temporal even publishes an integration. `WorkflowAgent` does not compose, because it is a durability runtime that arrives through the SDK's import path.
@@ -121,3 +117,7 @@ Next: [Wiring the UI to a Durable Backend](/book/interface/ui-to-durable-backend
 - Temporal fits weeks-long waits, complex retries, polyglot systems, the history as an audit artifact, and, decisively, a company that already runs one.
 - A durable execution engine is not a per-project decision. If the company runs one, the agent goes on it.
 - If both are present: one owns durability, the other is a library. Use the AI SDK for generation, streaming, and rendering; do not use `WorkflowAgent`.
+
+---
+
+One runtime owns durability and the other renders, and nothing yet connects a browser to either. Next: [Wiring the UI to a Durable Backend](/book/interface/ui-to-durable-backend), start, signal, query, reconnect, over runs that outlive the tab.

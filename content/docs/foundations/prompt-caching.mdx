@@ -183,10 +183,6 @@ Do that and the discipline pays for itself twice: once in money, and once becaus
 
 - [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), cache breakpoints, minimum cacheable prefix lengths, TTL behavior, and what invalidates a prefix.
 
----
-
-Next: [Structured Output](/book/foundations/structured-output), getting data out of the model without a regex and a prayer.
-
 ## Takeaways
 
 - Caching is a prefix match on exact bytes. One changed byte invalidates everything after it.
@@ -197,3 +193,7 @@ Next: [Structured Output](/book/foundations/structured-output), getting data out
 - The killers are invisible: a timestamp, a UUID, unsorted JSON, a per-user tool list, a mid-conversation model switch. All of them fail without an error.
 - `input_tokens` is the uncached remainder, not the prompt size. Verify with `cache_read_input_tokens` or you are assuming.
 - Agent-specific traps: a bounded lookback window that long tool-heavy turns overshoot, and concurrent fan-out where every request misses because none has finished writing.
+
+---
+
+Caching settles what the prompt costs on the way in. Next: [Structured Output](/book/foundations/structured-output), and the other half of that contract: getting a usable value back out.

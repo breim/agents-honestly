@@ -6,11 +6,11 @@ description: "The routing decision that precedes every retrieval choice: semanti
 
 The standard sequence goes: we need the agent to know things → we need RAG → we need a vector database → embed the corpus → ship.
 
-There is a decision missing from the front of that sequence, and skipping it is the most expensive habit in this field. Before choosing *how* to retrieve, you have to answer:
+There is a decision missing from the front of that sequence, and skipping it is the most expensive habit in this field. [Part III](/book/context/context-as-budget) settled how Atlas spends its context window; this part is about where the material worth spending it on comes from. Before choosing *how* to retrieve, you have to answer:
 
 > **Where does the answer actually live?**
 
-Not "where did we put a copy of it." Where it is true. Because Atlas's four tickets have four different answers to that question, and only one of them is a document.
+Not "where did we put a copy of it." Where it is true. Because [the four tickets](/book/first-agent/the-problem#four-tickets) that define Atlas's job have four different answers to that question, and only one of them is a document.
 
 ## Retrieval is a routing decision, not a technology
 
@@ -124,10 +124,6 @@ Route correctly and the same questions get: an exact `SUM` in 30ms, an exact ide
 
 That last part is the real argument. Choosing the route is free at design time and expensive later, because by then you have an embedding pipeline, a reindexing job, and a year of prompt tuning built on top of the wrong answer to a question nobody asked out loud.
 
----
-
-Next: [Embeddings](/book/retrieval/embeddings), what a vector represents, how similarity is measured, and the operational costs nobody mentions.
-
 ## Takeaways
 
 - Ask where the answer *is true*, not where you put a copy. That decision precedes every retrieval technology choice.
@@ -139,3 +135,7 @@ Next: [Embeddings](/book/retrieval/embeddings), what a vector represents, how si
 - Prefer differentiated tools over a single `search` that hides backends. Routing quality becomes tool-description quality, which you can measure.
 - Most real questions need two or three routes. Hybrid is the normal case.
 - The decision is free now and nearly impossible to retrofit later.
+
+---
+
+One of those routes was named and left unexplained. Next: [Embeddings](/book/retrieval/embeddings), what a vector actually represents, and the operational half nobody puts in the tutorial.

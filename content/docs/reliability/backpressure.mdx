@@ -215,10 +215,6 @@ The 2am incident is prevented by two rows: the batch share cap, and putting the 
 
 That is the whole chapter. Capacity problems in agentic systems are almost never a shortage of capacity. They are the absence of a decision about allocation, discovered at the worst possible time by whoever is on call.
 
----
-
-Next: [Failure Injection](/book/reliability/failure-injection), kill the worker mid-run, fail the third tool call, do it on purpose before production does it for you.
-
 ## Takeaways
 
 - Providers meter on several axes at once: RPM, input TPM, output TPM. The meter is usually a continuously refilling token bucket rather than a per-minute reset.
@@ -236,3 +232,7 @@ Next: [Failure Injection](/book/reliability/failure-injection), kill the worker 
 - Shed by value, not arrival order.
 - Watch queue *age*, not depth. Depth reports a fast-draining backlog as the emergency and a starving one as fine.
 - Capacity incidents are usually not a shortage of capacity. They are a missing decision about allocation, found by whoever is on call.
+
+---
+
+Everything Part XVI has built is a claim about behaviour under conditions nobody has produced yet. Next: [Failure Injection](/book/reliability/failure-injection), on producing them deliberately, before production produces them at 03:00.

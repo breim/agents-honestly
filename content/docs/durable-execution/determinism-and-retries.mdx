@@ -207,10 +207,6 @@ The refund workflow, configured: thirty seconds start-to-close on each activity,
 
 Still a plain program. The step that makes it an agent is [Part XI](/book/durability/agent-as-workflow): one activity whose output is not a function of its input, and which therefore must sit on the activity side of every rule in this chapter.
 
----
-
-Next: [Signals, Updates, and Child Workflows](/book/durable-execution/signals-and-children), getting data into a running workflow, getting answers out, and decomposing the big ones.
-
 ## Takeaways
 
 - Replay requires the same *sequence of commands*, not purity. Computing and formatting are fine; anything that could change a branch is not.
@@ -226,3 +222,7 @@ Next: [Signals, Updates, and Child Workflows](/book/durable-execution/signals-an
 - A heartbeat timeout without actual heartbeating is ignored. Configuration without protection.
 - Leave Schedule-To-Start alone. A deep queue is a capacity problem, and failing the work does not add capacity. Monitor the latency metric instead.
 - Worker Versioning lets old executions finish on old code; patching migrates them mid-flight. Choose by whether last Tuesday's rules are acceptable for a run that started last Tuesday.
+
+---
+
+All of it describes a workflow left alone to finish. Next: [Signals, Updates, and Child Workflows](/book/durable-execution/signals-and-children), on telling a running one something, asking it something, and splitting it up when it gets too big.

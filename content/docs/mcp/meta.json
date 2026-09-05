@@ -1,5 +1,6 @@
 {
   "title": "Part IX · Agent Protocols: MCP & A2A",
+  "description": "MCP for capabilities, A2A for delegated remote work, and the cases where a plain function or durable workflow is the better boundary.",
   "pages": [
     "what-mcp-is",
     "servers-clients-transports",

@@ -119,10 +119,6 @@ Ticket #8812 mentions `RB-400`. The exact-match pass finds the four chunks that 
 
 Which is the next chapter.
 
----
-
-Next: [Hybrid Search and Reranking](/book/retrieval/hybrid-and-reranking), fusing lexical and semantic candidates, then reranking for what actually answers the question.
-
 ## Takeaways
 
 - Lexical search is a different capability, not an earlier attempt at the same one. Dense generalizes; lexical discriminates.
@@ -133,3 +129,7 @@ Next: [Hybrid Search and Reranking](/book/retrieval/hybrid-and-reranking), fusin
 - Keep separate fields: an analyzed one for prose, an unanalyzed one for exact strings.
 - It genuinely fails on vocabulary mismatch and paraphrase, where dense is strong. The complementarity is the argument for hybrid.
 - It's a second index on the same table, not a second system, and a second place to forget the authorization filter.
+
+---
+
+Two retrievers now, each strong where the other fails, and one prompt with room for five chunks. Next: [Hybrid Search and Reranking](/book/retrieval/hybrid-and-reranking), on merging the two lists, then paying a better model to order what survives.

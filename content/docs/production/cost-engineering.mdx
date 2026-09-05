@@ -3,7 +3,7 @@ title: "Cost Engineering"
 description: "Model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately."
 ---
 
-The first month Atlas runs at real volume, someone forecasts the annual bill from the pilot's per-ticket cost and gets a number nobody budgeted.
+The first month [Atlas](/book/preface#what-youll-build) works Meridian Supply's support queue at real volume, someone forecasts the annual bill from the pilot's per-ticket cost and gets a number nobody budgeted.
 
 The instinct in the room is to downgrade the model. It is almost always the wrong first move, and the reason is arithmetic that most teams have never written down.
 
@@ -214,10 +214,6 @@ The first two rows produced more saving than every price-level change combined, 
 - [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching), cache-read pricing relative to input, and what invalidates a prefix.
 - [Message Batches](https://platform.claude.com/docs/en/build-with-claude/batch-processing), the batch discount, completion window, and request limits.
 
----
-
-Next: [The Operating Manual](/book/production/operating-manual), dashboards, incident patterns, on-call for a probabilistic system, and the first ninety days.
-
 ## Takeaways
 
 - The whole transcript is re-sent every turn, so input tokens grow roughly with the square of turn count. A 20-turn run costs on the order of a hundred times a 1-turn run on the input side, not 20×, and the multiple rises as the per-turn growth catches up with the fixed prefix.
@@ -235,3 +231,7 @@ Next: [The Operating Manual](/book/production/operating-manual), dashboards, inc
 - Pick your position per workflow, measure the trade with evals, and re-run the choice when prices move.
 - Treat every ratio here as relative, not absolute. Which lever is bigger than which is structural; the multipliers are not.
 - None of it works without per-run, per-tenant cost attribution, recorded at the model gateway.
+
+---
+
+Deployed, versioned, rolled out and priced, and nobody has been woken up by it yet. Next: [The Operating Manual](/book/production/operating-manual), on dashboards, incident shapes, and being on call for something probabilistic.

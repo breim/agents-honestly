@@ -150,10 +150,6 @@ That is worth stating plainly, because it is the least glamorous conclusion in P
 
 Add the index when the scan shows up in your latency budget. Not before, and not because the tutorial had one.
 
----
-
-Next: [Chunking](/book/retrieval/chunking), covering fixed, recursive, semantic, document-aware, and parent/child splitting, and why a policy split mid-sentence is a bug you will never see in a metric.
-
 ## Takeaways
 
 - An approximate index is a decision to sometimes return the wrong answer. Reasonable, but not without knowing the rate.
@@ -167,3 +163,7 @@ Next: [Chunking](/book/retrieval/chunking), covering fixed, recursive, semantic,
 - Measure recall with your filters applied. Unfiltered recall is not the number your agent experiences.
 - Build the recall harness. It turns every choice here into a curve with a knee.
 - At tens of thousands of vectors, exact search is fine. Add the index when a measurement asks for it.
+
+---
+
+The harness measures how well you find a chunk. Whether the chunk was worth finding is decided by how it was cut. Next: [Chunking](/book/retrieval/chunking), where a policy split mid-sentence is a bug that no metric in this chapter will show you.

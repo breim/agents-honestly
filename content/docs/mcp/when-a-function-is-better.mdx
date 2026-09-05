@@ -172,10 +172,6 @@ The failure this avoids is the common one: a team decides to "build on MCP," wri
 
 Seven functions, two of which are *also* servers. The ratio is the chapter: the protocol is an export format for a small, deliberately chosen subset, and everything else stays a function call because nothing about it crosses a boundary that matters.
 
----
-
-Next: [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a), where the remote system accepts a delegated task instead of exposing a tool.
-
 ## Takeaways
 
 - MCP is not slow. Sub-millisecond over stdio, ~10ms per call over HTTP under load, against a 500ms–5s model call. Arguing against it on latency is arguing about noise, and it discredits the real objections.
@@ -187,3 +183,7 @@ Next: [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a), where the remote system
 - The protocol wins when you cannot enumerate your consumers, when the domain belongs to someone else, or when the consumer set is open even inside one company.
 - Write the tool as a plain function and publish it later. One implementation, two deliveries, the second additive and optional.
 - Putting the logic inside the server handler is the trap: your own agent then reaches its own code over loopback HTTP with an OAuth token, paying every cost to talk to itself.
+
+---
+
+Next: [MCP Is Not A2A](/book/mcp/remote-agents-and-a2a), where the remote system accepts a delegated task instead of exposing a tool.

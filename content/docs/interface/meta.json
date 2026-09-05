@@ -1,5 +1,6 @@
 {
   "title": "Part XIII · Interface & Experience",
+  "description": "The AI SDK layer: what the user sees while a durable backend does its work.",
   "pages": [
     "ai-sdk",
     "streaming-ux",

@@ -121,10 +121,6 @@ The catalog carries the fixes with the code attached: [Parent–Child Chunks](/b
 
 Atlas can now answer policy questions with citations, order questions with live data, and aggregate questions with exact numbers. What it still cannot answer is *"why is the Acme account at risk"*, because that answer isn't in any single record. It's in the relationships between several, and that is Part V.
 
----
-
-Next: [When Relationships Are the Query](/book/graphs/when-relationships-are-the-query), on multi-hop questions that similarity search structurally cannot answer, and how to recognize one.
-
 ## Takeaways
 
 - Retrieval sets a ceiling on generation. A model can ignore extra context; it cannot invent missing context.
@@ -137,3 +133,7 @@ Next: [When Relationships Are the Query](/book/graphs/when-relationships-are-the
 - Keep two pass/fail guardrails in CI: the authorization negative set and the freshness check.
 - If ranking improves and answers don't, ordering wasn't your bottleneck. Disagreement between proxy and end-to-end metrics is information.
 - Log retrieved document IDs on every request. It's what makes everything above possible after the fact.
+
+---
+
+Part IV can now measure everything it built, and one of the four tickets still has no route. Next: [When Relationships Are the Query](/book/graphs/when-relationships-are-the-query), Part V, and the questions similarity search cannot reach by construction.

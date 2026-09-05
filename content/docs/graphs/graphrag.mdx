@@ -114,10 +114,6 @@ The graph itself is the part to defer. Atlas answers the Acme question today wit
 
 Part VI goes back to something more fundamental, and more often skipped: whether the thing you're building needs to be adaptive at all.
 
----
-
-Next: [The Determinism Test](/book/workflows/the-determinism-test), the question that decides whether you are writing a workflow or an agent.
-
 ## Takeaways
 
 - A graph built from records inherits referential integrity. A graph extracted from prose is a model's reading of sentences, with no ground truth to reconcile against.
@@ -129,3 +125,7 @@ Next: [The Determinism Test](/book/workflows/the-determinism-test), the question
 - Most teams reaching for GraphRAG have a chunking problem. Only "it needs everything, summarized" justifies the build.
 - Try hierarchical summarization, metadata aggregation, a batch job, or extraction-free structuring first. All are cheaper, none carry extraction risk.
 - If you build it, keep per-edge provenance, sample edges for human review, and treat the graph as a fallible index.
+
+---
+
+Atlas answers the Acme question with three tool calls and no graph at all, which is Part V's real conclusion, and the next part turns that instinct into a procedure. Next: [The Determinism Test](/book/workflows/the-determinism-test), Part VI, and one question that decides between a function, a workflow, and an agent.

@@ -137,10 +137,6 @@ Compaction is the one context mechanism you can test directly, and almost nobody
 
 Both belong in the eval suite. A compaction policy that has never been tested is a compression algorithm nobody has decompressed.
 
----
-
-Next: [Context Poisoning](/book/context/context-poisoning), where the agent wrote something false into its own history and now every turn reasons from it.
-
 ## Takeaways
 
 - History is the claimant nothing else bounds. Eventually you rewrite it, and that rewrite is lossy compression of your own state.
@@ -156,3 +152,7 @@ Next: [Context Poisoning](/book/context/context-poisoning), where the agent wrot
 - With server-side compaction, append the full response content, because dropping the compaction blocks silently loses the state.
 - Thinking blocks are signed and cannot be rewritten. Drop them via context editing if you must, but summarizing across the latest assistant turn invalidates the signature and fails the *next* call, not the compaction.
 - Test resumability at several cut points, and alert on identical repeated tool calls.
+
+---
+
+Compaction assumes the history is worth compressing. Next: [Context Poisoning](/book/context/context-poisoning), where a wrong number went in at step four and every step since has been reasoning from it.

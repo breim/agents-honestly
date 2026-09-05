@@ -136,10 +136,6 @@ Three things survive all of it, and saying so is part of being ready rather than
 
 A launch review that claims otherwise on any of the three is describing a system nobody built.
 
----
-
-Next: [Failure Labs](/book/capstone/failure-labs), kill workers, duplicate callbacks, poison retrieval, expire approvals, and preserve the evidence.
-
 ## Takeaways
 
 - "It works" means nobody has seen it fail recently. For a system whose failures are silent and plausible, that is the weakest available claim.
@@ -157,3 +153,7 @@ Next: [Failure Labs](/book/capstone/failure-labs), kill workers, duplicate callb
 - Hold escalation recall highest. A false escalation is free; a missed one is a mishandled customer.
 - "The support lead thinks it feels good" belongs in the review and may not override a rate.
 - Hardening bounds three things rather than eliminating them: semantic failure, injection, and model change. A launch review claiming otherwise is describing a different system.
+
+---
+
+Every gate is green, and the suite picked the conditions under which they went green. Next: [Failure Labs](/book/capstone/failure-labs), on breaking one boundary at a time and keeping whatever proves it recovered.

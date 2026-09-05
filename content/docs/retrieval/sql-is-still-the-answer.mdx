@@ -156,10 +156,6 @@ And when a question arrives that the layer can't express, Atlas says so and esca
 
 - [Spider 2.0](https://proceedings.iclr.cc/paper_files/paper/2025/file/46c10f6c8ea5aa6f267bcdabcb123f97-Paper-Conference.pdf), enterprise text-to-SQL evaluated over real data applications, and the source of the benchmark gap this chapter opens with.
 
----
-
-Next: [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline), covering parse, clean, normalize, enrich, embed, index, and keeping it reproducible when the source changes.
-
 ## Takeaways
 
 - Text-to-SQL benchmarks are measured on small clean schemas. On enterprise workflows, execution accuracy drops from over 90% to roughly 20–40%.
@@ -172,3 +168,7 @@ Next: [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline), cov
 - Rails regardless: read-only role, statement timeout, server-side row cap, separate pool, cost ceiling, and tenancy appended by your code rather than written by the model.
 - Aggregate in SQL and return small. Return the query with the result, because it's the citation.
 - Build a question-to-number eval set with independently verified answers, including one the system should refuse.
+
+---
+
+Every route in Part IV so far has assumed its index was already there and already correct. Next: [Building the Ingestion Pipeline](/book/retrieval/ingestion-pipeline), the least written-about part of retrieval and the one that sets its ceiling.

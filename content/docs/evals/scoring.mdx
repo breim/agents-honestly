@@ -137,10 +137,6 @@ Nine rows, and only three involve a model scoring anything. That ratio is the ch
 - [Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena](https://arxiv.org/abs/2306.05685), Zheng et al., position, verbosity, and self-enhancement bias, and the human-agreement ceiling on the technique.
 - [Self-Preference Bias in LLM-as-a-Judge](https://arxiv.org/abs/2410.21819), Wataoka, Takahashi and Ri, the perplexity account of why a judge favours its own output.
 
----
-
-Next: [Evaluating the Path, Not Just the Answer](/book/evals/trajectory-evals), tool choice, argument correctness, step efficiency, and recovery behaviour.
-
 ## Takeaways
 
 - Use the cheapest instrument that can decide: deterministic assertion, then binary rubric, then pairwise, then a graded judge.
@@ -156,3 +152,7 @@ Next: [Evaluating the Path, Not Just the Answer](/book/evals/trajectory-evals), 
 - The reported ceiling is ~80% agreement, matching human-to-human. That is someone else's measurement on someone else's rubric.
 - An uncalibrated judge is an unmeasured instrument gating your releases, and it is itself an agent that nothing scores.
 - A better judge cannot fix a vague criterion, a missing definition of success, or genuine human disagreement.
+
+---
+
+Every instrument here grades the answer. Next: [Evaluating the Path, Not Just the Answer](/book/evals/trajectory-evals), because a correct reply reached by seven wasteful steps is not a result you would ship twice.

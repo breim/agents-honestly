@@ -161,10 +161,6 @@ Every Atlas tool returns errors through one builder. Five stable codes cover the
 
 The measurable claim, and the one to put on your dashboard: **of the tickets that hit at least one tool error, what fraction still reach a correct outcome?** Reported self-correction rates sit around 70% across large error samples, and the distance between your number and that one is almost entirely the quality of the text above. It is the cheapest agent improvement available, because nothing about the model, the prompt, or the topology has to change.
 
----
-
-Next: [Tool Result Design](/book/tools/result-design), what comes back lands in the context window forever. Shape it, cap it, summarize it.
-
 ## Takeaways
 
 - An error is a branch instruction, not a report. Agents recover from structured, actionable feedback over 85% of the time and from ambiguous signals about 17%.
@@ -179,3 +175,7 @@ Next: [Tool Result Design](/book/tools/result-design), what comes back lands in 
 - Errors persist in context and are re-sent every turn. One or two sentences; stack traces and SQL go to the trace.
 - Error strings are an echo surface. Never interpolate untrusted input verbatim. Refer to the argument by name.
 - Track the fraction of runs that hit a tool error and still end correctly. It is the cheapest thing on the dashboard to move.
+
+---
+
+If an error is a prompt because it stays in the window, so is everything that succeeds. Next: [Tool Result Design](/book/tools/result-design), on shaping what comes back, given that it is re-sent on every turn until the run ends.

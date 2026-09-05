@@ -126,10 +126,6 @@ Approvals expire in 48 **business** hours, because Meridian's account balances s
 
 Everything below $1,000 still gets a person, because [an irreversible action floors at inline approval](/book/human-in-the-loop/risk-tiers) no matter how small the amount. But it gets whoever is already on the ticket, deciding in the console with the context in front of them, rather than a queued request to the lead. That is where the approval budget is preserved: not by letting money move unwatched, but by keeping the lead's queue for the twenty-odd decisions a week that genuinely need a second person, so those get more than eleven seconds.
 
----
-
-Next: [LangGraph Interrupts vs. Temporal Signals](/book/human-in-the-loop/interrupts-vs-signals), two mechanisms for the same pause. Which one owns the wait, and what happens when both think they do.
-
 ## Takeaways
 
 - Three decisions make a gate: where it sits, what it shows, and what answers it accepts. Most teams decide only the first.
@@ -144,3 +140,7 @@ Next: [LangGraph Interrupts vs. Temporal Signals](/book/human-in-the-loop/interr
 - Approvals expire. An approval is a decision about a state, and the state moves. Set expiry from data volatility, show the remaining validity, and enforce it in a validator.
 - Match response-time lanes to risk. One mixed queue gives deliberate decisions the fast lane's attention.
 - Use an update rather than a signal, so the reviewer learns whether the decision was accepted and staleness can be rejected before it is recorded.
+
+---
+
+The gate is specified, and both frameworks in this book claim to implement it. Next: [LangGraph Interrupts vs. Temporal Signals](/book/human-in-the-loop/interrupts-vs-signals), on which one owns the wait, and what breaks when both believe they do.

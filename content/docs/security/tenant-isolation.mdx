@@ -192,10 +192,6 @@ Isolation is one of the few properties in agentic systems that admits a hard, de
 
 The vector index gets full separation rather than a filter, and it is worth saying why the inconsistency is deliberate: it is the store where a single missing predicate returns the *most* content, ranked by relevance, to a question that was designed to find the good parts. Where the blast radius of one bug is highest, buy the layer that survives your own bugs.
 
----
-
-Next: [Sandboxing and Credential Boundaries](/book/security/sandboxing), where code runs, where secrets live, and making sure those are never the same place.
-
 ## Takeaways
 
 - Securing the vector index is the part everyone does. The leak comes from the checkpointer, the workflow history, the memory store, the cache, the trace, or the eval set.
@@ -210,3 +206,7 @@ Next: [Sandboxing and Credential Boundaries](/book/security/sandboxing), where c
 - One decision point or none. Three partial authorization systems have the security of the weakest.
 - Tenancy must survive pauses, resumption, retries on other machines, and fan-out. Put it in the run's identity, re-derive on resume, and pass it explicitly across every boundary.
 - Isolation admits deterministic tests. Cross-tenant negative suites per store, a missing-filter canary, wrong-tenant resumption, and a store inventory checked in CI.
+
+---
+
+Every boundary so far has been drawn around data. Next: [Sandboxing and Credential Boundaries](/book/security/sandboxing), on where code runs and where secrets live, and making certain those are never the same process.

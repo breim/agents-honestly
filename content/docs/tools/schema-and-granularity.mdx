@@ -216,10 +216,6 @@ No tool at rung ①. That is not a policy Atlas follows; it is what happens when
 
 The number worth tracking is not the tool count. It is **how many of the twenty tickets end in a refusal because no tool fits**. That is your rung-③ tail showing itself, and it is the only evidence that should make you add a tool or move one up the ladder. [Part XIV](/book/evals/datasets) makes that measurement routine.
 
----
-
-Next: [Read Tools and Write Tools](/book/tools/read-and-write-tools), different risk, different permissions, different review. Treating them alike is how agents cause incidents.
-
 ## Takeaways
 
 - `execute_sql`, `run_bash`, and `http_request` are one pattern: a `string` parameter that is really a program. Everything Part IV found in text-to-SQL follows from that and appears wherever the pattern does.
@@ -233,3 +229,7 @@ Next: [Read Tools and Write Tools](/book/tools/read-and-write-tools), different 
 - Nothing in a schema prevents an invented ID. Say which tool produces it, and check existence in the handler.
 - State the default of every optional parameter, and give every property a description. They are cached, and therefore nearly free.
 - Track the tickets that end in a refusal for want of a tool. That list, not intuition, is what justifies the next tool.
+
+---
+
+Every rule so far has applied to all tools equally, which is the last time that will be true. Next: [Read Tools and Write Tools](/book/tools/read-and-write-tools), where one half can be retried all afternoon and the other half spends money.

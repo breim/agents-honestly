@@ -129,10 +129,6 @@ The one place Atlas would pay the tax happily: a bulk backlog analysis over four
 
 - [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system), Anthropic: the 15× token figure, the variance finding, and the architecture the numbers describe.
 
----
-
-Next: [Supervisor and Handoff](/book/multi-agent/supervisor-and-handoff), the two topologies that hold up in production, and how they differ in failure.
-
 ## Takeaways
 
 - Reported multi-agent systems use roughly 15× the tokens of a chat interaction; single agents about 4×.
@@ -147,3 +143,7 @@ Next: [Supervisor and Handoff](/book/multi-agent/supervisor-and-handoff), the tw
 - The production shape that works: an orchestrator that plans, workers that never talk to each other, and a verification pass that reads sources rather than conclusions.
 - If you are paying the tax: pass references not payloads, type the handoff, keep worker contexts narrow, cache the shared prefix, batch the workers, and budget the whole topology rather than each agent.
 - Prefix caching on a shared worker preamble is the single largest available discount on the multiplier.
+
+---
+
+The price list is written, and two topologies are worth paying it for. Next: [Supervisor and Handoff](/book/multi-agent/supervisor-and-handoff), where the interesting difference between them is not how they work but how they break.

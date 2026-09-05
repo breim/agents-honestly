@@ -1,5 +1,6 @@
 {
   "title": "Part III · Context Engineering",
+  "description": "Most reliability problems are not capability problems. They are the model being handed the wrong context.",
   "pages": [
     "context-as-budget",
     "system-prompt",

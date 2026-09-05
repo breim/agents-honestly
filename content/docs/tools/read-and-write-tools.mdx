@@ -175,10 +175,6 @@ The catalogue with its class, its credential, and its dispatch rule:
 
 Three credentials, not one. The distinction that matters is not that `get_order` *should not* issue a credit. It is that, holding `atlas_ro`, it **cannot**. That is the difference between a rule and a control, and it is the only form of the rule that survives a model reasoning about whether the rule applies right now.
 
----
-
-Next: [Idempotency](/book/tools/idempotency), the refund call timed out. Did it happen? Design so the answer never matters.
-
 ## Takeaways
 
 - A wrong read costs a turn; a wrong write costs an incident. The difference is not degree. It decides which mechanisms still apply.
@@ -192,3 +188,7 @@ Next: [Idempotency](/book/tools/idempotency), the refund call timed out. Did it 
 - Preview before execute from class ③ up. Approving a tool name is not approving an action.
 - Private data, untrusted content, and external communication: any two are manageable, all three are exploitable by a single poisoned document. Reported present in 98% of assessed agents. Atlas has all three, and the fix is architectural.
 - A restriction in the prompt is documentation; the same restriction in the credential is an invariant. A capability the agent inherits is a capability it has, including the one that satisfies a two-person gate by itself.
+
+---
+
+Sorting a write by how hard it is to undo assumes you know whether it happened. Next: [Idempotency](/book/tools/idempotency), where the connection drops before the answer comes back, and the design has to make that question stop mattering.

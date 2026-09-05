@@ -121,10 +121,6 @@ Two rows carry the design. **Cost per resolved ticket is gated; cost per attempt
 
 And the human wait is excluded from the action-required budget, because [a three-day approval is not latency](/book/durable-execution/signals-and-children). It is the system working. Including it would make the correct behaviour score as the worst.
 
----
-
-Next: [Continuous Integration for Agents](/book/evals/ci-for-agents), regression gates on a stochastic system: sample sizes, variance, flake budgets, statistical honesty.
-
 ## Takeaways
 
 - A quality-only eval has a cheat: more steps, bigger model, higher `k`, sample-and-vote. A team hill-climbing will find it. It selects for expensive systems and can do nothing else.
@@ -140,3 +136,7 @@ Next: [Continuous Integration for Agents](/book/evals/ci-for-agents), regression
 - Cost wins usually come from something that was being spent without buying anything. One reported case went from $3.40 to $2.30 per attempt with no change in resolution rate.
 - Four of the five biggest levers were decisions in earlier parts. Cost evals rarely create optimisations; they make earlier decisions visible and rank them.
 - Exclude human wait time from latency budgets. A three-day approval is the system working, and counting it makes correct behaviour score worst.
+
+---
+
+Part XIV has now produced a number for quality, for the path, and for the bill. Next: [Continuous Integration for Agents](/book/evals/ci-for-agents), on whether any of them holds still enough to stop a release.

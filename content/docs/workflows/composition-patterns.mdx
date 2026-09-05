@@ -126,10 +126,6 @@ That last point deserves emphasis. Voting works because the errors are independe
 
 Note that the agent loop is still exactly one step in the middle of all this. Everything in this chapter is the machinery around it, and the machinery is where most of the reliability lives.
 
----
-
-Next: [Routing and Orchestration](/book/workflows/routing-and-orchestration), classify first then dispatch. Orchestrator/worker without handing control flow to a model.
-
 ## Takeaways
 
 - Chaining wins because each step is separately testable and has a narrower job, not because the model is smarter in pieces. It costs summed latency and compounding error.
@@ -141,3 +137,7 @@ Next: [Routing and Orchestration](/book/workflows/routing-and-orchestration), cl
 - Decide partial-failure policy deliberately. Returning 37 of 40 results as though there were 37 is silent truncation.
 - Fire one call, await its first token, then fan out. Otherwise every parallel call misses the shared prefix cache.
 - Sectioning where aspects aren't independent is a chain in disguise, running with less information.
+
+---
+
+Every shape here assumed you already knew which one the request needed. Next: [Routing and Orchestration](/book/workflows/routing-and-orchestration), on making that choice explicit, and keeping it out of the model's hands.

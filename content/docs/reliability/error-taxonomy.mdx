@@ -3,7 +3,7 @@ title: "An Error Taxonomy for Agents"
 description: "Transient, permanent, policy, budget, semantic. Different failures, different responses."
 ---
 
-Here is one hour of Atlas's error log, deduplicated:
+By now [Atlas](/book/preface#what-youll-build) reads tickets, searches a corpus, queries a warehouse, moves money through tools, and waits on people, and each of those is a remote call that can fail in its own way. What follows is old distributed-systems discipline, aimed at a component that is dearer, slower, and sometimes wrong without raising. Here is one hour of Atlas's error log, deduplicated:
 
 ```
 Error: socket hang up
@@ -206,10 +206,6 @@ One root cause, four classes, four dashboards, and an incident that looks like f
 
 The last row is deliberately in the table and deliberately without a mechanism. It is the most expensive failure in the hour of logs at the top of this chapter, and Part XVI has nothing to say about it, which is worth seeing in the same table as the ones it does handle.
 
----
-
-Next: [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries), getting these wrong turns a provider blip into an outage and a bill.
-
 ## Takeaways
 
 - The only useful question about an error is what should happen next. The taxonomy is the answer set.
@@ -224,3 +220,7 @@ Next: [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries), 
 - Class ⑤ has no exception type. A semantic failure is a 200 OK with a clean trace and a wrong answer, and every dashboard stays green.
 - Keep semantic in the taxonomy anyway. Four classes make you believe your error rate is your failure rate; five tell you it is a floor.
 - One root cause cascades across classes: transient becomes budget becomes permanent becomes semantic. Carry the run ID and originating code through, or one incident reads as four.
+
+---
+
+Four of the five classes want a retry of some kind, and the word retry has been doing a lot of unexamined work. Next: [Timeouts, Retries, and Backoff](/book/reliability/timeouts-and-retries), where getting the numbers wrong turns a ninety-second blip into an afternoon.

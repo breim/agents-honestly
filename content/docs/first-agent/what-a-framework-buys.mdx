@@ -4,7 +4,7 @@ description: "Now that you have written it, an honest accounting of what you wou
 ---
 
 
-Atlas v0 resolves fourteen of twenty tickets in about eighty lines you wrote yourself. So: was that worth doing, or was it an exercise you could have skipped by importing something?
+[Atlas v0](/book/first-agent/the-loop-by-hand) resolves fourteen of twenty tickets in about eighty lines you wrote yourself. So: was that worth doing, or was it an exercise you could have skipped by importing something?
 
 It was worth doing, and not for the reason usually given. The point was not to appreciate the frameworks. It was to find out **which part is actually hard**, because that determines what you should be shopping for, and the answer surprises people.
 
@@ -149,10 +149,6 @@ You now have a working agent, a measured baseline, and a list of six things that
 
 Two catalog entries are worth reading now rather than later, because they harden what you just built without adding a dependency: [ReAct Loop](/book/patterns/control/react-loop), which is the loop from the last chapter with the five bounds that make it survivable, and [Escalation Ladder](/book/patterns/control/escalation-ladder), which turns [the escalation contract](/book/first-agent/the-problem) into named rungs the rest of the book keeps referring back to.
 
----
-
-Next: [Context as an Allocation Problem](/book/context/context-as-budget). Every claimant competes for the same space, and deciding who gets it is an engineering decision rather than a default.
-
 ## Takeaways
 
 - The agent loop is the cheapest part of the system. A product whose headline feature is the loop is selling you the easy part.
@@ -164,3 +160,7 @@ Next: [Context as an Allocation Problem](/book/context/context-as-budget). Every
 - Real cost: debugging through someone else's state model, version churn, and losing sight of the mechanics you just learned to see.
 - Tools, authorization, the outcome union, and the eval set stay yours across every rewrite. They are the durable work.
 - Adopt when the failure arrives, not in anticipation of it.
+
+---
+
+Part II ends with Atlas v0 running, scored, and honestly described, which is further than most pilots get. The durable work is yours under any framework, and the next piece of it is what the model gets to see at all. Next: [Context as an Allocation Problem](/book/context/context-as-budget), Part III, where every claimant competes for the same window and somebody has to hold the budget.

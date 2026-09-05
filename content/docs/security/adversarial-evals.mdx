@@ -259,10 +259,6 @@ Atlas seeds each tenant with unique canary records and runs all effects against 
 
 The CI gate is exact: no forbidden ID enters retrieval or graph state, no unapproved host receives an attempt, no effect bypasses the dispatcher, every run stays within bounds, and every block leaves a traceable terminal outcome. A nightly behavioral run varies the hostile text against the real model. Every successful path becomes a deterministic boundary test before the fix merges.
 
----
-
-Next: [PII, Audit, and Compliance](/book/security/pii-and-compliance), including the data copies, retention rules, and evidence obligations the test environment must respect.
-
 ## Takeaways
 
 - Red-team the application trajectory, not the model in isolation.
@@ -274,3 +270,7 @@ Next: [PII, Audit, and Compliance](/book/security/pii-and-compliance), including
 - Include durable waits, signals, policy changes, and retries in the attack surface.
 - Score findings by the boundary crossed and realized capability.
 - Promote every exploit to the lowest deterministic regression that can prevent it.
+
+---
+
+Next: [PII, Audit, and Compliance](/book/security/pii-and-compliance), including the data copies, retention rules, and evidence obligations the test environment must respect.

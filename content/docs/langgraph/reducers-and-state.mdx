@@ -151,10 +151,6 @@ Three decisions in there worth stealing.
 
 **`outcome` is the [union from Part II](/book/first-agent/the-loop-by-hand)**, now a state field. `finalize` asserts it is set, which makes "fell out of the graph without deciding anything" a caught error rather than a ticket marked resolved.
 
----
-
-Next: [Conditional Edges and Subgraphs](/book/langgraph/routing-and-subgraphs). Branching, loops, and composing graphs into reusable components.
-
 ## Takeaways
 
 - The merge rule for a state key is its reducer. Default is overwrite, which is right for scalars and wrong for anything accumulating.
@@ -167,3 +163,7 @@ Next: [Conditional Edges and Subgraphs](/book/langgraph/routing-and-subgraphs). 
 - Split the schema into decision state and transcript. Conditional edges should read only the former, which makes them unit-testable.
 - The decision half is the typed scratchpad from Part III with persistence attached, and it gives you the poisoning defense structurally, because only the tool node can write the verified value.
 - Set tenancy once at START, and let no node return it.
+
+---
+
+With state split and typed, an edge can carry a decision instead of a transcript. Next: [Conditional Edges and Subgraphs](/book/langgraph/routing-and-subgraphs), branching, loops, and composing graphs into things worth reusing.

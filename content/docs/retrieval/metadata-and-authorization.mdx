@@ -135,10 +135,6 @@ Every chunk carries `tenant_id`, and Meridian's corpus additionally carries `tie
 
 `search()` takes the principal as its second positional argument and there is no overload without it. Untagged chunks are unreachable by schema constraint. Retrieved document IDs are logged per request. And the negative test set contains the ticket that asks, in good faith, about an order belonging to someone else, because that ticket will arrive, and it should produce an escalation rather than an answer.
 
----
-
-Next: [Lexical Search and Why You Still Need It](/book/retrieval/lexical-search), on BM25, exact match, and the ticket ID that semantic search will never find.
-
 ## Takeaways
 
 - Metadata filtering is presented as an optimization and functions as an access control. Same code, different consequence class.
@@ -150,3 +146,7 @@ Next: [Lexical Search and Why You Still Need It](/book/retrieval/lexical-search)
 - Authorization travels with the data. Summaries, memory, and caches all inherit the restriction, and a cache key without the principal is a cross-tenant bug waiting for traffic.
 - Indexed ACLs go stale like any other copy. Reconcile on a schedule, on change events, or verify at query time depending on what a wrong answer costs.
 - Test with negatives. "This document ID never appears" is a rare deterministic assertion in this field, so use it.
+
+---
+
+A correctly filtered semantic search still cannot find a string. Next: [Lexical Search and Why You Still Need It](/book/retrieval/lexical-search), and the ticket ID no embedding will ever put in the top five.

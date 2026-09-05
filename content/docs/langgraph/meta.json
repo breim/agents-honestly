@@ -1,5 +1,6 @@
 {
   "title": "Part VII · Agent & Graph Engineering",
+  "description": "LangChain and LangGraph, treated as implementations of the engineering in Parts III–VI rather than as the subject.",
   "pages": [
     "langchain-honestly",
     "state-nodes-edges",
