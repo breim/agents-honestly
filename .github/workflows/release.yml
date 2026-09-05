@@ -2,11 +2,28 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'content/docs/**'
+      - 'public/hero-dither-cover.png'
+      - 'scripts/build-epub.mjs'
+      - 'scripts/cover.mjs'
+      - 'scripts/epub/**'
+      - 'src/lib/shared.ts'
+      - 'package.json'
+      - 'bun.lock'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+# Two merges landing a minute apart would otherwise race to publish, and the loser could
+# overwrite the winner's asset.
+concurrency:
+  group: edition
+  cancel-in-progress: true
 
 jobs:
   epub:
@@ -25,17 +42,6 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # A tag that disagrees with the manifest ships an edition whose version nobody can
-      # trace back, and it is only ever noticed several releases later.
-      - name: Check the tag matches package.json
-        run: |
-          tagged="${GITHUB_REF_NAME#v}"
-          declared="$(bun --print 'require("./package.json").version')"
-          if [ "$tagged" != "$declared" ]; then
-            echo "tag $GITHUB_REF_NAME does not match package.json version $declared"
-            exit 1
-          fi
-
       - run: bun run build:epub
 
       # Guards against a build that walked no chapters: the package would still be a valid
@@ -52,7 +58,25 @@ jobs:
           unzip -q epubcheck.zip
           java -jar epubcheck-5.2.1/epubcheck.jar dist/agents-honestly.epub
 
+      # The site links the book at /releases/latest/download, so the edition is one release
+      # that keeps its name and follows main, rather than one release per merge. The tag is a
+      # moving pointer for the same reason, so the release page shows the commit it was built
+      # from. A branch filter cannot match a tag push, so this does not retrigger the job.
+      - name: Move the edition tag to this commit
+        run: |
+          git tag --force edition
+          git push --force origin refs/tags/edition
+
+      - id: built
+        run: echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: edition
+          name: The current edition
+          body: |
+            The book as it stands on `main`.
+
+            Built ${{ steps.built.outputs.date }} from ${{ github.sha }}.
           files: dist/agents-honestly.epub
-          generate_release_notes: true
+          make_latest: true
