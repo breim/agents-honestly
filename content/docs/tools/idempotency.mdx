@@ -183,10 +183,6 @@ Sizing that window, storing the keys, and the honest accounting of what "exactly
 
 The last row is the payoff worth stating explicitly. Four of Atlas's tools needed real work in this chapter and the rest needed none, because [the read/write split](/book/tools/read-and-write-tools) already did the sorting. Idempotency is expensive to retrofit and nearly free to design in, and the difference between those two experiences is entirely whether you classified your tools before you shipped them.
 
----
-
-Next: [Errors as Instructions](/book/tools/errors-as-instructions), a tool error is a prompt. Write it for the model that has to recover from it.
-
 ## Takeaways
 
 - Three outcomes, not two: succeeded, failed, and unknown. Most timeouts happen on the response, so "unknown" leans toward *it happened*.
@@ -200,3 +196,7 @@ Next: [Errors as Instructions](/book/tools/errors-as-instructions), a tool error
 - External writes cannot be made naturally idempotent, because the dedup would live in someone else's system. Check the key before sending, and let the send be the only effect in its unit of work.
 - Every irreversible write needs a paired read that confirms its outcome by reference. Without it, "unknown" is unresolvable.
 - Agents repeat 15–30% of tool calls. This is a third of your write traffic, not an edge case.
+
+---
+
+A retry is only safe if whatever decides to retry was told enough to decide. Next: [Errors as Instructions](/book/tools/errors-as-instructions), because the string a tool returns is a prompt, read by something that has to recover from it.

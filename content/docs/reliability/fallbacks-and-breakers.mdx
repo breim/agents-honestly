@@ -173,10 +173,6 @@ The last two rows are what would have caught the opening scene on day one instea
 
 And row 6 being available at *any* tier, while rungs 4 and 5 are capped at tier 0, is the design decision that matters most. When the choice is a worse answer or a slower one, an agent that can hand work to a person has an option that a pure inference pipeline does not.
 
----
-
-Next: [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure), sharing a finite provider quota across everything that wants it.
-
 ## Takeaways
 
 - A fallback is not a transparent substitute. It is a different system running production traffic that you have never evaluated.
@@ -194,3 +190,7 @@ Next: [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure), 
 - Fail over at run boundaries, not mid-run. A model that did not make the first twelve decisions should not inherit them mid-conversation.
 - Everyone's secondary is the same secondary. The rungs guaranteed to be available are reduced scope, queueing, and humans.
 - A fallback provider is a different data processor. Pin the region and settle the terms, or remove it from the ladder.
+
+---
+
+Every rung on that ladder assumes there is quota left to fall back into. Next: [Concurrency, Rate Limits, Backpressure](/book/reliability/backpressure), on sharing one finite provider quota between everything that wants it, your own eval suite included.

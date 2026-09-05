@@ -3,7 +3,7 @@ title: "Computer-Using Agents"
 description: "Browsers, desktops, screenshots, DOMs, waits, session isolation, visual injection, and the cases where an API remains the better tool."
 ---
 
-The supplier portal has no API. A person signs in, searches an order, opens a modal, copies a delivery date, and downloads a PDF. So someone gives Atlas a browser and calls the missing integration solved.
+The supplier portal has no API. To answer one of Meridian Supply's order-status tickets, a person signs in, searches the order, opens a modal, copies a delivery date, and downloads a PDF. So someone gives [Atlas](/book/preface#what-youll-build), the agent that works those tickets, a browser and calls the missing integration solved.
 
 The browser has turned one typed tool into hundreds of possible clicks. Every pixel can change, every page can contain hostile text, and the session holds credentials that may reach far beyond the task.
 
@@ -216,10 +216,6 @@ Submission is a tier-1 action. The adapter stops at a stored confirmation view, 
 - [Playwright locators](https://playwright.dev/docs/locators), semantic locator guidance and strict target resolution.
 - [Playwright auto-waiting](https://playwright.dev/docs/actionability), actionability checks and retrying assertions.
 
----
-
-Next: [Coding Agents and Workspaces](/book/tools/coding-agents-and-workspaces), applying the same narrow-capability and isolated-session rules to a repository rather than a browser.
-
 ## Takeaways
 
 - Prefer APIs, then semantic browser locators, then scripts, and use screenshot coordinates only when no structure exists.
@@ -230,3 +226,7 @@ Next: [Coding Agents and Workspaces](/book/tools/coding-agents-and-workspaces), 
 - Consent, login, terms acceptance, and identity changes are effects with policy.
 - Re-observe after uncertainty. Repeating the last click can duplicate a real action.
 - Verify writes through an independent read and score the whole browser trajectory.
+
+---
+
+Next: [Coding Agents and Workspaces](/book/tools/coding-agents-and-workspaces), applying the same narrow-capability and isolated-session rules to a repository rather than a browser.

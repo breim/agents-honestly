@@ -1,5 +1,6 @@
 {
   "title": "Part XI · Agentic Systems on Temporal",
+  "description": "Where the two halves meet: a nondeterministic decision-maker inside a system built on deterministic replay.",
   "pages": [
     "not-a-background-job",
     "agent-as-workflow",

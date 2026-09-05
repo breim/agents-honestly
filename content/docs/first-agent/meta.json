@@ -1,5 +1,6 @@
 {
   "title": "Part II · From LLM to Agent",
+  "description": "Build the loop by hand, with no framework, so you know exactly what every abstraction is doing for you later.",
   "pages": [
     "the-problem",
     "one-call",

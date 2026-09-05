@@ -209,10 +209,6 @@ Five chapters on being able to see what happened.
 
 The through-line is that **an agent's failures do not announce themselves**, so observability is not a supporting function here. It is the mechanism by which you find out anything at all. Everything Part XVI is about to do depends on it: you cannot classify errors you did not record, tune retries you cannot count, or trust a fallback whose output you never compared.
 
----
-
-Next: [An Error Taxonomy for Agents](/book/reliability/error-taxonomy). Transient, permanent, policy, budget, semantic. Different failures, different responses.
-
 ## Takeaways
 
 - When quality moves and nothing was deployed, the question is not what broke. It is which of four things changed: the model, the data, the users, or you.
@@ -230,3 +226,7 @@ Next: [An Error Taxonomy for Agents](/book/reliability/error-taxonomy). Transien
 - Three internal drift sources the ML framing misses: memory that accumulates wrong facts, procedural habits reinforced by successful-looking runs, and downstream tool schemas that shift under you.
 - Tool-contract drift is the source most often misdiagnosed as "the model got worse."
 - A canary failure comes with a reproducible fixture, which is what turns "it feels different" into a vendor report.
+
+---
+
+Part XV leaves the agent legible: one trace per run under names somebody else already agreed, any past failure replayable, cost attributed per tenant, and a canary that notices when the ground moves. Drift was the failure that hides. Next: [An Error Taxonomy for Agents](/book/reliability/error-taxonomy), Part XVI, and the failures that announce themselves, which turn out to want five different responses rather than one `catch`.

@@ -11,7 +11,7 @@ import { notFound } from 'next/navigation';
 import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
-import { docsRoute, gitConfig } from '@/lib/shared';
+import { appName, docsRoute, gitConfig } from '@/lib/shared';
 import { ReadMarker } from '@/components/book/read-marker';
 import { LabLink } from '@/components/book/lab-link';
 
@@ -58,7 +58,7 @@ export async function generateMetadata(props: PageProps<'/book/[[...slug]]'>): P
   if (!page) notFound();
 
   return {
-    title: page.data.title,
+    title: `${page.data.title} · ${appName}`,
     description: page.data.description,
     openGraph: {
       images: getPageImageUrl(page).url,

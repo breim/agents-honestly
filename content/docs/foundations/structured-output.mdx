@@ -172,10 +172,6 @@ Structured output moves a whole category of failure out of runtime: your program
 
 What it does not do is make the model reliable. The shape is deterministic; the content is still drawn from a distribution, and the same input can produce a different but equally valid object tomorrow. That gap between "parses every time" and "answers the same every time" is the subject of the next chapter.
 
----
-
-Next: [Why Your Agent Is Flaky](/book/foundations/nondeterminism), sampling, the reproducibility you can and cannot buy, and what it does to your idea of a test.
-
 ## Takeaways
 
 - Constrained decoding compiles the schema into a state machine and masks illegal tokens at each step. Invalid output is unreachable, not merely unlikely.
@@ -187,3 +183,7 @@ Next: [Why Your Agent Is Flaky](/book/foundations/nondeterminism), sampling, the
 - Bounds and lengths are not expressible in the grammar; they get validated after the fact. Constrain what the grammar can; validate the rest in code, where the policy lives anyway.
 - Enums are the highest-value constraint available: they delete a class of branch bug outright.
 - Still handle truncation and refusal, and give every field that might genuinely be unknown a way to say so, or the schema will force a hallucination.
+
+---
+
+A schema guarantees shape and nothing else. Next: [Why Your Agent Is Flaky](/book/foundations/nondeterminism), where the guarantee you actually wanted, the same input producing the same output, turns out not to be for sale.

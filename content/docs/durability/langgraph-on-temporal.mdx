@@ -113,10 +113,6 @@ The one thing to notice: `check_policy` being the sole workflow node is not a co
 - [LangGraph integration for the Temporal Python SDK](https://docs.temporal.io/develop/python/integrations/langgraph), plugin setup and where graph execution lands between workflow and activity.
 - [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), the checkpointing model the plugin has to compose with.
 
----
-
-Next: [Long-Lived Agents](/book/durability/long-lived-agents). One workflow per case, alive for weeks: entity workflows, signals for inbound events, continue-as-new as history grows.
-
 ## Takeaways
 
 - The integration runs a LangGraph graph as a Temporal workflow with per-node activity dispatch and checkpointing at every node. It supports both the graph and functional APIs, plus interrupts, `Send`, and continue-as-new.
@@ -132,3 +128,7 @@ Next: [Long-Lived Agents](/book/durability/long-lived-agents). One workflow per 
 - Temporal's history replaces the LangGraph checkpointer rather than complementing it, and graph time travel becomes replay debugging.
 - You are now satisfying two determinism models at once, and a bad run can be a bug in either. That is the main argument against adopting it reflexively.
 - Use it when a real graph already exists. Write the workflow directly when the shape is one loop with two exits, which is most agents.
+
+---
+
+Every version of Atlas so far starts, works one ticket, and ends inside ten minutes. Next: [Long-Lived Agents](/book/durability/long-lived-agents), where the customer replies on Thursday and the case has to still be there.

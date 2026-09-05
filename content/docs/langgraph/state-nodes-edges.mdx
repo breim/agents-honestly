@@ -201,10 +201,6 @@ Atlas qualifies: three run shapes, an approval pause, and a cycle. Most of what 
 
 - [ReAct: Synergizing Reasoning and Acting in Language Models](https://arxiv.org/abs/2210.03629), Yao et al., 2022, the loop that every framework's prebuilt agent implements.
 
----
-
-Next: [Reducers and State Schemas](/book/langgraph/reducers-and-state), what flows along an edge, what must not, and why this is where graphs get subtly wrong.
-
 ## Takeaways
 
 - State, nodes, edges. The primitives are trivial; the consequence is that control flow becomes data rather than instructions.
@@ -217,3 +213,7 @@ Next: [Reducers and State Schemas](/book/langgraph/reducers-and-state), what flo
 - `compile()` catches structural bugs a hand-written loop had no way to detect: an unreachable node, a missing path to `END`.
 - The graph makes position serializable; a checkpointer with durable storage is what persists it. Replay is only as deterministic as your nodes are pure.
 - It earns its overhead with multiple run shapes, pause-and-resume, or a reader who isn't the author. A straight line is a function.
+
+---
+
+Nodes returned partial updates and something merged them, quietly, without being asked how. Next: [Reducers and State Schemas](/book/langgraph/reducers-and-state), which is where graphs go subtly wrong.

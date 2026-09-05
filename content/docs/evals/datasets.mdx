@@ -101,10 +101,6 @@ The `action required` route has the smallest production sample and the largest a
 
 The original twenty tickets are still there, inside the replay bucket, where they have earned a permanent place. Every one of them caught something once.
 
----
-
-Next: [Scoring](/book/evals/scoring). Deterministic checks, rubrics, pairwise comparison, and LLM-as-judge, including calibrating a judge you can trust.
-
 ## Takeaways
 
 - Twenty cases is a smoke test. A release decision needs a set built on purpose.
@@ -121,3 +117,7 @@ Next: [Scoring](/book/evals/scoring). Deterministic checks, rubrics, pairwise co
 - If two people cannot follow your guidance consistently, you do not have a definition of success. A disagreeing pair is a spec bug, not an annotator problem.
 - A set harvested from production is a second copy of customer data, with a different lifetime and usually worse discipline than the system it came from.
 - When production failures stop appearing in the set, coverage has decayed. Refresh the production bucket; keep the replay bucket forever.
+
+---
+
+A set of cases with agreed answers is half an instrument. Next: [Scoring](/book/evals/scoring), on what decides whether each case passed, in the order of preference most teams try backwards.

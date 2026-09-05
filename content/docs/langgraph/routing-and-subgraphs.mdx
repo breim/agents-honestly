@@ -136,10 +136,6 @@ Everything else is plain nodes with conditional edges, and the routers are the b
 
 Note the pattern: **draw the subgraph boundaries where the uncertainty is.** The unbounded, model-driven, hard-to-reason-about part gets the tightest contract. That is a general principle worth more than the framework mechanics.
 
----
-
-Next: [Checkpoints, Persistence, Resumability](/book/langgraph/persistence), pausing a graph and picking it up later, and the exact point where this stops being enough.
-
 ## Takeaways
 
 - A conditional edge is a pure function of state plus a declared destination list. The list is what makes the graph statically analysable.
@@ -153,3 +149,7 @@ Next: [Checkpoints, Persistence, Resumability](/book/langgraph/persistence), pau
 - A transformed subgraph is sub-agent context isolation with a type signature, enforced by schema rather than discipline.
 - A single-use subgraph sharing all state is a section header with a checkpointing cost.
 - Draw subgraph boundaries where the uncertainty is: the most open-ended component deserves the tightest contract.
+
+---
+
+The graph is composable now, and it still dies with the process. Next: [Checkpoints, Persistence, Resumability](/book/langgraph/persistence), which justifies everything Part VII has asked of you, and then shows you exactly where it stops.

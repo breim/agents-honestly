@@ -130,10 +130,6 @@ Postgres, pgvector, HNSW, roughly 40,000 policy chunks. Filters: `superseded_at 
 
 The part worth stealing: **the version filter is not optional and not a ranking signal.** It is a `WHERE` clause, enforced in the one function that does retrieval, exactly like tenancy. Meridian's corpus contains contradictory documents by design, which is why the [problem chapter](/book/first-agent/the-problem) flagged it, and the resolution is structural, not semantic. Never ask an embedding to prefer the current version. Ask the database.
 
----
-
-Next: [Approximate Search, Honestly](/book/retrieval/ann-indexes), covering HNSW, IVF, quantization, and the recall / latency / memory / build-time quadrilemma you are actually choosing between.
-
 ## Takeaways
 
 - Vector search is an index type, not a product. Starting in Postgres makes that visible and puts vectors next to the data they describe.
@@ -144,3 +140,7 @@ Next: [Approximate Search, Honestly](/book/retrieval/ann-indexes), covering HNSW
 - Filtered-recall degradation is invisible on normal dashboards. It looks like "search got worse."
 - A good reason to separate is workload isolation; a bad reason is an unfiltered latency benchmark.
 - Put retrieval behind one function. Filters scattered across call sites is how tenancy bugs ship.
+
+---
+
+Everything to here has assumed the search is exact. Next: [Approximate Search, Honestly](/book/retrieval/ann-indexes), where it stops being exact and you choose, knowingly, which of recall, latency, memory and build time to give up.

@@ -210,10 +210,6 @@ Two honest limits, in the pattern of this part.
 
 The `send_reply` row is the shape to notice, and it recurs whenever this is done well: the strongest scoping did not add a check, it **removed a parameter**. There is no recipient argument to manipulate, so no policy about recipients has to be enforced, tested, or kept correct as the code changes. A capability the model cannot express is cheaper and more durable than one you validate on every call.
 
----
-
-Next: [The Agent Is Not a Superuser](/book/security/identity), propagating user identity through the agent so it can never read what the user could not.
-
 ## Takeaways
 
 - Unused permissions used to be latent. An agent chooses at runtime, from attacker-influenced text, so every unused grant is now reachable.
@@ -229,3 +225,7 @@ Next: [The Agent Is Not a Superuser](/book/security/identity), propagating user 
 - A dynamic tool catalogue invalidates a point-in-time audit. Pin the servers, hash the tool definitions, deny newly appeared tools by default.
 - Least privilege bounds the incident; it does not prevent it. An in-policy action taken for a hostile reason is still unwanted.
 - The strongest scoping removes a parameter rather than validating it. A capability the model cannot express needs no policy.
+
+---
+
+A minimal permission set is still one permission set, held by an agent that serves everybody. Next: [The Agent Is Not a Superuser](/book/security/identity), on carrying the person's own authority through the run, so it can never read what they could not.

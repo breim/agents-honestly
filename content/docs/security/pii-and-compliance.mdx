@@ -235,10 +235,6 @@ Part XVIII assembles the whole thing: every component, every arrow, and which of
 - [Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj/eng), the AI Act as adopted.
 - [European Commission AI Act implementation FAQ](https://digital-strategy.ec.europa.eu/en/faqs/navigating-ai-act), the maintained official source for obligations and timeline.
 
----
-
-Next: [AI Governance](/book/production/ai-governance), inventory, ownership, impact, evidence, exceptions, literacy, and retirement before the architecture is approved.
-
 ## Takeaways
 
 - A classical application reads personal data. An agent copies it, into prompts, traces, checkpoints, workflow histories, memory, summaries, and eval sets.
@@ -255,3 +251,7 @@ Next: [AI Governance](/book/production/ai-governance), inventory, ownership, imp
 - Erasure is a fan-out. Build a deletion registry naming every store, its key, its mechanism, and its latency. The registry *is* the deliverable, and it answers subject-access requests read backwards.
 - Append-only stores need crypto-shredding: encrypt per subject, destroy the key. Designed in at the start or not available at all.
 - Every effective control in Part XVII is structural; every ineffective one is a request. None of them could have been implemented last.
+
+---
+
+Atlas leaves this part holding the tools it started with and far less room to misuse them: taint that stops a write, permissions scoped to the run's own entities, a person's authority carried through, and a registry naming every copy of a customer's data. Next: [AI Governance](/book/production/ai-governance), Part XVIII, on inventory, ownership, evidence, and retiring an agent safely.

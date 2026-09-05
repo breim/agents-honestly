@@ -203,10 +203,6 @@ The recurring theme: **most of this part is about making failures loud, early, a
 
 Part XVII takes the same posture toward an adversary who is trying to produce exactly that on purpose.
 
----
-
-Next: [The Threat Model](/book/security/threat-model), what an attacker actually wants from your agent, and which of your components they will use to get it.
-
 ## Takeaways
 
 - Every reliability mechanism is a claim until you have observed it working. Recovery paths are the least-executed code in the system and they debut during incidents.
@@ -223,3 +219,7 @@ Next: [The Threat Model](/book/security/threat-model), what an attacker actually
 - Durable execution lets you fast-forward a three-day approval pause into a CI test. Use it. Otherwise a customer finds that bug.
 - Record injected faults on the span, or a game day pages the on-call for real.
 - Most of Part XVI is about making failures loud, early, and cheap, because the alternative is a confident wrong answer nobody notices for six days.
+
+---
+
+Atlas survives a provider outage, a duplicated call, a starved queue and a killed worker, each of them proven by breaking it on purpose. All of it assumed the failures were accidents. Next: [The Threat Model](/book/security/threat-model), Part XVII, where somebody is causing them and choosing which of your components to use.

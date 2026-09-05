@@ -138,10 +138,6 @@ The test isn't run once. Two signals tell you a step is in the wrong column.
 
 Neither direction is a failure. A system where every step is in the right column *today* is a system whose steps have moved at least once.
 
----
-
-Next: [Sequential, Parallel, Fan-Out](/book/workflows/composition-patterns), the composition shapes that cover most of what people reach for an agent to do.
-
 ## Takeaways
 
 - Apply the test per step, not per system. Real systems are a deterministic backbone with intelligence at specific steps, and control returns to the backbone after each.
@@ -153,3 +149,7 @@ Next: [Sequential, Parallel, Fan-Out](/book/workflows/composition-patterns), the
 - Ask what assurance you need: a unit test, or a rate with a threshold. "It works 97% of the time" is fine for a draft and describes an incident for a policy check.
 - Deterministic bugs are fixed forever; adaptive errors are permanent rates that multiply across steps.
 - Promote a step to code when traces show the decision is always the same. Demote to adaptive when your branch list keeps growing. That's the input space telling you it isn't enumerable.
+
+---
+
+Sorting the steps into columns says nothing about how they join up. Next: [Sequential, Parallel, Fan-Out](/book/workflows/composition-patterns), the handful of shapes that cover most of what people reach for an agent to do.

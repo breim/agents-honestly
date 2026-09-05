@@ -1,5 +1,6 @@
 {
   "title": "Part XIV · Evals",
+  "description": "A retry policy cannot detect a wrong answer. This is the part of the book that can.",
   "pages": [
     "eval-discipline",
     "testing-pyramid",

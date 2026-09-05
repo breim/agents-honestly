@@ -185,10 +185,6 @@ Two limits, not one. The soft limit triggers a policy; the hard limit is the ass
 
 That log line is also the highest-value thing in this chapter operationally. The first time you plot it per step across a few hundred real runs, you will find one claimant taking three times what you assumed, and it is almost never the one you were optimizing.
 
----
-
-Next: [The System Prompt](/book/context/system-prompt), what belongs in it, what does not, and why the instructions you inherited from an older model now misfire.
-
 ## Takeaways
 
 - The default allocation policy is "whoever appends last wins." Every context incident starts there.
@@ -201,3 +197,7 @@ Next: [The System Prompt](/book/context/system-prompt), what belongs in it, what
 - Decide eviction order before you need it. Old facts are cheaper to lose than old instructions.
 - The mix shifts across a run: fixed overhead dominates early, history dominates late. Match the lever to the phase.
 - Log the per-request breakdown. One claimant is always three times what you assumed.
+
+---
+
+One claimant is always three times what you assumed, and the first place to look is the one you wrote yourself. Next: [The System Prompt](/book/context/system-prompt), re-paid in full on every request, and usually older than the model now reading it.

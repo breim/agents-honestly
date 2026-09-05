@@ -61,6 +61,13 @@ hr {
   opacity: 0.8;
 }
 
+.part-blurb {
+  font-size: 1.05em;
+  font-style: italic;
+  opacity: 0.8;
+  margin: 1em 0 0;
+}
+
 pre {
   font-family: 'Geist Mono', monospace;
   font-size: 0.8em;

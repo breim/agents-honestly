@@ -122,10 +122,6 @@ The deterministic assertions are the row worth noticing. **They have no sampling
 
 Which is the practical argument for [the scoring ladder](/book/evals/scoring) restated as a CI property: every criterion you move from a judge to an assertion is a criterion that stops needing a thousand cases to say anything.
 
----
-
-Next: [Online Evals and Guardrails](/book/evals/online-evals), scoring production traffic, shadow runs, canaries, and blocking the worst outputs before delivery.
-
 ## Takeaways
 
 - At a 70% rate, twenty cases carry a 95% interval of ±20 points. This book's own Part II scores were directional, not precise, and reporting them without the interval would have been a claim wearing a lab coat.
@@ -141,3 +137,7 @@ Next: [Online Evals and Guardrails](/book/evals/online-evals), scoring productio
 - Declare the re-run policy in advance. "Best of three" chosen beforehand is a design; "one more try" chosen after seeing red is p-hacking.
 - Gate what you can detect and report the rest. A gate on an undetectable effect is a coin flip with a changelog, and it destroys trust in the gates that were sound.
 - Deterministic assertions have no sampling error, so they gate on a single run at any set size, which is the CI argument for moving criteria down the scoring ladder.
+
+---
+
+A gate lets through anything smaller than it can measure, which leaves a debt this part has to settle somewhere else. Next: [Online Evals and Guardrails](/book/evals/online-evals), where the traffic is free, plentiful, and already in front of customers.

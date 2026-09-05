@@ -198,10 +198,6 @@ None of that is a feature you build. It is the shape of the thing, and Part XI i
 
 - [arXiv:2602.09345](https://arxiv.org/abs/2602.09345), the measured breakdown of where an agent run's latency actually goes.
 
----
-
-Next: [The Agent as a Workflow](/book/durability/agent-as-workflow), Atlas ported: the loop becomes a workflow, every model call and tool becomes an activity.
-
 ## Takeaways
 
 - Production agent runs cluster around five to eleven minutes, against proxy idle timeouts near sixty seconds. Raising the timeout does not close a gap whose tail runs to hours.
@@ -213,3 +209,7 @@ Next: [The Agent as a Workflow](/book/durability/agent-as-workflow), Atlas porte
 - Model reasoning is only 26–44% of end-to-end latency; initialization and tool execution dominate. Durability overhead is noise against that distribution.
 - Asynchronous is not invisible. Eight silent minutes is indistinguishable from broken, so the stream must be decoupled from the compute.
 - Using the entity as the workflow ID removes the mapping table, the duplicate-run race, and the progress table. They do not move, they cease to exist.
+
+---
+
+The objections are answered and no code has moved yet. Next: [The Agent as a Workflow](/book/durability/agent-as-workflow), the same eighty lines from Part II, with the loop as a workflow and every effect as an activity.

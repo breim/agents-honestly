@@ -108,10 +108,6 @@ And not for:
 
 The boundary is a sentence: **the AI SDK carries bytes to the browser; the workflow decides what happens.** Where that line blurs, the symptom is consistent: two step counters that disagree, and nobody able to say which run actually happened.
 
----
-
-Next: [Streaming UX](/book/interface/streaming-ux), token streaming, tool-call streaming, cancellation, and streams that survive a page refresh.
-
 ## Takeaways
 
 - The AI SDK is TypeScript-only, which is why most production systems split TypeScript for the interface and Python for retrieval and evaluation.
@@ -125,3 +121,7 @@ Next: [Streaming UX](/book/interface/streaming-ux), token streaming, tool-call s
 - The SDK is uniquely good at the transport and UI boundary, which is a real and fiddly problem, and at honest provider swapping. It is not a durability, evaluation, or retrieval layer.
 - The v5→v6 codemod migrates imports and flags, not custom renderers, hand-written tool-call switches, or provider adapters. Keep rendering thin so future migrations stay small.
 - The boundary in one sentence: the AI SDK carries bytes to the browser; the workflow decides what happens.
+
+---
+
+The SDK carries the bytes. What a browser does with them while eight minutes pass is a separate problem. Next: [Streaming UX](/book/interface/streaming-ux), including the stream that has to survive a page refresh.

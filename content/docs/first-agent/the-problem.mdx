@@ -149,10 +149,6 @@ The reason to do it now is not process hygiene. It is that **you cannot write th
 
 Only then do we write code. In the next chapter, exactly one API call.
 
----
-
-Next: [One Call, Then Structure](/book/first-agent/one-call), a raw completion and then a typed one. The smallest useful thing, and its limits.
-
 ## Takeaways
 
 - Specificity is not decoration. Almost every architectural question in this field only has an answer relative to a concrete system and a concrete question.
@@ -163,3 +159,7 @@ Next: [One Call, Then Structure](/book/first-agent/one-call), a raw completion a
 - A prompt instruction is not an invariant. If it must always hold, it belongs in code the model cannot route around.
 - Write the exclusions down. "Never closes a ticket it did not resolve" is worth more than most features.
 - Build the twenty-ticket set before the agent. Failing to write it is the cheapest possible signal that the problem isn't understood yet.
+
+---
+
+The specification is written, the twenty tickets have known answers, and nothing has been built. Next: [One Call, Then Structure](/book/first-agent/one-call), where the smallest possible thing gets scored against that set before anyone calls it an agent.

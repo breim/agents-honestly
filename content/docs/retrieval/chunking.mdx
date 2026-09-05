@@ -133,10 +133,6 @@ Document-aware splitting on the policy corpus, because those documents have numb
 
 Roughly 40,000 chunks from 1,200 documents, an average of a bit over thirty per document, which is about right for policy prose. If that number were 400 per document, the chunks would be too small to answer with; if it were three, they'd be too blurry to find.
 
----
-
-Next: [Metadata Is Authorization](/book/retrieval/metadata-and-authorization), on tenant, department, access level, and why filtering is a security control rather than an optimization.
-
 ## Takeaways
 
 - Chunking sets the ceiling for everything downstream. No embedding model, reranker, or hybrid strategy recovers a fact split in half.
@@ -150,3 +146,7 @@ Next: [Metadata Is Authorization](/book/retrieval/metadata-and-authorization), o
 - Contextual retrieval and late chunking attack boundary context loss directly, so use them once you've proven that's the bottleneck.
 - Read fifty chunks cold. It finds more than a week of parameter sweeps.
 - Re-chunking means re-embedding. It's a schema decision with a migration cost, so version it.
+
+---
+
+A chunk carries more than its text. It carries who was allowed to read the document it came from. Next: [Metadata Is Authorization](/book/retrieval/metadata-and-authorization), where the filter everyone introduces as a relevance trick turns out to be doing security work.

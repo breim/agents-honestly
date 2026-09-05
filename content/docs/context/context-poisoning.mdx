@@ -106,10 +106,6 @@ The through-line is that every one of these fails silently. Nothing in this part
 
 Part IV takes on the biggest claimant of all, which we have been referring to and deferring for five chapters: where the answer actually lives.
 
----
-
-Next: [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live), the routing decision that precedes every retrieval choice.
-
 ## Takeaways
 
 - The transcript has no provenance. By step twelve, a claim the model made at step four is indistinguishable from a fact a tool returned.
@@ -122,3 +118,7 @@ Next: [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live),
 - Four of the five defenses work by keeping things out of the transcript: verified-only state, re-read before acting, verify at the tool boundary, isolate noisy work.
 - Detect by grounding atomic claims against that run's tool results, and follow a claim across steps rather than scoring the final answer.
 - You cannot argue an agent out of a poisoned context. Rebuild from verified state, which requires having one.
+
+---
+
+Atlas now budgets its window, selects per request, keeps three kinds of memory apart, and can rebuild from verified state when its own history turns out to be wrong. All of that needs somewhere a fact was true before it was ever copied. Next: [Where Does the Answer Live?](/book/retrieval/where-does-the-answer-live), Part IV, and the routing decision that comes before any retrieval choice.

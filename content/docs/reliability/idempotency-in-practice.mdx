@@ -257,10 +257,6 @@ Every one of these is a real system with a real idempotency implementation.
 
 The `issue_credit` row is the one to copy. It has no dedup window because it has no dedup table. A unique constraint on the credits table does the work, permanently, and no approval pause can outlive it. The synthetic machinery in this chapter is the fallback for operations whose domain refused to give you a natural key, and every operation you can move to the first row is one fewer window to size correctly.
 
----
-
-Next: [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers). Degrading to a smaller model, another provider, or a human, instead of failing.
-
 ## Takeaways
 
 - Exactly-once delivery does not exist. Exactly-once *effect* does: at-least-once delivery plus a deduplication store you own.
@@ -276,3 +272,7 @@ Next: [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers)
 - A `FAILED` row is only retryable when the failure was provably before the effect. Timeouts and post-acceptance 5xxs are not. Use the paired read, and escalate if the read is unavailable.
 - Say "effectively-once," and say that it is bounded by the window. That caveat is exactly what "exactly-once" hides.
 - The illusion leaks, in order: the window expired, the key changed, the store was not atomic, the store was not durable, the model reformatted an argument.
+
+---
+
+Retries and dedup both assume the thing you are calling comes back eventually. Next: [Fallbacks and Circuit Breakers](/book/reliability/fallbacks-and-breakers), for when it does not, and for the failover that works so well nobody notices it for six days.

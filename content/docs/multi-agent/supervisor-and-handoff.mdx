@@ -183,10 +183,6 @@ The third row is the one worth dwelling on, because it is the design that gets p
 
 - [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system), Anthropic: the orchestrator-worker shape and the separate citation pass.
 
----
-
-Next: [When Not To](/book/multi-agent/when-not-to), solve it as a workflow first, and promote to multiple agents only when isolation or ownership demands it.
-
 ## Takeaways
 
 - Two topologies survive production: supervisor (one owner, delegating) and handoff (ownership transfers). Everything else adds boundaries.
@@ -203,3 +199,7 @@ Next: [When Not To](/book/multi-agent/when-not-to), solve it as a workflow first
 - If you use handoff: add a coordinator of last resort that owns termination, pass references instead of summaries, type and version the transfer contract, and dedupe transfers like any other effect.
 - One trace ID across every agent, with transfers recorded as spans carrying what was passed and why.
 - Triage → billing → refunds is not three agents. It is three branches of one agent's control flow, and drawing it as agents buys an org chart.
+
+---
+
+Both hold up, which makes the honest question how often either is the right answer. Next: [When Not To](/book/multi-agent/when-not-to), with the failure rates from sixteen hundred traces attached.

@@ -201,10 +201,6 @@ Take the twenty tickets. For each, write the questions that must be answered bef
 
 That loop is evaluation-driven by construction, which is the same discipline as everywhere else in this book: build a prototype, run it against realistic cases, read the failures, refine. It also means your tool surface is a thing with versions and a regression suite, not a thing you specified once. [Part XIV](/book/evals/datasets) is where that becomes formal; the sample you need to start already exists in `data/tickets.jsonl`.
 
----
-
-Next: [Schema and Granularity](/book/tools/schema-and-granularity), why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.
-
 ## Takeaways
 
 - Your existing API was designed for a consumer who reads docs, chains calls cheaply, and fails loudly. A model does none of those. A tool surface is a separate interface, the way a CLI and an SDK are separate interfaces.
@@ -216,3 +212,7 @@ Next: [Schema and Granularity](/book/tools/schema-and-granularity), why `execute
 - The model chooses the subject; your code supplies the requester. Identity is never in `input_schema`, and entitlement is enforced in the tool rather than requested in the prompt.
 - Consolidation trades composability for selection accuracy. Task-shaped tools are faster and cheaper when your guess about the task is right, and a dead end when it isn't.
 - Derive the surface from the ticket set, then measure which chains the model keeps repeating and collapse those. The tool catalogue is a versioned artifact with a regression suite.
+
+---
+
+A catalogue derived from the ticket set settles which tools exist. It settles nothing about how wide each one should be. Next: [Schema and Granularity](/book/tools/schema-and-granularity), why `execute_sql(query)` is a bad tool and `list_unpaid_invoices(customer_id)` is a good one.

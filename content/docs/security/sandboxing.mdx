@@ -217,10 +217,6 @@ The last row applies to the whole deployment rather than the sandbox, and it is 
 
 - [Firecracker specification](https://github.com/firecracker-microvm/firecracker/blob/main/SPECIFICATION.md), the ≤125 ms boot figure and the measurement conditions attached to it.
 
----
-
-Next: [The Agentic Supply Chain](/book/security/agentic-supply-chain), the models, datasets, tools, servers, agents, images, registries, and update channels that can change Atlas without a code deploy.
-
 ## Takeaways
 
 - A sandbox sharing an address space with your secrets is a naming convention, not a boundary.
@@ -237,3 +233,7 @@ Next: [The Agentic Supply Chain](/book/security/agentic-supply-chain), the model
 - One sandbox per run, destroyed after. Warm pools are fine; warm state is a cross-run leak.
 - Sandboxing contains code, not decisions. A perfectly isolated agent can still be talked into an in-policy action.
 - `run_python` is the largest single capability you can grant. If you can enumerate the operations, enumerate them instead.
+
+---
+
+Everything in this part so far assumes the system you audited is the system that runs. Next: [The Agentic Supply Chain](/book/security/agentic-supply-chain), where a catalogue updated overnight changes what Atlas can do without a deploy.

@@ -125,10 +125,6 @@ The through-line of the part: **production readiness for an agent is mostly the 
 
 Part XIX asks whether you should have built one agent or several, and, having spent twenty parts on how much machinery one agent needs, the answer is less obvious than the diagrams suggest.
 
----
-
-Next: [The Go-Live Readiness Review](/book/production/go-live-readiness-review), the evidence-backed gate for authority, recovery, quality, cost, security, ownership, and rollback.
-
 ## Takeaways
 
 - Three dashboard tiers: is it up, is it working, is it right. Conventional monitoring covers the first two completely and the third not at all.
@@ -146,3 +142,7 @@ Next: [The Go-Live Readiness Review](/book/production/go-live-readiness-review),
 - Write runbooks as typed graphs with explicit branches. The benefit is not automation: it is that nothing is ambiguous at 3am.
 - Ninety days: see it, bound it, measure it, break it. The opposite order to how these systems usually get built.
 - Production readiness for an agent is mostly the ability to answer questions about it. The systems that operate badly are rarely the ones with the worst models.
+
+---
+
+Everything in Part XVIII so far describes a system already carrying traffic. Next: [The Go-Live Readiness Review](/book/production/go-live-readiness-review), the gate it should have passed first, and the evidence each answer needs behind it.

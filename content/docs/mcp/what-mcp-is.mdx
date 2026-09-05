@@ -122,10 +122,6 @@ Meridian ends up on both sides of the protocol, and the asymmetry is the useful 
 - [Model Context Protocol specification, 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28), the current revision's architecture and primitives.
 - [Specification changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog), what changed from the preceding revision, and why the date in the version matters.
 
----
-
-Next: [Servers, Clients, Transports](/book/mcp/servers-clients-transports), building one, consuming one, and the auth story in between.
-
 ## Takeaways
 
 - MCP solves a distribution problem, not a capability one. It turns M×N bespoke integrations into M+N, the same trade LSP made for editors and ODBC made for databases.
@@ -140,3 +136,7 @@ Next: [Servers, Clients, Transports](/book/mcp/servers-clients-transports), buil
 - Revisions differ meaningfully: SSE deprecated in 2025-03-26, OAuth 2.1 in 2025-06-18, sessions removed in 2026-07-28. Check which one each side implements before debugging.
 - The costs: a network hop inside the agent loop, a dependency that changes without your deploy, descriptions you do not control, and a blast radius covering the whole declared catalogue.
 - A server that wraps your REST API one-to-one is the Part VIII anti-pattern with a new transport.
+
+---
+
+Three things were deferred to make that argument cleanly. Next: [Servers, Clients, Transports](/book/mcp/servers-clients-transports), where they turn out to be one thing wearing three names.

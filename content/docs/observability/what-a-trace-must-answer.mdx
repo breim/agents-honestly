@@ -118,10 +118,6 @@ The truncation flag is the row that looks trivial and is not. [Results are shape
 
 That distinction is the difference between fixing a tool and rewriting a prompt, and the flag costs one boolean.
 
----
-
-Next: [OpenTelemetry for GenAI](/book/observability/otel-genai), the semantic conventions for models, tokens, retrieval, and tool calls, and instrumenting the whole stack against them.
-
 ## Takeaways
 
 - Evals tell you a run was wrong; traces tell you why. APM can show every service behaving normally while the agent made the wrong decision inside a technically healthy request.
@@ -134,3 +130,7 @@ Next: [OpenTelemetry for GenAI](/book/observability/otel-genai), the semantic co
 - Use the business entity as the correlation ID and the trace, event history, eval score, audit record, and ticket all join without a mapping table.
 - The trace payload store is the third copy of your customers' data, with the most volume, the loosest access, and the retention policy nobody set.
 - Record a truncation flag. Without it, an answer that failed because a field was cut is indistinguishable from one that failed because the model ignored it, and that is the difference between fixing a tool and rewriting a prompt.
+
+---
+
+Eight questions, and nothing so far says what to call the fields that answer them. Next: [OpenTelemetry for GenAI](/book/observability/otel-genai), on the names everybody else has already agreed to use.

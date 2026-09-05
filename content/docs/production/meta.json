@@ -1,5 +1,6 @@
 {
   "title": "Part XVIII · Production Architecture",
+  "description": "The boxes, the arrows, and everything that has to be true before you point users at it.",
   "pages": [
     "ai-governance",
     "reference-architecture",

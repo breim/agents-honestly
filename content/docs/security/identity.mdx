@@ -191,10 +191,6 @@ The last row is the one that changes what happens *after* an incident. Before, t
 - [RFC 8693: OAuth 2.0 Token Exchange](https://datatracker.ietf.org/doc/html/rfc8693), delegation and impersonation semantics, and the `act` claim.
 - [OAuth for AI agents acting on behalf of a user](https://www.ietf.org/archive/id/draft-oauth-ai-agents-on-behalf-of-user-01.html), the agent-specific extension: an Internet-Draft, and treated here as one.
 
----
-
-Next: [Multi-Tenant Isolation](/book/security/tenant-isolation), RBAC, ABAC, row-level security, and retrieval filters as an authorization boundary.
-
 ## Takeaways
 
 - The common defect: the agent authenticates the user and then calls every backend with its own service credential. Nothing is broken; everything is wrong.
@@ -207,3 +203,7 @@ Next: [Multi-Tenant Isolation](/book/security/tenant-isolation), RBAC, ABAC, row
 - A scheduled agent with no user still needs a named human owner, a documented grant, and an expiry that forces re-approval.
 - Make it structural: no client constructor without a delegation. Identity that can be forgotten will be.
 - Every privileged action names the user, the agent, and the run. Any two of the three leave the "why was this allowed" question unanswerable.
+
+---
+
+Identity settles what one user may reach. It does not settle whose data a run is allowed to touch. Next: [Multi-Tenant Isolation](/book/security/tenant-isolation), where a filter, a cache key and a resumed run all have to agree about which customer this is.

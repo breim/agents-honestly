@@ -40,8 +40,11 @@ function navList(nodes) {
 
 /** Parts are sidebar groups on the web, where the reader always sees the tree. Read in
     sequence they need a page of their own, or Part II opens mid-stride. */
-const partPage = (part) =>
-  document(part.title, `<section epub:type="bodymatter"><h1 class="part-title">${escapeText(part.title)}</h1></section>`);
+const partPage = (part) => {
+  const blurb = part.description ? `<p class="part-blurb">${escapeText(part.description)}</p>` : '';
+
+  return document(part.title, `<section epub:type="bodymatter"><h1 class="part-title">${escapeText(part.title)}</h1>${blurb}</section>`);
+};
 
 function assignPartIds(nodes, prefix = 'part') {
   nodes.forEach((node, index) => {

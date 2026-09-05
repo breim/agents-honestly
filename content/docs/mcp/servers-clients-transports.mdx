@@ -230,10 +230,6 @@ Check the revision each side implements before debugging anything else. It is a 
 - [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707), resource indicators binding a token to its intended audience.
 - [RFC 7591](https://datatracker.ietf.org/doc/html/rfc7591), dynamic client registration. Still functional, and deprecated for this use.
 
----
-
-Next: [When a Plain Function Is Better](/book/mcp/when-a-function-is-better), a protocol boundary you do not need is a protocol boundary that can fail.
-
 ## Takeaways
 
 - Where the server runs decides everything else. stdio is a local subprocess with no transport auth; Streamable HTTP is a service with OAuth 2.1.
@@ -250,3 +246,7 @@ Next: [When a Plain Function Is Better](/book/mcp/when-a-function-is-better), a 
 - Credentials never enter the model's context. They live in the client's credential store and are injected at the transport layer.
 - Declaring a server without referencing it in the toolset exposes nothing and raises no error.
 - "We use MCP" does not identify a protocol version. Check the revision on both sides first.
+
+---
+
+You can build one now, consume one, and authorize it, which makes this a fair moment to ask whether you should. Next: [When a Plain Function Is Better](/book/mcp/when-a-function-is-better), because a protocol boundary you do not need is a protocol boundary that can fail.

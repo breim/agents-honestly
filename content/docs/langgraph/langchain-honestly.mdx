@@ -113,10 +113,6 @@ Four practices, all cheap:
 
 **And don't take "LangChain" as one decision.** It's five, they have different answers, and the most valuable one, the graph runtime, is the one you can take on its own.
 
----
-
-Next: [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The graph model, and rebuilding Atlas as an explicit state machine.
-
 ## Takeaways
 
 - Five different things share the name. Criticism and praise both get misapplied across them, and most "should we use LangChain" arguments are really about LangGraph.
@@ -128,3 +124,7 @@ Next: [State, Nodes, Edges](/book/langgraph/state-nodes-edges). The graph model,
 - Skip prebuilt agents as a default, loaders as an ingestion pipeline, and chains for two-line compositions.
 - Keep framework types out of your domain. Tools, authorization, prompts, outcomes, and evals stay yours.
 - Adopt per capability, wrap at the boundary, pin versions, and keep the direct-SDK escape hatch open.
+
+---
+
+Adopting per capability means starting with the one that earns it, and for this book that is the graph. Next: [State, Nodes, Edges](/book/langgraph/state-nodes-edges), three primitives, and Atlas rebuilt as a state machine you can point at.

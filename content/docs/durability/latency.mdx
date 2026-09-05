@@ -153,10 +153,6 @@ An eight-minute run that streams its reasoning, names the tool it is calling, an
 
 The last row is the point. Atlas optimizes one path, the one between a person acting and the system visibly responding. It leaves the other eight minutes alone, because the eight minutes are not where the impatience lives.
 
----
-
-Next: [Mapping Temporal Patterns to Agent Patterns](/book/durability/temporal-pattern-map), a direct cross-reference from the Temporal design-pattern catalog to the agent problem each one solves.
-
 ## Takeaways
 
 - Median agent runs are near eight minutes, and journalling a step costs single-digit milliseconds. Optimizing durability inside the loop is optimizing the wrong thing.
@@ -172,3 +168,7 @@ Next: [Mapping Temporal Patterns to Agent Patterns](/book/durability/temporal-pa
 - Initialization is 31–48% of end-to-end time. Worker warmth and connection pooling outrank every mechanism in this chapter.
 - Fewer round trips beats faster round trips: consolidating chained tools removes whole model turns.
 - Perceived latency is a different quantity from actual latency, and streaming is the only thing that moves it.
+
+---
+
+Part XI has now solved a dozen problems that somebody else hit first. Next: [Mapping Temporal Patterns to Agent Patterns](/book/durability/temporal-pattern-map), a direct cross-reference from a catalog written before any of this was about agents.

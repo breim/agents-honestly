@@ -285,10 +285,6 @@ Durable execution made the **machine** reliable. The [six failure clusters](/boo
 
 Resolution quality did not move, and should not have. Nothing about the model's decisions changed. What moved is every row below it, and those are the rows that decide whether the fourteen are trustworthy.
 
----
-
-Next: [LangGraph on Temporal](/book/durability/langgraph-on-temporal). The official plugin: choosing `execute_in` per node, what may run inside a workflow, and what must not.
-
 ## Takeaways
 
 - A model call cannot be replayed, so it is an activity. Every other placement decision follows from that one.
@@ -303,3 +299,7 @@ Next: [LangGraph on Temporal](/book/durability/langgraph-on-temporal). The offic
 - Everything passed to an activity is written to the event history. The audit trail is also a copy of your payloads, which is a retention and compliance question.
 - Of Part II's seven decisions, two moved to the platform, one gained a cost, and four remain entirely yours.
 - Durability changed no resolution rates. It changed whether the resolutions can be trusted.
+
+---
+
+Atlas is a workflow now, and it was a graph two parts ago. Next: [LangGraph on Temporal](/book/durability/langgraph-on-temporal), on whether it should be both, and what it costs to satisfy two determinism models at once.

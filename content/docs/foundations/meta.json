@@ -1,5 +1,6 @@
 {
   "title": "Part I · The Model as an Interface",
+  "description": "You are programming against a probabilistic function. Learn its interface before you wrap it in anything.",
   "pages": [
     "what-is-an-agent",
     "tokens",

@@ -213,10 +213,6 @@ That last one is the difference between a bug and a feedback loop, and it is whe
 
 - [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents), Anthropic's statement of the workflow/agent distinction and the pattern set built on it.
 
----
-
-Next: [Tokens](/book/foundations/tokens), what the model actually reads, and why the loop above costs what it costs.
-
 ## Takeaways
 
 - The model is a stateless function that returns text. It never acts; it emits requests, and your program decides whether to honor them.
@@ -227,3 +223,7 @@ Next: [Tokens](/book/foundations/tokens), what the model actually reads, and why
 - An agent can do exactly what its tools can do. The tool list is the blast radius.
 - Autonomy is a dial. Take the leftmost rung that can do the job.
 - Run-time control flow means: no enumerable paths, a distributed system, cost that scales with iterations, and errors that become premises.
+
+---
+
+Next: [Tokens](/book/foundations/tokens), what the model actually reads, and why the loop above costs what it costs.

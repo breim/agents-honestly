@@ -1,5 +1,6 @@
 {
   "title": "Part XVII · Security & Authorization",
+  "description": "An agent is a confused deputy with an API key. This part is not an appendix.",
   "pages": [
     "threat-model",
     "prompt-injection",

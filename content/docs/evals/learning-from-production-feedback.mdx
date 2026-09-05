@@ -266,10 +266,6 @@ No raw feedback enters the golden set. Two reviewers label high-risk cases. Prom
 
 - [Challenges in Monitoring Deployed AI Systems](https://www.nist.gov/publications/challenges-monitoring-deployed-ai-systems-center-ai-standards-and-innovation), NIST, the monitoring gaps this chapter is a response to.
 
----
-
-Next: [What a Trace Must Answer](/book/observability/what-a-trace-must-answer), the run record that makes every feedback event diagnosable.
-
 ## Takeaways
 
 - Feedback is evidence about an interaction. It is not a label until interpreted against a rubric.
@@ -281,3 +277,7 @@ Next: [What a Trace Must Answer](/book/observability/what-a-trace-must-answer), 
 - Track exposure denominators and sample deliberately. Volunteered feedback is not the production distribution.
 - Feedback can be poisoned. Authenticate actors, monitor distributions, and never auto-deploy from it.
 - Link each change back to motivating cases, then verify the target slice improved after release.
+
+---
+
+Atlas is measured now: a golden set, a scoring ladder, gates that can stop a release, and production traffic feeding both. Every one of them can tell you a run was wrong without telling you where. Next: [What a Trace Must Answer](/book/observability/what-a-trace-must-answer), the run record that makes every feedback event diagnosable.

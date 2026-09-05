@@ -133,10 +133,6 @@ Each shape has a catalog entry carrying the code: [Router](/book/patterns/contro
 
 What's left over is genuine: the step where the next action depends on the last result, the number of steps is unknown, and the tool set is open. That step is real, Atlas has one, and Part VII is about engineering it properly instead of leaving it as a `while` loop in the middle of an otherwise disciplined system.
 
----
-
-Next: [LangChain, Honestly](/book/langgraph/langchain-honestly), what the abstraction earns, what to skip, and how to use it without handing over your architecture.
-
 ## Takeaways
 
 - Generate–evaluate–revise is a loop with fixed control flow. Only the iteration count varies, which is what keeps it a workflow.
@@ -149,3 +145,7 @@ Next: [LangChain, Honestly](/book/langgraph/langchain-honestly), what the abstra
 - Bound by pass, by iteration count, and by no-improvement. A finding that recurs every iteration is a missing capability, not a reason for a fourth pass.
 - It costs 3–7× a single generation. Consider evaluate-and-escalate without the loop. For many systems that captures most of the value.
 - Don't use it when criteria conflict, when variance is the goal, or when the first draft already clears your bar.
+
+---
+
+Part VI has built five shapes by hand, which makes the question of whether to keep building them by hand due. Next: [LangChain, Honestly](/book/langgraph/langchain-honestly), Part VII, on what the abstraction earns and what it quietly takes.

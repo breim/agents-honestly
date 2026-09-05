@@ -1,5 +1,6 @@
 {
   "title": "Part XV · Observability",
+  "description": "One execution should answer: which prompt, which model, which tools, how many tokens, how much money, how long, and where it went wrong.",
   "pages": [
     "what-a-trace-must-answer",
     "otel-genai",

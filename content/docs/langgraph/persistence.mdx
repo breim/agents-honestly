@@ -131,10 +131,6 @@ That is a defensible production system, and every one of those four mitigations 
 - [LangGraph durable execution](https://docs.langchain.com/oss/python/langgraph/durable-execution), checkpoint timing and what each durability mode guarantees.
 - [The `Durability` type](https://reference.langchain.com/python/langgraph/types/Durability), the `sync`, `async`, and `exit` values and where each applies.
 
----
-
-Next: [Streaming and Control](/book/langgraph/streaming-and-control), emitting intermediate state and putting hard ceilings on an autonomous loop.
-
 ## Takeaways
 
 - A checkpoint is state plus position, written per superstep, keyed by a thread. The thread is the conversation.
@@ -147,3 +143,7 @@ Next: [Streaming and Control](/book/langgraph/streaming-and-control), emitting i
 - Checkpointing and durable execution both say "replay" and differ in the unit of memoization: state between nodes versus the result of every effect.
 - Checkpointing gives resumability of the graph. Durable execution also guarantees a replay never re-executes a completed effect. A better checkpointer does not get you the second, and neither gets you exactly-once against the world, which needs idempotency you supply.
 - Enough for short, single-process, read-only-ish runs. Not enough when money moves, waits span days, or multiple workers exist.
+
+---
+
+A run that can be resumed is still a run nobody can watch or halt. Next: [Streaming and Control](/book/langgraph/streaming-and-control), on emitting what the loop is doing, and putting a hard ceiling on how long it may do it.

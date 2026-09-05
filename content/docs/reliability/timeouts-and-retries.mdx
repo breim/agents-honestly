@@ -5,7 +5,7 @@ description: "Getting these wrong turns a provider blip into an outage and a bil
 
 The provider degrades for ninety seconds. Latency triples; a fraction of requests return 529.
 
-Atlas has a sixty-second timeout on model calls, three retries in the SDK, a node-level retry policy of three, and a graph that lets the model try again after a tool reports an error. None of those numbers looked unreasonable when they were written, and each was written by a different person.
+[Atlas](/book/preface#what-youll-build), working tickets through all of it, has a sixty-second timeout on model calls, three retries in the SDK, a node-level retry policy of three, and a graph that lets the model try again after a tool reports an error. None of those numbers looked unreasonable when they were written, and each was written by a different person.
 
 Ninety seconds of provider degradation produces forty minutes of elevated traffic, a request volume roughly an order of magnitude above baseline aimed at a service that is already struggling, several thousand dollars of tokens spent on attempts whose answers were discarded, and a queue that takes until evening to drain. The provider recovers at second ninety-one. You do not.
 
@@ -199,10 +199,6 @@ The provider recovers at second ninety-one. With these settings, so do you.
 
 - [Handling overload](https://sre.google/sre-book/handling-overload/), Google SRE, per-request attempt caps, per-client retry budgets, and the amplification arithmetic behind both.
 
----
-
-Next: [Idempotency in Practice](/book/reliability/idempotency-in-practice). Keys, dedup windows, and the exactly-once illusion you are actually building.
-
 ## Takeaways
 
 - The failure mode is amplification: ninety seconds of provider degradation becomes forty minutes of self-inflicted load, at full token price.
@@ -219,3 +215,7 @@ Next: [Idempotency in Practice](/book/reliability/idempotency-in-practice). Keys
 - Add a retry budget, roughly 10% of traffic as a starting point. Let failures pass through when it is exhausted. During a real outage, retrying converts one failure into three.
 - Budget the money too. Retries spend the same tokens as productive work.
 - Retry from the last checkpoint, not from the start. Step fourteen should cost step fourteen, which requires the idempotency the next chapter builds.
+
+---
+
+Resuming from step fourteen is only sane if step fourteen can run again without paying twice. Next: [Idempotency in Practice](/book/reliability/idempotency-in-practice), where Part VIII's key meets dedup windows and the exactly-once story stops being true.

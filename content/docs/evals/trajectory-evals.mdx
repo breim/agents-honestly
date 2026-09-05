@@ -107,10 +107,6 @@ Every one of those is a system that will fail on the next input, reported today 
 
 The third row is the one that took discipline to leave empty. Atlas's expected trajectories record **which** calls a ticket requires and, with one exception, not the order, because a run that found the answer in a different sequence is a run that worked, and an eval that says otherwise is training the team to make the agent less of one.
 
----
-
-Next: [Cost and Latency as Scores](/book/evals/cost-and-latency-evals), a correct answer that takes ninety seconds and costs a dollar is a failing result.
-
 ## Takeaways
 
 - An answer-only score cannot distinguish a system that works from one that got lucky, and most production failures live in the path rather than the model.
@@ -125,3 +121,7 @@ Next: [Cost and Latency as Scores](/book/evals/cost-and-latency-evals), a correc
 - Loop escape is the repeated-identical-error signal from Part VIII as a metric. A low score points at error text that selects no branch.
 - You cannot evaluate recovery on traffic that did not fail. Inject timeouts, 4xx, 5xx, and malformed payloads for every tool. It is the one place synthesis is unambiguously right.
 - Leaving order unscored where it is not policy takes discipline, and is what keeps the eval from making the agent less of one.
+
+---
+
+Those extra steps had a price, and nothing in the suite has charged for it yet. Next: [Cost and Latency as Scores](/book/evals/cost-and-latency-evals), where ninety seconds and a dollar is a failing result however right the answer was.

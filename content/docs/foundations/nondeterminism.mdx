@@ -163,10 +163,6 @@ The productive move is the opposite one: **stop trying to make the model determi
 
 Every one of those is ordinary distributed-systems engineering, applied to a component that fails in a new way. Which is the thesis of this book, arriving on schedule, and it leads directly to the cheapest way to avoid all of it, which is not to use an agent where you didn't need one.
 
----
-
-Next: [Choosing and Adapting Models](/book/foundations/choosing-and-adapting-models), choosing by measured task fit, and knowing when a model change is the wrong fix.
-
 ## Takeaways
 
 - Three sources of variance: the sampler, the arithmetic, and your own inputs. The third is the most common and the only one that is straightforwardly a bug.
@@ -177,3 +173,7 @@ Next: [Choosing and Adapting Models](/book/foundations/choosing-and-adapting-mod
 - In an agent, token variance becomes *path* variance. Two runs are different programs, touching different systems. Design for repeated and resumed steps.
 - Delete equality assertions. Assert invariants that must always hold, rates that must hold often enough, and regressions against last week.
 - A case passing 18 of 20 times is not a flaky test. It is a 90% feature, and now you can decide about it on purpose.
+
+---
+
+A 90% feature is a fact about one model on one task. Next: [Choosing and Adapting Models](/book/foundations/choosing-and-adapting-models), on picking the one whose ninety percent falls in the right place, and knowing when a model change is the wrong fix.

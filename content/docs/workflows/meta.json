@@ -1,5 +1,6 @@
 {
   "title": "Part VI · Workflows Before Agents",
+  "description": "The most valuable skill in this field is recognizing the problems that do not need an agent at all.",
   "pages": [
     "the-determinism-test",
     "composition-patterns",

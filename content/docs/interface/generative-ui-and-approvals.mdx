@@ -118,10 +118,6 @@ The console on the other end of the approve call is [Request-Response via Update
 
 That last row is a decision rather than an omission. Meridian's support console shows six known result shapes and one fallback, all written by people, all reviewable. There is no question a support agent asks that requires an interface nobody anticipated. And the one surface where an unanticipated interface would be genuinely useful, ad-hoc warehouse analysis, is [not something Atlas does](/book/retrieval/sql-is-still-the-answer).
 
----
-
-Next: [Accessible and Global Agent Interfaces](/book/interface/accessible-and-global-interfaces), making the same streaming and approval states work across assistive technology, languages, locales, money, and time.
-
 ## Takeaways
 
 - A tool call is a state machine, not an event. Every state is a frame worth rendering: input-streaming, input-available, executing, output-available, error.
@@ -136,3 +132,7 @@ Next: [Accessible and Global Agent Interfaces](/book/interface/accessible-and-gl
 - Render the card once at gate time and store it. The inline view, the queue, and the audit record all display the same bytes, so none of them can disagree.
 - Never render agent actions optimistically. An optimistic "Refund issued" that fails is a false statement to a customer, not a stale cache.
 - After Approve, show submitted and then accepted. A card that vanishes has claimed an outcome a validator may still reject.
+
+---
+
+Next: [Accessible and Global Agent Interfaces](/book/interface/accessible-and-global-interfaces), making the same streaming and approval states work across assistive technology, languages, locales, money, and time.

@@ -3,7 +3,7 @@ title: "The Agentic Supply Chain"
 description: "Models, datasets, tools, MCP servers, remote agents, sandboxes, registries, and update channels that can change the system without changing your code."
 ---
 
-No code changed, but Atlas started calling a new tool.
+No code changed, but [Atlas](/book/preface#what-youll-build) started calling a new tool from the middle of a support ticket.
 
 The MCP server added it to its catalogue overnight. The client loaded the updated description at startup. The model considered the new tool relevant and sent customer data to it. The application passed every code review because the change entered through runtime discovery.
 
@@ -166,10 +166,6 @@ Remote catalogue changes enter a quarantined snapshot. New tools fail closed. Ch
 - [NIST AI RMF Manage 3](https://airc.nist.gov/airmf-resources/playbook/manage/), monitoring and managing third-party AI risks and decommissioning suppliers that exceed tolerance.
 - [OWASP Top 10 for Agentic Applications](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/), especially agentic supply-chain vulnerabilities involving models, tools, MCP, A2A, registries, and update channels.
 
----
-
-Next: [Adversarial Evals and Red Teaming](/book/security/adversarial-evals), testing what a compromised component can induce across the whole trajectory.
-
 ## Takeaways
 
 - Inventory every component that can change behavior, including hosted services and runtime discovery.
@@ -179,3 +175,7 @@ Next: [Adversarial Evals and Red Teaming](/book/security/adversarial-evals), tes
 - Record provenance and digests for open weights, datasets, adapters, and images.
 - Test exit plans. A fallback that never handled the current system is not ready.
 - Attach the complete supply manifest to every run so a compromised component has a queryable incident scope.
+
+---
+
+Next: [Adversarial Evals and Red Teaming](/book/security/adversarial-evals), testing what a compromised component can induce across the whole trajectory.

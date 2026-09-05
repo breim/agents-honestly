@@ -148,10 +148,6 @@ Memory is among the most common points of **silent** failure in agentic systems,
 
 The defenses are structural rather than clever: separate the three things, give facts provenance and expiry, keep working state typed and outside the transcript, and store nothing you cannot classify. None of that requires a memory product. All of it requires deciding what memory means before you build one.
 
----
-
-Next: [Compaction and Summarization](/book/context/compaction), rewriting history so the agent can keep going, without losing the thing it needed.
-
 ## Takeaways
 
 - "Memory" is three systems: thread state, durable facts, and a knowledge base. A fourth category is just your existing database.
@@ -165,3 +161,7 @@ Next: [Compaction and Summarization](/book/context/compaction), rewriting histor
 - Forgetting is a feature: per-type expiry, versioning, and real deletion with redaction.
 - Fetch entity facts by key, not similarity. Completeness over a small set beats ranking.
 - The whole failure class is silent. Nothing errors; the answers just get worse.
+
+---
+
+Memory is what you chose to keep. History is what accumulates whether you chose it or not. Next: [Compaction and Summarization](/book/context/compaction), on rewriting it before it eats the window, without losing the thing you needed.

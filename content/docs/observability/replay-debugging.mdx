@@ -221,10 +221,6 @@ Three limits, stated plainly, because a technique this useful invites over-trust
 
 The zero-diff gate on refactors is the row that pays for itself fastest. Most changes to a dispatcher are meant to be behavior-preserving, and until you can assert that against a thousand real runs, "behavior-preserving" is a claim in a pull request description.
 
----
-
-Next: [Token and Cost Accounting](/book/observability/cost-accounting), per-request, per-user, per-tenant, per-feature, and the dashboard that stops a bad deploy becoming a bad invoice.
-
 ## Takeaways
 
 - Replay and re-run answer opposite questions. Replay holds the model constant to test your code; re-run holds your code constant to test the model.
@@ -241,3 +237,7 @@ Next: [Token and Cost Accounting](/book/observability/cost-accounting), per-requ
 - It is the fastest way to get shadow-mode numbers for a new policy: the real false-positive rate, in an afternoon, with no risk.
 - For a pure refactor the expected diff is zero, which converts "I don't think I changed behavior" into an assertion.
 - Replay does not test the model, goes stale as the world moves, and cannot show you the counterfactual.
+
+---
+
+Replay answers what a change would have done to one outcome. What the same change costs on every run afterwards is invisible to it. Next: [Token and Cost Accounting](/book/observability/cost-accounting), and the dashboard that stops a bad deploy becoming a bad invoice.

@@ -129,10 +129,6 @@ What is left in this book is depth, not filler: the parts that matter when a spe
 - [Why Do Multi-Agent LLM Systems Fail?](https://arxiv.org/abs/2503.13657), Cemri et al.: the MAST taxonomy and the failure rates quoted here.
 - [Single-Agent LLMs Outperform Multi-Agent Systems on Multi-Hop Reasoning Under Equal Thinking Token Budgets](https://arxiv.org/abs/2604.02460), the equal-budget control the benchmarks usually lack.
 
----
-
-Next: [The Brief](/book/capstone/the-brief), one system, built end to end, with every constraint from the preceding twenty parts applied at once.
-
 ## Takeaways
 
 - The largest study of multi-agent failures annotated over 1,600 traces across seven frameworks and found 41–86.7% failure rates. The great majority of the causes are specification and coordination, not model capability.
@@ -147,3 +143,7 @@ Next: [The Brief](/book/capstone/the-brief), one system, built end to end, with 
 - Fan-out over disjoint inputs is genuinely good and is not multi-agent in the risky sense: the workers never negotiate and the reduce step is code.
 - If your design has agents *talking*, you are in the failure regime. If it has agents *fanning out*, you are not.
 - If you split anyway: schema-validated contracts, explicit termination and budget, verification against source data rather than conclusions, and one trace ID across every agent.
+
+---
+
+Part XIX ends where it started, with one agent and a fan-out that never negotiates, which is the shape the rest of this book has been building all along. Next: [The Brief](/book/capstone/the-brief), Part XX, one system built end to end, with every constraint from the preceding twenty parts applied at once.

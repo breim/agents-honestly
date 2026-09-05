@@ -210,10 +210,6 @@ Which makes per-tenant token budgets the natural companion to fairness keys. A t
 
 One line in that table is the whole chapter: **fan-out is unthrottled.** Everything that would have been a semaphore, a batch size, a sleep, or a per-tenant worker pool is instead a property of a queue: durable, fleet-wide, and visible in one place rather than distributed across the call sites that happened to remember it.
 
----
-
-Next: [Paying for Durability in Milliseconds](/book/durability/latency). Local activities, early return, eager start: where durability costs latency and where it does not.
-
 ## Takeaways
 
 - Adding workers raises throughput until you hit a quota in someone else's account. Past that point more capacity produces more 429s, more retries, and more contention.
@@ -228,3 +224,7 @@ Next: [Paying for Durability in Milliseconds](/book/durability/latency). Local a
 - Priority selects the sub-queue; fairness orders within it. A priority-1 task from a noisy tenant still beats a priority-3 task from a quiet one.
 - Tenant ID as the fairness key removes the noisy-neighbour problem in one line, instead of per-tenant worker pools.
 - A fair share of tokens is a fair share of money, which makes per-tenant budgets an admission-control input rather than a monthly report.
+
+---
+
+Priority and fairness both spend time deciding what runs next, and time is what an eight-minute run has least of. Next: [Paying for Durability in Milliseconds](/book/durability/latency), on where the overhead is real and where it vanishes into the model call.

@@ -3,7 +3,7 @@ title: "Rollout and In-Flight Migration"
 description: "Shipping a change while thousands of agent runs are mid-execution."
 ---
 
-You deploy at 14:00. At that instant Atlas has 3,000 runs in flight: some four seconds old, some four hours old, and eleven that have been paused since Tuesday waiting on an approval.
+You deploy at 14:00. At that instant [Atlas](/book/preface#what-youll-build) has 3,000 runs in flight, one per open support ticket: some four seconds old, some four hours old, and eleven that have been paused since Tuesday waiting on an approval.
 
 A web deploy does not have this problem. A request either completed before the swap or started after it; nothing is half-served. An agent run is a long-lived thing that spans deploys by design, so the deploy has to answer a question that ordinary releases never ask:
 
@@ -62,7 +62,7 @@ So the bundle is not one atom for resumption purposes. Split it: prompt, model, 
 
 Now the second question, and the thing that makes agent rollout genuinely different from feature-flag practice.
 
-For a normal feature, you can often measure the same user under both variants, or at least measure a fast, low-variance metric. For an agent, the primary metric is *quality*, it is noisy, it is expensive to score, and a run happens once. There is no counterfactual for what version B would have done with ticket #9104.
+For a normal feature, you can often measure the same user under both variants, or at least measure a fast, low-variance metric. For an agent, the primary metric is *quality*, it is noisy, it is expensive to score, and a run happens once. There is no counterfactual for what version B would have done with ticket #8823.
 
 So the rollout ladder is ordered by how much signal each rung gives for how much risk:
 
@@ -196,10 +196,6 @@ The row that surprises people is the last one: rolling back does not abort the r
 
 Which is worth knowing before you need to say it out loud during an incident.
 
----
-
-Next: [Cost Engineering](/book/production/cost-engineering), model routing, cache tiers, batch APIs, and choosing your position on the cost/quality frontier deliberately.
-
 ## Takeaways
 
 - An agent run spans deploys by design, so a deploy must answer what version a run that started before it and finishes after it is on.
@@ -217,3 +213,7 @@ Next: [Cost Engineering](/book/production/cost-engineering), model routing, cach
 - During the canary, approval-gate every tier-1+ action. The machinery already exists and the volume is small.
 - Never move the prompt and the model, or the prompt and the corpus, in the same rollout. Two variables, one measurement, no conclusion.
 - Rolling back does not abort runs already executing on the bad bundle. "We rolled back at 14:40" and "it stopped affecting customers at 14:40" differ by your longest in-flight run.
+
+---
+
+The ladder gets a change to everybody safely, and then everybody uses it. Next: [Cost Engineering](/book/production/cost-engineering), where the pilot's per-ticket price meets real volume and produces a number nobody budgeted.

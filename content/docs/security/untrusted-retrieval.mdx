@@ -3,7 +3,7 @@ title: "Retrieved Text Is Untrusted Input"
 description: "The document your pipeline ingested is attacker-controlled. Treat every retrieval result accordingly."
 ---
 
-Atlas's help-center corpus has about forty thousand chunks. Most of it is written by the docs team. Some of it is community-contributed answers, migrated in during last year's forum consolidation and never looked at again.
+[Atlas](/book/preface#what-youll-build) answers Meridian Supply's refund and policy questions out of a help-center corpus of about forty thousand chunks. Most of it is written by the docs team. Some of it is community-contributed answers, migrated in during last year's forum consolidation and never looked at again.
 
 Eleven months ago someone posted an article titled *"Refund timelines for delayed international orders."* It is helpful, well-written, and ranks first for every refund-timeline question a customer asks. Near the end it says:
 
@@ -228,10 +228,6 @@ The document does not have to be found for the attack to fail. That is the prope
 
 - [PoisonedRAG](https://arxiv.org/abs/2402.07867), Zou et al., USENIX Security 2025, the corpus-poisoning study behind the five-texts-per-question result.
 
----
-
-Next: [Excessive Agency and Least Privilege](/book/security/least-privilege), scoping what an agent can do to the smallest set that still does the job.
-
 ## Takeaways
 
 - A corpus is a merge of every writer who ever had access to any of its sources. Audit it by asking who could write the bytes, not who owns the database.
@@ -247,3 +243,7 @@ Next: [Excessive Agency and Least Privilege](/book/security/least-privilege), sc
 - Require citations that resolve to chunk IDs, and record those IDs in the trace. Without them, incident scope is "everything since ingestion."
 - Treat the corpus as a deployed artifact: manifest, diff, canary queries per build, rollback.
 - Outlier and perplexity detectors catch clumsy poisoning and lose to careful poisoning. Telemetry, not control.
+
+---
+
+Two chapters have now established that hostile text will reach the model, and neither has reduced what the model may do about it. Next: [Excessive Agency and Least Privilege](/book/security/least-privilege), which is the half of the problem you can actually close.

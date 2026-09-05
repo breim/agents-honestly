@@ -156,10 +156,6 @@ Pipeline as the spine. One router at triage. One loop, wrapped in a transformed 
 
 That last item is a decision, not an omission. Atlas has one open-ended step; a supervisor would add a routing call per hop, double the token cost, and introduce a dilution ceiling, all to coordinate workers that a single conditional edge already dispatches correctly.
 
----
-
-Next: [Node or Function?](/book/langgraph/node-or-function). When a node earns its overhead, and when you should have written a plain function.
-
 ## Takeaways
 
 - The same seven shapes as Part VI, but in a graph each carries a bill in state growth, checkpoint size, streaming complexity, and bounding requirements.
@@ -171,3 +167,7 @@ Next: [Node or Function?](/book/langgraph/node-or-function). When a node earns i
 - A human gate's node must contain exactly one side-effecting call, because resume re-runs the node from the top.
 - Subgraph streaming needs an early decision: nesting changes the shape of every chunk.
 - The two topologies whose state grows without a natural end, loop and supervisor, are the two where the model decides how many times something happens. Bound both.
+
+---
+
+Seven shapes, each with a price attached, and the bill for the part has not been added up. Next: [Node or Function?](/book/langgraph/node-or-function), which closes Part VII with the question the part exists to answer.

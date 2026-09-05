@@ -159,10 +159,6 @@ The asymmetry is not a coincidence. The too-early list is **capability**, things
 
 Nine of those twelve rows would be absent from a Tier 1 build, and that is the point of the tier question. Atlas needs them because a run pauses for two days and then moves money, not because agents in general need them.
 
----
-
-Next: [Versioning Prompts, Models, and Graphs](/book/production/versioning), treating all three as deployable artifacts with rollback, not as strings in a file.
-
 ## Takeaways
 
 - Two questions decide the architecture: does a run outlive one request, and does it have side effects the world can see.
@@ -178,3 +174,7 @@ Next: [Versioning Prompts, Models, and Graphs](/book/production/versioning), tre
 - Build the model gateway on day one. It is ~200 lines and it is where retries, fallbacks, cost attribution, version pinning, and residency all land.
 - The too-early list is capability; the too-late list is legibility. Capability demos well, which is why it gets funded first.
 - Build the smallest architecture that can answer "what happened, and why."
+
+---
+
+An architecture that can say what happened still has to say which version of itself did it. Next: [Versioning Prompts, Models, and Graphs](/book/production/versioning), because the git SHA identifies your code and not what the model was given.

@@ -1,5 +1,6 @@
 {
   "title": "Part XIX · Multi-Agent, Without the Hype",
+  "description": "Every topology in this part costs you context, latency, and money. Some of them earn it.",
   "pages": [
     "the-coordination-tax",
     "supervisor-and-handoff",

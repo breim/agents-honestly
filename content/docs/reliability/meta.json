@@ -1,5 +1,6 @@
 {
   "title": "Part XVI · Reliability Engineering",
+  "description": "Classic distributed-systems discipline, applied to a component that is expensive, slow, and occasionally wrong.",
   "pages": [
     "error-taxonomy",
     "timeouts-and-retries",

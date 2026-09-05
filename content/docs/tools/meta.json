@@ -1,5 +1,6 @@
 {
   "title": "Part VIII · Tool Engineering",
+  "description": "Tools are the boundary between a probabilistic system and the real world. They are API design, and the consumer is a model.",
   "pages": [
     "tools-are-apis-for-models",
     "schema-and-granularity",

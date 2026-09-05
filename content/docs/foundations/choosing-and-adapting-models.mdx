@@ -228,10 +228,6 @@ There is no tuned model in v1. The pilot's failures are missing or stale evidenc
 
 - [Tuning models on Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/tune-models), the managed adaptation options and their data requirements.
 
----
-
-Next: [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent). The cheapest agent is the one you replaced with three if-statements and a good prompt.
-
 ## Takeaways
 
 - Choose per task on your own eval set. A global leaderboard cannot see your tool catalogue, documents, or error costs.
@@ -242,3 +238,7 @@ Next: [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent)
 - Self-host when control, residency, scale, or measured economics pay for operating inference.
 - Fine-tune a stable behavior with labeled data. Do not fine-tune changing facts, missing context, or permissions.
 - A model migration is a release with evals, shadow traffic, a canary, and rollback.
+
+---
+
+Every lever in this chapter assumes the agent should exist. Next: [When Not to Build an Agent](/book/foundations/when-not-to-build-an-agent), which is the question Part I has been circling, and the cheapest agent is the one you replaced with three if-statements.
