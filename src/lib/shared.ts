@@ -29,3 +29,14 @@ export const labsGitConfig = {
 };
 
 export const labsUrl = `https://github.com/${labsGitConfig.user}/${labsGitConfig.repo}`;
+
+/** Giscus comment system backed by a dedicated discussions repository. The repo is separate
+    from the application source so comments persist independently of forks and upstream changes.
+    Generate the repoId and categoryId at https://giscus.app after enabling Discussions. */
+export const discussionsConfig = {
+  user: 'Bessiedelight',
+  repo: 'agents-honestly',
+  repoId: 'R_kgDOUs933Q',
+  categoryId: 'DIC_kwDOUs933c4DGetr',
+  category: 'Announcements',
+};
