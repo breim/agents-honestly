@@ -8,12 +8,18 @@ import {
   ViewOptionsPopover,
 } from 'fumadocs-ui/layouts/docs/page';
 import { notFound } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { getMDXComponents } from '@/components/mdx';
 import type { Metadata } from 'next';
 import { createRelativeLink } from 'fumadocs-ui/mdx';
 import { appName, docsRoute, gitConfig } from '@/lib/shared';
 import { ReadMarker } from '@/components/book/read-marker';
 import { LabLink } from '@/components/book/lab-link';
+
+const Comments = dynamic(
+  () => import('@/components/book/comments').then((m) => m.Comments),
+  { ssr: false },
+);
 
 export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
   const params = await props.params;
@@ -43,6 +49,9 @@ export default async function Page(props: PageProps<'/book/[[...slug]]'>) {
           })}
         />
         <ReadMarker url={page.url} />
+        <div className="mt-12 border-t pt-8">
+          <Comments />
+        </div>
       </DocsBody>
     </DocsPage>
   );
